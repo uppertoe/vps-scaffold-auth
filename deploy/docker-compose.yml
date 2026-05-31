@@ -1,0 +1,42 @@
+# Reference wiring for running vps-scaffold-auth as an app in a server repo
+# created from server-instance-template. Copy this directory's files to
+# apps/auth/ in your server repo (the template already ships them), then add
+#
+#   include:
+#     - apps/auth/docker-compose.yml
+#
+# to the server's root docker-compose.yml.
+services:
+  auth:
+    image: ghcr.io/uppertoe/vps-scaffold-auth:latest # pin to a tag in production
+    restart: unless-stopped
+    env_file:
+      - path: ./.env
+        required: false # keep `docker compose config` valid in CI without a real .env
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - auth_data:/data
+    networks:
+      caddy:
+        external: true
+        name: caddy
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 128m
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "/app", "-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  auth_data:
+
+networks:
+  caddy:
+    external: true
+    name: caddy

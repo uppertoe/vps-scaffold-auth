@@ -1,0 +1,62 @@
+package server
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed templates/*.html
+var templatesFS embed.FS
+
+// pageData carries everything any page template might need. Unused fields stay
+// zero.
+type pageData struct {
+	Title      string
+	Error      string
+	Email      string
+	Redirect   string
+	Enrolling  bool
+	TOTPSecret string
+	TOTPURL    string
+	Message    string
+}
+
+// pages holds each page template composed with the shared base layout.
+type pages map[string]*template.Template
+
+func loadTemplates() (pages, error) {
+	base, err := template.ParseFS(templatesFS, "templates/base.html")
+	if err != nil {
+		return nil, err
+	}
+	out := make(pages)
+	for _, name := range []string{"login", "code", "totp", "message"} {
+		t, err := base.Clone()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := t.ParseFS(templatesFS, "templates/"+name+".html"); err != nil {
+			return nil, err
+		}
+		out[name] = t
+	}
+	return out, nil
+}
+
+// render writes a page using the base layout. On error it falls back to a plain
+// 500 so a template bug never leaks a stack trace.
+func (s *Server) render(w http.ResponseWriter, status int, page string, data pageData) {
+	t, ok := s.pages[page]
+	if !ok {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if err := t.ExecuteTemplate(w, "base", data); err != nil {
+		// Header already written; best effort.
+		fmt.Fprint(w, "internal error")
+	}
+}

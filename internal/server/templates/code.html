@@ -1,0 +1,13 @@
+{{define "title"}}Enter your code{{end}}
+{{define "content"}}
+<h1>Check your email</h1>
+<p class="sub">If {{if .Email}}<strong>{{.Email}}</strong>{{else}}that address{{end}} can sign in, we've sent it a code. Enter it below.</p>
+{{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+<form method="post" action="/verify-code" autocomplete="one-time-code">
+  <label for="code">Sign-in code</label>
+  <input id="code" name="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*"
+         autocomplete="one-time-code" autofocus required placeholder="000000">
+  <button type="submit">Verify</button>
+</form>
+<div class="links"><a href="/login?rd={{.Redirect | urlquery}}">Use a different email</a></div>
+{{end}}

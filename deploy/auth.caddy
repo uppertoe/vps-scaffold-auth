@@ -1,0 +1,22 @@
+# Public login endpoints. No auth in front of these — this IS the login.
+auth.{$DOMAIN} {
+	reverse_proxy auth:8080
+}
+
+# Reusable guard. A protected app imports this, then reverse_proxies its own
+# backend, e.g.:
+#
+#   dashboard.{$DOMAIN} {
+#       import protected
+#       reverse_proxy dashboard:3000
+#   }
+#
+# On an unauthenticated request, /verify returns a 302 to the login page; on a
+# valid session it returns 200 and Caddy forwards Remote-User / Remote-Email /
+# Remote-Groups to the upstream (stripping any client-supplied copies first).
+(protected) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+	}
+}

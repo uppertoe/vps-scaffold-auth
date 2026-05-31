@@ -1,0 +1,8 @@
+.git
+.github
+*.md
+deploy
+.gitignore
+.dockerignore
+Dockerfile
+*_test.go
