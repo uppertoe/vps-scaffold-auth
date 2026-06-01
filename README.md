@@ -111,21 +111,64 @@ dash.{$DOMAIN}      { import protected_access   "rch.org.au" "dash_guests"; reve
 
 Guard summary (domains/groups are space- or comma-separated):
 
-| Snippet | Grants access to |
-|---|---|
-| `import protected` | any signed-in user (**not** break-glass) |
-| `import protected_domains "<domains>"` | signed-in users at a listed email domain |
-| `import protected_groups "<groups>"` | members of a listed group, or a break-glass card whose target group is listed |
-| `import protected_access "<domains>" "<groups>"` | in a listed domain **OR** a listed group |
+| Snippet | Grants access to | Login hint + early decline? |
+|---|---|---|
+| `import protected` | any signed-in user (**not** break-glass) | no |
+| `import protected_domains "<domains>"` | signed-in users at a listed email domain | **yes** |
+| `import protected_domains_alt "<domains>" "<url>" "<label>"` | same, plus a "sign in another way" link to `<url>` for non-domain users | **yes** |
+| `import protected_groups "<groups>"` | members of a listed group, or a break-glass card whose target group is listed | no |
+| `import protected_admin` | admins only (= `protected_groups "admin"`); for a separate admin entrance | no |
+| `import protected_access "<domains>" "<groups>"` | in a listed domain **OR** a listed group | yes (by domain) |
 
 A signed-in user who isn't allowed on an app is **not** bounced to login (they
 *are* authenticated); they get a "no access to this page" page with a sign-in
 link, and their session is left intact so apps they *can* reach keep working.
-Admins are **not** auto-allowed — add the `admin` role to a group list (e.g.
-`import protected_access "rch.org.au" "admin"`) to let them in. Always use these
-snippets rather than hand-rolling `forward_auth`: each one sets the requirement
-headers it needs and deletes the rest, so a client can't inject its own to widen
-access.
+Always use these snippets rather than hand-rolling `forward_auth`: each one sets
+the requirement headers it needs and deletes the rest, so a client can't inject
+its own to widen access.
+
+**Early hint + decline (any route with a domain).** Whenever a route declares a
+required domain (`protected_domains`, or the domain side of `protected_access`),
+the login page shows the expected domain ("This page is for `rch.org.au` email
+addresses") and an address whose domain can't qualify is declined *before* a
+code is sent — so a wrong-domain user isn't emailed a code only to hit a wall
+after logging in. A **group-only route** (`protected_admin` / `protected_groups`)
+declares no domain, so it neither hints nor declines — that's the door for people
+who legitimately don't match the domain. This is a UX courtesy, **not** the
+security boundary: the requirement rides in the (client-modifiable) login URL, so
+the authoritative check always happens at `/verify` with Caddy's trusted header.
+
+**Admins (and other non-domain users) get their own door.** Admins are **not**
+auto-allowed. The domain door declines any address that doesn't match its
+domain — admins included — so don't expect an off-domain admin to come through
+the main gate. Give them a separate group-gated entrance with
+`import protected_admin` (no domain → no hint, no decline). Admins whose email
+already matches the app's domain don't need it — they pass the gate.
+
+A path-based admin entrance on the same host (admin features live under `/admin`).
+The staff door uses `protected_domains_alt` so a declined non-domain user is
+pointed at the admin door instead of being stranded:
+
+```caddyfile
+app.{$DOMAIN} {
+    @admin path /admin*
+    handle @admin {
+        import protected_admin              # admins only; no hint, no early decline
+        reverse_proxy app:3000
+    }
+    handle {
+        import protected_domains_alt "rch.org.au" "https://app.{$DOMAIN}/admin" "Administrators sign in here"
+        reverse_proxy app:3000
+    }
+}
+```
+
+The "Administrators sign in here" link appears as small text on the login and
+decline pages. Its URL is **re-validated server-side to be within your domain**
+before it's ever rendered, so a tampered login URL can't turn it into an
+off-site (phishing) link. If an off-domain admin needs the *whole* app (not just
+`/admin`), point a second host at the same backend instead:
+`admin.app.{$DOMAIN} { import protected_admin; reverse_proxy app:3000 }`.
 
 Per-route is just per-route Caddy: put a guard inside a `handle @path { … }`
 block so one app can have, say, a staff entrance and a separate emergency one

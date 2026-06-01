@@ -16,14 +16,22 @@ auth.{$DOMAIN} {
 #
 # Usage (domains and groups are space/comma-separated):
 #   import protected                         -- any signed-in user; NOT break-glass
-#   import protected_domains "rch.org.au"    -- signed-in user at a listed email domain
+#   import protected_domains "rch.org.au"    -- signed-in user at a listed email domain.
+#                                               The login page hints the domain and a
+#                                               wrong-domain address is declined early.
 #   import protected_groups  "bg_stroke"     -- members of a listed group, OR a
 #                                               break-glass card targeting that group
-#   import protected_access  "rch.org.au" "bg_stroke"
+#   import protected_admin                   -- admins only; for a separate admin door
+#   import protected_access  "rch.org.au" "dash_guests"
 #                                            -- in a listed domain OR a listed group
 #
-# To let admins into a domain-gated app, add the admin role to the group list:
-#   import protected_access "rch.org.au" "admin"
+# Any route that declares a domain (protected_domains, or the domain side of
+# protected_access) gives the login hint + early decline by that domain. A
+# group-only route (protected_groups, protected_admin) declares no domain, so it
+# neither hints nor declines -- that is the door for people who can't match the
+# domain. The domain door declines off-domain users (admins included), so give
+# admins their own route via  import protected_admin  rather than the main gate.
+# Admins whose email matches the app's domain need nothing extra; they pass it.
 #
 # Break-glass QR sessions are deny-by-default: they reach ONLY apps/routes whose
 # group list names the card's target group, so an emergency card is scoped to
@@ -33,12 +41,18 @@ auth.{$DOMAIN} {
 # client can never inject its own X-Auth-Require-* to widen access. Always use
 # these snippets rather than hand-rolling forward_auth.
 
+# Every guard fully controls the X-Auth-* namespace -- it sets the headers it
+# needs and deletes the rest -- so a client can never inject its own
+# requirement or alternate-login link.
+
 (protected) {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up -X-Auth-Require-Domains
 		header_up -X-Auth-Require-Groups
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
 	}
 }
 
@@ -48,6 +62,24 @@ auth.{$DOMAIN} {
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up X-Auth-Require-Domains "{args[0]}"
 		header_up -X-Auth-Require-Groups
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
+	}
+}
+
+# Like protected_domains, but also offers a small "sign in another way" link on
+# the login/decline page for users who can't match the domain (e.g. admins sent
+# to a separate door). Args: domains, alt-login URL (absolute https within the
+# server domain), link label. The URL is re-validated server-side before it is
+# shown.
+(protected_domains_alt) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up X-Auth-Require-Domains "{args[0]}"
+		header_up -X-Auth-Require-Groups
+		header_up X-Auth-Alt-Login "{args[1]}"
+		header_up X-Auth-Alt-Label "{args[2]}"
 	}
 }
 
@@ -57,6 +89,21 @@ auth.{$DOMAIN} {
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up -X-Auth-Require-Domains
 		header_up X-Auth-Require-Groups "{args[0]}"
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
+	}
+}
+
+# Admin door: admins only, no login hint or early decline. Use on a separate
+# route/host so the app's main door can stay a pure domain gate.
+(protected_admin) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up -X-Auth-Require-Domains
+		header_up X-Auth-Require-Groups "admin"
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
 	}
 }
 
@@ -66,5 +113,7 @@ auth.{$DOMAIN} {
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up X-Auth-Require-Domains "{args[0]}"
 		header_up X-Auth-Require-Groups "{args[1]}"
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
 	}
 }
