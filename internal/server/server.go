@@ -94,15 +94,12 @@ func (s *Server) routes() http.Handler {
 	return securityHeaders(mux)
 }
 
-// Content-Security-Policy values. The base policy forbids everything; the admin
-// variant additionally allows same-origin images so QR previews render. Neither
-// permits scripts.
-// Both policies allow same-origin images (the optional branding logo on the
-// login pages, and QR previews in the admin UI) but still forbid all scripts.
-const (
-	cspBase  = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-	cspAdmin = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-)
+// cspPolicy is the single Content-Security-Policy applied to every HTML
+// response (login and admin alike). It allows same-origin images (the optional
+// branding logo and admin QR previews) and inline styles, but forbids scripts
+// and all other resource types. Served images override this with an even
+// stricter sandbox policy (see writeImage).
+const cspPolicy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 // securityHeaders applies conservative defaults to every response. The pages
 // use only inline styles and no scripts, so the CSP can be very tight.
@@ -113,7 +110,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
-		h.Set("Content-Security-Policy", cspBase)
+		h.Set("Content-Security-Policy", cspPolicy)
 		next.ServeHTTP(w, r)
 	})
 }

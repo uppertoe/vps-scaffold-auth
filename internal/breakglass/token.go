@@ -17,7 +17,7 @@ import (
 // low-density and easy to scan.
 const tokenBytes = 16
 
-// GenerateToken returns a new URL-safe, 256-bit random token.
+// GenerateToken returns a new URL-safe, 128-bit random token.
 func GenerateToken() (string, error) {
 	buf := make([]byte, tokenBytes)
 	if _, err := io.ReadFull(rand.Reader, buf); err != nil {

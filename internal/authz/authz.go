@@ -90,6 +90,18 @@ func BuildGroups(role string, dbGroups []string) string {
 	return strings.Join(out, ",")
 }
 
+// IsReservedGroup reports whether name collides with a base role. A DB group or
+// a break-glass target group with such a name would be indistinguishable from
+// the role in the Remote-Groups set, silently conferring admin/user privilege,
+// so callers must reject these names.
+func IsReservedGroup(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case RoleAdmin, RoleUser:
+		return true
+	}
+	return false
+}
+
 // HasGroup reports whether the comma-separated groups string contains target.
 func HasGroup(groups, target string) bool {
 	for _, g := range strings.Split(groups, ",") {

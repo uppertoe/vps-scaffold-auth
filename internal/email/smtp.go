@@ -36,9 +36,9 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 func buildMIME(from string, msg Message) []byte {
 	const boundary = "vps-scaffold-auth-boundary"
 	var b strings.Builder
-	fmt.Fprintf(&b, "From: %s\r\n", from)
-	fmt.Fprintf(&b, "To: %s\r\n", msg.To)
-	fmt.Fprintf(&b, "Subject: %s\r\n", msg.Subject)
+	fmt.Fprintf(&b, "From: %s\r\n", sanitizeHeader(from))
+	fmt.Fprintf(&b, "To: %s\r\n", sanitizeHeader(msg.To))
+	fmt.Fprintf(&b, "Subject: %s\r\n", sanitizeHeader(msg.Subject))
 	b.WriteString("MIME-Version: 1.0\r\n")
 	fmt.Fprintf(&b, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
 
@@ -54,6 +54,13 @@ func buildMIME(from string, msg Message) []byte {
 
 	fmt.Fprintf(&b, "--%s--\r\n", boundary)
 	return []byte(b.String())
+}
+
+// sanitizeHeader strips CR and LF so a value carried into an email header
+// (e.g. an admin-set break-glass label flowing into the Subject) cannot inject
+// additional headers or a body. Newlines are replaced with a single space.
+func sanitizeHeader(v string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(v)
 }
 
 // extractAddr returns the bare address from a "Name <addr>" header value.

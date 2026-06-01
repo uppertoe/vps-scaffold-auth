@@ -50,3 +50,28 @@ func TestHashAndEqual(t *testing.T) {
 		t.Errorf("Hash length = %d, want 64 hex chars", len(h1))
 	}
 }
+
+func TestHashKeyed(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	other := []byte("ffffffffffffffffffffffffffffffff")
+
+	h := HashKeyed("123456", key)
+	if h != HashKeyed("123456", key) {
+		t.Error("HashKeyed not deterministic for the same code+key")
+	}
+	if h == HashKeyed("654321", key) {
+		t.Error("HashKeyed collided for different codes")
+	}
+	// Different key => different hash: this is what stops offline brute force of
+	// the small numeric space from a stolen DB without the key.
+	if h == HashKeyed("123456", other) {
+		t.Error("HashKeyed produced the same digest under a different key")
+	}
+	// Must not equal the unkeyed SHA-256 of the same input.
+	if h == Hash("123456") {
+		t.Error("HashKeyed equals unkeyed Hash; the key had no effect")
+	}
+	if len(h) != 64 {
+		t.Errorf("HashKeyed length = %d, want 64 hex chars", len(h))
+	}
+}

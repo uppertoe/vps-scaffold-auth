@@ -175,8 +175,11 @@ still reach an app during a time-critical event (e.g. a code stroke).
 ## Security notes
 
 - One-time codes are single-use, short-lived, attempt-capped, and stored only
-  as SHA-256 hashes; comparison is constant-time.
-- No user enumeration: `/request` always responds the same way.
+  as a **keyed HMAC-SHA256** (so a stolen `auth.db` can't brute-force the small
+  numeric code space offline); comparison is constant-time.
+- No user enumeration: `/request` always responds the same way, and the OTP
+  email is dispatched off the request path so response timing doesn't reveal
+  whether an address is permitted.
 - Per-email and per-IP rate limiting.
 - Open-redirect safe: the post-login target must be `https` and within the
   server domain.
@@ -184,9 +187,15 @@ still reach an app during a time-critical event (e.g. a code stroke).
   Admin state-changing actions require a signed CSRF token.
 - Reversible secrets (break-glass tokens, admin TOTP seeds) are encrypted at
   rest with AES-256-GCM; a stolen `auth.db` is inert without the key.
-- The session cookie is stateless, so individual sessions can't be revoked
-  before expiry — keep `SESSION_TTL` moderate. Break-glass sessions use a short,
-  non-renewable TTL so revoking a code bounds exposure tightly.
+- The session cookie is stateless, so an *individual* session can't be revoked
+  before expiry — keep `SESSION_TTL` moderate. However, **policy revocation is
+  enforced at renewal**: a principal removed from the admin list or a de-listed
+  domain is denied (and their cookie cleared) at the next `/verify` past
+  `SESSION_RENEW_AFTER`, and group/role changes are recomputed there too.
+  Break-glass sessions use a short, non-renewable TTL so revoking a code bounds
+  exposure tightly, and are never accepted by the admin UI.
+- Break-glass target groups and DB group names cannot be the reserved roles
+  `admin`/`user`, so emergency access can never silently confer the admin tier.
 
 ## Local development
 
