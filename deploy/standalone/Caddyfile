@@ -1,18 +1,71 @@
 # Caddy config for the standalone example. {$DOMAIN} comes from the environment.
-
 {
 	# Uncomment and set a contact address for Let's Encrypt:
 	# email you@example.com
 }
 
-# Reusable guard. A protected site adds `import protected`, then reverse_proxies
-# its backend. Unauthenticated -> /verify returns 302 to the login page; a valid
-# session -> 200 and Caddy forwards Remote-User / Remote-Email / Remote-Groups
-# upstream (stripping any client-supplied copies first).
+# Reusable access guards. A protected site imports ONE of these, then
+# reverse_proxies its backend. Unauthenticated -> /verify returns 302 to the
+# login page; a valid session -> 200 and Caddy forwards Remote-User /
+# Remote-Email / Remote-Groups upstream (stripping client-supplied copies). A
+# signed-in user who isn't allowed on this site is sent to a "no access" page
+# with a sign-in link.
+#
+#   import protected                       # any signed-in user (not break-glass)
+#   import protected_domains "rch.org.au"  # signed-in user at a listed domain
+#   import protected_groups  "bg_stroke"   # a listed group, or a break-glass card
+#                                          #   whose target group is listed
+#   import protected_access  "rch.org.au" "admin"   # in a listed domain OR group
+#
+# Each guard sets the requirement headers it needs and deletes the rest, so a
+# client can never inject X-Auth-Require-* to widen its own access. Break-glass
+# QR sessions are deny-by-default: they reach only sites whose group list names
+# the card's target group. Example of a per-route emergency entrance:
+#
+#   clinical.{$DOMAIN} {
+#       @emergency path /code-stroke*
+#       handle @emergency {
+#           import protected_groups "bg_stroke"   # the laminated card opens here
+#           reverse_proxy clinical:3000
+#       }
+#       handle {
+#           import protected_domains "rch.org.au" # staff, by email domain
+#           reverse_proxy clinical:3000
+#       }
+#   }
 (protected) {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up -X-Auth-Require-Domains
+		header_up -X-Auth-Require-Groups
+	}
+}
+
+(protected_domains) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up X-Auth-Require-Domains "{args[0]}"
+		header_up -X-Auth-Require-Groups
+	}
+}
+
+(protected_groups) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up -X-Auth-Require-Domains
+		header_up X-Auth-Require-Groups "{args[0]}"
+	}
+}
+
+(protected_access) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up X-Auth-Require-Domains "{args[0]}"
+		header_up X-Auth-Require-Groups "{args[1]}"
 	}
 }
 

@@ -3,17 +3,68 @@ auth.{$DOMAIN} {
 	reverse_proxy auth:8080
 }
 
-# Reusable guard. A protected app adds the line  import protected  to its own
-# .caddy snippet, then reverse_proxies its backend. On an unauthenticated
-# request /verify returns a 302 to the login page; on a valid session it returns
-# 200 and Caddy forwards Remote-User / Remote-Email / Remote-Groups upstream
-# (stripping any client-supplied copies first).
+# Reusable access guards. A protected app adds ONE of the import lines below to
+# its own .caddy snippet, then reverse_proxies its backend. On an
+# unauthenticated request /verify returns a 302 to the login page; on a valid
+# session it returns 200 and Caddy forwards Remote-User / Remote-Email /
+# Remote-Groups upstream (stripping any client-supplied copies first). A user
+# who is signed in but not allowed on THIS app is sent to a friendly
+# "no access" page with a sign-in link -- never bounced back to login.
 #
-# NOTE: keep comments in .caddy files free of { } braces -- the scaffold's
+# NOTE: keep comments in .caddy files free of braces -- the scaffold's
 # run-caddy.sh counts braces when assembling the Caddyfile.
+#
+# Usage (domains and groups are space/comma-separated):
+#   import protected                         -- any signed-in user; NOT break-glass
+#   import protected_domains "rch.org.au"    -- signed-in user at a listed email domain
+#   import protected_groups  "bg_stroke"     -- members of a listed group, OR a
+#                                               break-glass card targeting that group
+#   import protected_access  "rch.org.au" "bg_stroke"
+#                                            -- in a listed domain OR a listed group
+#
+# To let admins into a domain-gated app, add the admin role to the group list:
+#   import protected_access "rch.org.au" "admin"
+#
+# Break-glass QR sessions are deny-by-default: they reach ONLY apps/routes whose
+# group list names the card's target group, so an emergency card is scoped to
+# its location. `import protected` deliberately excludes them.
+#
+# Each guard SETS the requirement headers it needs and DELETES the others, so a
+# client can never inject its own X-Auth-Require-* to widen access. Always use
+# these snippets rather than hand-rolling forward_auth.
+
 (protected) {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up -X-Auth-Require-Domains
+		header_up -X-Auth-Require-Groups
+	}
+}
+
+(protected_domains) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up X-Auth-Require-Domains "{args[0]}"
+		header_up -X-Auth-Require-Groups
+	}
+}
+
+(protected_groups) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up -X-Auth-Require-Domains
+		header_up X-Auth-Require-Groups "{args[0]}"
+	}
+}
+
+(protected_access) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up X-Auth-Require-Domains "{args[0]}"
+		header_up X-Auth-Require-Groups "{args[1]}"
 	}
 }

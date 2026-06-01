@@ -37,6 +37,52 @@ func TestAllowed(t *testing.T) {
 	}
 }
 
+func TestCanAccessApp(t *testing.T) {
+	cases := []struct {
+		name       string
+		email      string
+		groups     string
+		breakGlass bool
+		reqDomains string
+		reqGroups  string
+		want       bool
+	}{
+		// No requirement: normal sessions in, break-glass out.
+		{"no req, normal user", "u@rch.org.au", "user", false, "", "", true},
+		{"no req, break-glass denied", "breakglass:Lab 1", "bg_stroke", true, "", "", false},
+
+		// Domain requirement.
+		{"domain match", "u@rch.org.au", "user", false, "rch.org.au", "", true},
+		{"domain miss", "u@partner.com", "user", false, "rch.org.au", "", false},
+		{"domain match, multi-list", "u@partner.com", "user", false, "rch.org.au, partner.com", "", true},
+		{"domain case-insensitive", "U@RCH.ORG.AU", "user", false, "rch.org.au", "", true},
+
+		// Group requirement.
+		{"group match", "u@partner.com", "user,dashboard", false, "", "dashboard", true},
+		{"group miss", "u@partner.com", "user", false, "", "dashboard", false},
+
+		// OR across the two lists.
+		{"domain or group: via group", "u@partner.com", "user,guests", false, "rch.org.au", "guests", true},
+		{"domain or group: neither", "u@partner.com", "user", false, "rch.org.au", "guests", false},
+
+		// Break-glass is scoped strictly by its group; it has no domain.
+		{"break-glass via group", "breakglass:Lab 1", "bg_stroke", true, "", "bg_stroke", true},
+		{"break-glass wrong group", "breakglass:Lab 1", "bg_stroke", true, "", "bg_other", false},
+		{"break-glass can't satisfy a domain", "breakglass:Lab 1", "bg_stroke", true, "rch.org.au", "", false},
+
+		// Admins are not auto-allowed: they get in via domain or by the app
+		// listing the admin group explicitly.
+		{"admin not auto-allowed", "admin@elsewhere.com", "admin", false, "rch.org.au", "", false},
+		{"admin via explicit group", "admin@elsewhere.com", "admin", false, "rch.org.au", "admin", true},
+	}
+	for _, c := range cases {
+		if got := CanAccessApp(c.email, c.groups, c.breakGlass, c.reqDomains, c.reqGroups); got != c.want {
+			t.Errorf("%s: CanAccessApp(%q,%q,bg=%v,d=%q,g=%q) = %v, want %v",
+				c.name, c.email, c.groups, c.breakGlass, c.reqDomains, c.reqGroups, got, c.want)
+		}
+	}
+}
+
 func TestValidateRedirect(t *testing.T) {
 	const domain = "example.com"
 	good := []string{
