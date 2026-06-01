@@ -7,6 +7,7 @@
 <form method="post" action="/request" autocomplete="on">
   <input type="hidden" name="rd" value="{{.Redirect}}">
   {{if .RequireDomains}}<input type="hidden" name="rqd" value="{{.RequireDomains}}">{{end}}
+  {{if .RequireDomainLabel}}<input type="hidden" name="dlabel" value="{{.RequireDomainLabel}}">{{end}}
   {{if .AltLoginURL}}<input type="hidden" name="alt" value="{{.AltLoginURL}}"><input type="hidden" name="altlabel" value="{{.AltLoginLabel}}">{{end}}
   <label for="email">Email address</label>
   <input id="email" name="email" type="email" inputmode="email" autocomplete="email"

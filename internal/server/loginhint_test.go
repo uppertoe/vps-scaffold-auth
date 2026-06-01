@@ -124,6 +124,51 @@ func TestVerifyCarriesAltLogin(t *testing.T) {
 	}
 }
 
+// A friendly domain label replaces the enumerated list in both the hint and
+// the decline message, while the precise domain list still governs the decline.
+func TestDomainLabelReplacesEnumeration(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	const label = "an approved Victorian health service"
+	rqd := "rch.org.au monashhealth.org svha.org.au alfredhealth.org.au austin.org.au"
+
+	// The visible hint uses the label; it does not enumerate the domains. (The
+	// raw list is still present in the hidden rqd carry field — that's fine — so
+	// we check for the comma-joined *enumeration* form, which only the hint
+	// would produce.)
+	const enumerated = "monashhealth.org, svha.org.au"
+	body := c.get("/login?rd=&rqd="+url.QueryEscape(rqd)+"&dlabel="+url.QueryEscape(label), nil).Body.String()
+	if !strings.Contains(body, "<strong>"+label+"</strong>") {
+		t.Errorf("login hint did not use the label:\n%s", body)
+	}
+	if strings.Contains(body, enumerated) {
+		t.Error("login hint enumerated domains despite a label being set")
+	}
+
+	// A non-matching address is still declined (label is display-only), and the
+	// decline message uses the label.
+	rec := c.postForm("/request", url.Values{
+		"email": {"user@example.com"}, "rqd": {rqd}, "dlabel": {label},
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("decline status = %d, want 403", rec.Code)
+	}
+	if db := rec.Body.String(); !strings.Contains(db, label) || strings.Contains(db, enumerated) {
+		t.Errorf("decline message did not use the label:\n%s", db)
+	}
+	if sender.code() != "" {
+		t.Error("a code was sent despite a domain mismatch")
+	}
+
+	// A matching address still gets in (the list, not the label, is authoritative).
+	sender.reset()
+	if rec := c.postForm("/request", url.Values{
+		"email": {"user@monashhealth.org"}, "rqd": {rqd}, "dlabel": {label},
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("matching domain status = %d, want 200", rec.Code)
+	}
+}
+
 // An admin door (group-gated) shows no domain hint on the login page.
 func TestAdminDoorShowsNoHint(t *testing.T) {
 	srv, _ := testServer(t)

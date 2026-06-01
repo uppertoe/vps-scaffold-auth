@@ -28,10 +28,12 @@ type pageData struct {
 	Identity   string
 	LoginURL   string
 	BreakGlass bool
-	// HintDomains shows the expected email domain(s) on the login page;
-	// RequireDomains carries the app's required domain(s) through to /request.
-	HintDomains    string
-	RequireDomains string
+	// HintDomains is the display string for the domain requirement (an app-set
+	// label, else the enumerated domains). RequireDomains/RequireDomainLabel
+	// carry the raw requirement + optional label through to /request.
+	HintDomains        string
+	RequireDomains     string
+	RequireDomainLabel string
 	// AltLoginURL/AltLoginLabel offer a small "sign in another way" link for
 	// people who can't match the domain (e.g. admins via a separate route). The
 	// URL is validated to be within the server domain before it's ever rendered.
