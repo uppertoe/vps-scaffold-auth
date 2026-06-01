@@ -12,6 +12,7 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
+	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
@@ -365,11 +366,7 @@ func (s *Server) handleAdminBrandingImage(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	if mime == "" {
-		mime = "application/octet-stream"
-	}
-	w.Header().Set("Content-Type", mime)
-	w.Write(data)
+	writeImage(w, mime, data)
 }
 
 // requireAdmin gates the admin subtree: a valid session whose groups include
@@ -378,7 +375,10 @@ func (s *Server) handleAdminBrandingImage(w http.ResponseWriter, r *http.Request
 func (s *Server) requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := s.sessions.ReadSession(r, s.now())
-		if !ok || !authz.HasGroup(id.Groups, authz.RoleAdmin) {
+		// A break-glass session must never reach the admin UI, even if its
+		// target group is somehow "admin": the admin tier requires a real login
+		// (and TOTP when enabled), not a bearer QR scan.
+		if !ok || id.Kind == session.KindBreakGlass || !authz.HasGroup(id.Groups, authz.RoleAdmin) {
 			rd := s.cfg.PublicURL + r.URL.RequestURI()
 			http.Redirect(w, r, s.cfg.PublicURL+"/login?rd="+url.QueryEscape(rd), http.StatusFound)
 			return
@@ -433,6 +433,13 @@ func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	name := normalizeGroupName(r.PostFormValue("name"))
+	if authz.IsReservedGroup(name) {
+		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
+			Title:   "Reserved group name",
+			Message: "The names \"admin\" and \"user\" are reserved roles and cannot be used as group names.",
+		})
+		return
+	}
 	if name != "" {
 		if err := s.store.CreateGroup(r.Context(), name, r.PostFormValue("label")); err != nil {
 			s.adminError(w, r)
@@ -503,6 +510,13 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 	if label == "" || group == "" {
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title: "Missing fields", Message: "A label and a target group are both required.",
+		})
+		return
+	}
+	if authz.IsReservedGroup(group) {
+		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
+			Title:   "Reserved target group",
+			Message: "A break-glass code cannot target the reserved roles \"admin\" or \"user\". Use a dedicated group instead.",
 		})
 		return
 	}
@@ -658,11 +672,7 @@ func (s *Server) handleAdminCodeBrandingImage(w http.ResponseWriter, r *http.Req
 		http.NotFound(w, r)
 		return
 	}
-	if mime == "" {
-		mime = "application/octet-stream"
-	}
-	w.Header().Set("Content-Type", mime)
-	w.Write(data)
+	writeImage(w, mime, data)
 }
 
 func (s *Server) handleAdminBreakRevoke(w http.ResponseWriter, r *http.Request) {
@@ -707,8 +717,7 @@ func (s *Server) handleAdminBreakQR(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Write(png)
+	writeImage(w, "image/png", png)
 }
 
 func (s *Server) handleAdminBreakPDF(w http.ResponseWriter, r *http.Request) {

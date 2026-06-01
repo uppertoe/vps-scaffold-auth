@@ -17,33 +17,59 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
+var reDigits = regexp.MustCompile(`\d{6}`)
+
 // captureSender records the last message so tests can read back the OTP code.
+// Sends now happen on a detached goroutine (see sendCode), so code() blocks
+// briefly for a message to arrive rather than assuming one is already present.
 type captureSender struct {
 	mu   sync.Mutex
 	last *email.Message
+	sent chan email.Message
+}
+
+func newCaptureSender() *captureSender {
+	return &captureSender{sent: make(chan email.Message, 16)}
 }
 
 func (c *captureSender) Send(_ context.Context, msg email.Message) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	m := msg
 	c.last = &m
+	c.mu.Unlock()
+	select {
+	case c.sent <- m:
+	default:
+	}
 	return nil
 }
 
 func (c *captureSender) code() string {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.last == nil {
+	last := c.last
+	c.mu.Unlock()
+	if last != nil {
+		return reDigits.FindString(last.Text)
+	}
+	select {
+	case m := <-c.sent:
+		return reDigits.FindString(m.Text)
+	case <-time.After(2 * time.Second):
 		return ""
 	}
-	return regexp.MustCompile(`\d{6}`).FindString(c.last.Text)
 }
 
 func (c *captureSender) reset() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.last = nil
+	c.mu.Unlock()
+	for {
+		select {
+		case <-c.sent:
+		default:
+			return
+		}
+	}
 }
 
 // client threads cookies across requests like a browser would.
@@ -115,7 +141,7 @@ func testServer(t *testing.T) (*Server, *captureSender) {
 		RateLimitPerEmail: config.RateLimit{Count: 100, Window: time.Minute},
 		RateLimitPerIP:    config.RateLimit{Count: 100, Window: time.Minute},
 	}
-	sender := &captureSender{}
+	sender := newCaptureSender()
 	srv, err := New(cfg, st, sender)
 	if err != nil {
 		t.Fatal(err)

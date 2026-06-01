@@ -28,15 +28,23 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	if id, ok := s.sessions.ReadSession(r, now); ok {
 		if s.sessions.NeedsRenew(id, now) {
-			// Recompute groups from the DB so membership changes (and access
-			// revocation) take effect at renewal, not only at next full login.
-			// Break-glass sessions are never renewed (NeedsRenew returns false),
-			// so this path only handles normal logins.
-			groups := id.Groups
-			if role := s.policy.Role(id.Email); role != authz.RoleDeny {
-				groups = s.computeGroups(r.Context(), id.Email, role)
+			// Re-check policy at renewal so access revocation actually takes
+			// effect: a principal who is no longer permitted (removed from the
+			// admin list, or whose domain was de-listed) has their session
+			// cleared instead of silently extended. Recomputing groups also
+			// picks up membership and demotion changes. Break-glass sessions
+			// never reach here (NeedsRenew is false for them).
+			role := s.policy.Role(id.Email)
+			if role == authz.RoleDeny {
+				s.sessions.ClearSession(w)
+				s.redirectToLogin(w, r)
+				return
 			}
+			groups := s.computeGroups(r.Context(), id.Email, role)
 			_ = s.sessions.IssueSessionTTL(w, id.Email, groups, id.Kind, s.sessions.SessionTTL(id), now)
+			// Reflect the freshly computed set in this response too, not just
+			// the renewed cookie, so a demotion takes effect immediately.
+			id.Groups = groups
 		}
 		// These headers are the identity passed to the upstream app. Caddy
 		// strips any client-supplied copies before re-adding ours.
@@ -47,10 +55,15 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.redirectToLogin(w, r)
+}
+
+// redirectToLogin sends an unauthenticated request to the login page,
+// preserving the originally-requested URL as a validated redirect target.
+func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	orig := s.reconstructOriginalURL(r)
 	rd := authz.SafeRedirect(orig, s.cfg.Domain, s.cfg.DefaultRedirect)
-	loginURL := s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd)
-	http.Redirect(w, r, loginURL, http.StatusFound)
+	http.Redirect(w, r, s.cfg.PublicURL+"/login?rd="+url.QueryEscape(rd), http.StatusFound)
 }
 
 // handleLogin renders the email-entry page.
@@ -107,16 +120,37 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "code", pageData{Email: emailAddr, Redirect: rd, Remember: remember})
 }
 
-// sendCode generates, stores, and emails a fresh OTP code.
+// sendCode generates and stores a fresh OTP code, then dispatches the email on
+// a detached goroutine. The code is persisted synchronously (so /verify-code
+// works the instant /request returns), but the email delivery — the slow,
+// backend-dependent step — must not gate the HTTP response: doing so leaks
+// whether an address is permitted via a response-timing side channel, since
+// only permitted addresses are ever sent mail. See handleRequest.
 func (s *Server) sendCode(r *http.Request, emailAddr string, now time.Time) error {
 	code, err := otp.Generate(s.cfg.OTPLength)
 	if err != nil {
 		return err
 	}
-	if err := s.store.SaveCode(r.Context(), emailAddr, otp.Hash(code), now.Add(s.cfg.OTPTTL)); err != nil {
+	if err := s.store.SaveCode(r.Context(), emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL)); err != nil {
 		return err
 	}
-	return s.sender.Send(r.Context(), s.buildCodeEmail(emailAddr, code))
+	msg := s.buildCodeEmail(emailAddr, code)
+	go func() {
+		// Detached context: the originating request is already answered.
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := s.sender.Send(ctx, msg); err != nil {
+			log.Printf("send code to %s: %v", emailAddr, err)
+		}
+	}()
+	return nil
+}
+
+// hashCode hashes an OTP code for storage. It is keyed (HMAC) with the session
+// secret so a stolen database cannot brute-force a live code's small numeric
+// space offline. Break-glass tokens are high-entropy and hashed separately.
+func (s *Server) hashCode(code string) string {
+	return otp.HashKeyed(code, s.cfg.SessionSecret)
 }
 
 // handleVerifyCode checks the submitted OTP code and, on success, issues a
@@ -136,7 +170,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	code := strings.TrimSpace(r.PostFormValue("code"))
-	res, err := s.store.ConsumeCode(r.Context(), st.Email, otp.Hash(code), s.cfg.OTPMaxAttempts, now)
+	res, err := s.store.ConsumeCode(r.Context(), st.Email, s.hashCode(code), s.cfg.OTPMaxAttempts, now)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: st.Redirect})
 		return
@@ -377,12 +411,22 @@ func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	mime := b.LogoType
+	writeImage(w, b.LogoType, b.Logo)
+}
+
+// writeImage serves stored image bytes (logos, glyphs, QR PNGs). It overrides
+// the page CSP with a locked-down, sandboxed policy so that an admin-uploaded
+// SVG served inline can never execute script or act as an active document,
+// independent of its declared content type.
+func writeImage(w http.ResponseWriter, mime string, data []byte) {
 	if mime == "" {
 		mime = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", mime)
-	w.Write(b.Logo)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	w.Header().Set("Content-Disposition", "inline")
+	w.Write(data)
 }
 
 // handleHealthz is a liveness probe. It never touches the mail backend so a

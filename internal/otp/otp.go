@@ -4,12 +4,17 @@
 package otp
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"math/big"
 )
+
+// hashKeyedInfo domain-separates the keyed OTP hash from any other use of the
+// same secret (e.g. cookie signing).
+const hashKeyedInfo = "vps-auth/otp-code/v1"
 
 // Generate returns a random numeric code of the given length using a
 // cryptographically secure source.
@@ -27,10 +32,22 @@ func Generate(length int) (string, error) {
 	return string(buf), nil
 }
 
-// Hash returns the hex-encoded SHA-256 of a code. This is what gets stored.
+// Hash returns the hex-encoded SHA-256 of a value. Suitable for high-entropy
+// inputs (e.g. break-glass tokens) where an offline brute force is infeasible.
 func Hash(code string) string {
 	sum := sha256.Sum256([]byte(code))
 	return hex.EncodeToString(sum[:])
+}
+
+// HashKeyed returns a hex-encoded HMAC-SHA256 of a code under key. Use this for
+// low-entropy values such as the short numeric login codes: without the key, a
+// stolen database cannot brute-force the (e.g. 10^6) preimage space, so a live
+// code can't be recovered from the stored hash alone.
+func HashKeyed(code string, key []byte) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(hashKeyedInfo))
+	mac.Write([]byte(code))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // Equal compares two hex hashes in constant time.
