@@ -1,8 +1,23 @@
+# VCS, CI, and docs — not needed to build the binary.
 .git
 .github
-*.md
-deploy
 .gitignore
-.dockerignore
+*.md
+
+# Reference deploy wiring and this image's own build files.
+deploy
 Dockerfile
+.dockerignore
+
+# Tests aren't compiled into the image.
 *_test.go
+
+# Local build output, data, and secrets — must never enter the build context.
+/auth
+/out
+*.exe
+*.db
+*.db-*
+.env
+*.local
+.DS_Store
