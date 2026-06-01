@@ -1,0 +1,68 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+<h1>Groups</h1>
+<p class="sub">Named groups surfaced to apps via the <code class="mono">Remote-Groups</code> header. Add members by email.</p>
+
+{{$csrf := .CSRF}}
+{{range .Groups}}
+{{$group := .Name}}
+<div class="panel">
+  <div class="row" style="align-items:baseline">
+    <div style="flex:1 1 auto">
+      <h2 style="margin:0"><code class="mono">{{.Name}}</code>{{if .Label}} <span class="muted">— {{.Label}}</span>{{end}}</h2>
+    </div>
+    <form class="inline" method="post" action="/admin/groups/{{.Name}}/delete" style="flex:0 0 auto">
+      <input type="hidden" name="csrf" value="{{$csrf}}">
+      <button type="submit" class="danger">Delete group</button>
+    </form>
+  </div>
+  {{if .Members}}
+  <table>
+    <thead><tr><th>Member</th><th></th></tr></thead>
+    <tbody>
+    {{range .Members}}
+      <tr>
+        <td>{{.}}</td>
+        <td style="text-align:right">
+          <form class="inline" method="post" action="/admin/groups/{{$group}}/members/delete">
+            <input type="hidden" name="csrf" value="{{$csrf}}">
+            <input type="hidden" name="email" value="{{.}}">
+            <button type="submit" class="ghost">Remove</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No members.</p>
+  {{end}}
+  <form method="post" action="/admin/groups/{{.Name}}/members">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <label for="m-{{.Name}}">Add member email</label>
+    <div class="row">
+      <div><input id="m-{{.Name}}" name="email" type="email" placeholder="user@example.com"></div>
+    </div>
+    <button type="submit">Add member</button>
+  </form>
+</div>
+{{end}}
+
+<div class="panel">
+  <h2 style="margin-top:0">New group</h2>
+  <form method="post" action="/admin/groups">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <div class="row">
+      <div>
+        <label for="name">Group name</label>
+        <input id="name" name="name" type="text" required placeholder="whitelisted">
+      </div>
+      <div>
+        <label for="label">Label (optional)</label>
+        <input id="label" name="label" type="text" placeholder="Whitelisted users">
+      </div>
+    </div>
+    <button type="submit">Create group</button>
+  </form>
+</div>
+{{end}}

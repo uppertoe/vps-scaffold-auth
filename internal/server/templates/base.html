@@ -19,6 +19,8 @@
     box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 8px 24px rgba(0,0,0,.06);
   }
   @media (prefers-color-scheme: dark) { .card { background: #1f2228; box-shadow: none; border: 1px solid #2c2f36; } }
+  .brand { text-align: center; margin: 0 0 18px; }
+  .brand img { max-height: 52px; max-width: 70%; }
   h1 { font-size: 20px; margin: 0 0 4px; }
   p.sub { margin: 0 0 20px; color: #65676b; font-size: 14px; }
   @media (prefers-color-scheme: dark) { p.sub { color: #9aa0a6; } }
@@ -36,6 +38,8 @@
   button:hover { background: #1d4ed8; }
   .err { background: #fde8e8; color: #9b1c1c; border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-bottom: 16px; }
   @media (prefers-color-scheme: dark) { .err { background: #3a1a1a; color: #f3b4b4; } }
+  label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: -4px 0 16px; cursor: pointer; }
+  label.check input { width: auto; margin: 0; }
   .links { margin-top: 18px; text-align: center; font-size: 14px; }
   .links a { color: #2563eb; text-decoration: none; }
   .qr { word-break: break-all; font-size: 12px; color: #65676b; background: #f0f2f5; padding: 10px; border-radius: 8px; margin-bottom: 16px; }
@@ -44,6 +48,7 @@
 </head>
 <body>
   <main class="card">
+    {{if .LogoURL}}<div class="brand"><img src="{{.LogoURL}}" alt=""></div>{{end}}
     {{template "content" .}}
   </main>
 </body>

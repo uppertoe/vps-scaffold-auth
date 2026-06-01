@@ -1,0 +1,89 @@
+{{define "base"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>{{template "title" .}} · Admin</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f6f7f9; color: #1c1e21;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #16181c; color: #e7e9ea; } }
+  header.bar {
+    background: #1f2937; color: #fff; padding: 14px 24px; display: flex; align-items: center; gap: 20px;
+  }
+  header.bar strong { font-size: 16px; }
+  header.bar nav a { color: #cbd5e1; text-decoration: none; font-size: 14px; margin-right: 14px; }
+  header.bar nav a:hover { color: #fff; }
+  main { max-width: 920px; margin: 0 auto; padding: 28px 24px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 28px 0 10px; }
+  p.sub { color: #65676b; margin: 0 0 20px; }
+  @media (prefers-color-scheme: dark) { p.sub { color: #9aa0a6; } }
+  .panel {
+    background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.07), 0 6px 18px rgba(0,0,0,.05);
+  }
+  @media (prefers-color-scheme: dark) { .panel { background: #1f2228; box-shadow: none; border: 1px solid #2c2f36; } }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid #e7e9ec; font-size: 14px; vertical-align: top; }
+  @media (prefers-color-scheme: dark) { th, td { border-color: #2c2f36; } }
+  th { color: #65676b; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 6px; }
+  input[type=text], input[type=email], input[type=url], textarea {
+    width: 100%; padding: 10px 12px; font-size: 15px; border: 1px solid #ccd0d5; border-radius: 9px;
+    background: #fff; color: inherit; font-family: inherit;
+  }
+  textarea { resize: vertical; line-height: 1.5; }
+  input[type=file] { font-size: 14px; }
+  input[type=color] { width: 56px; height: 40px; padding: 2px; border: 1px solid #ccd0d5; border-radius: 9px; background: #fff; cursor: pointer; }
+  .swatch { flex: 0 0 auto; }
+  .swatch label { margin-top: 0; }
+  label.ck { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 6px 0; cursor: pointer; }
+  label.ck input { width: auto; }
+  @media (prefers-color-scheme: dark) { input, textarea { background: #14161a; border-color: #3a3d44; } }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 200px; }
+  button {
+    margin-top: 14px; padding: 10px 16px; font-size: 14px; font-weight: 600; border: 0; border-radius: 9px;
+    background: #2563eb; color: #fff; cursor: pointer;
+  }
+  button:hover { background: #1d4ed8; }
+  button.danger { background: #b91c1c; }
+  button.danger:hover { background: #991b1b; }
+  button.ghost { background: #e5e7eb; color: #1f2937; }
+  button.ghost:hover { background: #d1d5db; }
+  .inline { display: inline; }
+  .inline button { margin-top: 0; padding: 6px 12px; font-size: 13px; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.ok { background: #dcfce7; color: #166534; }
+  .pill.off { background: #fee2e2; color: #991b1b; }
+  .qrbox { text-align: center; }
+  .qrbox img { width: 240px; height: 240px; image-rendering: pixelated; background: #fff; padding: 12px; border-radius: 10px; }
+  .muted { color: #65676b; font-size: 13px; }
+  .err { background: #fde8e8; color: #9b1c1c; border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; }
+  code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+</style>
+</head>
+<body>
+  <header class="bar">
+    <strong>Auth admin</strong>
+    <nav>
+      <a href="/admin/break">Break-glass codes</a>
+      <a href="/admin/groups">Groups</a>
+      <a href="/admin/branding">PDF branding</a>
+      <a href="/admin/settings">Settings</a>
+    </nav>
+  </header>
+  <main>
+    {{template "content" .}}
+  </main>
+</body>
+</html>{{end}}

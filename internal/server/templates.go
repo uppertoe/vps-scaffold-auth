@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"html/template"
@@ -21,6 +22,8 @@ type pageData struct {
 	TOTPSecret string
 	TOTPURL    string
 	Message    string
+	Remember   bool
+	LogoURL    string
 }
 
 // pages holds each page template composed with the shared base layout.
@@ -52,6 +55,12 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 	if !ok {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	// Surface the global branding logo on the public auth pages when set.
+	if data.LogoURL == "" {
+		if b, ok, err := s.store.GetBranding(context.Background()); err == nil && ok && len(b.Logo) > 0 {
+			data.LogoURL = "/logo.img"
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)

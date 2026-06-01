@@ -1,0 +1,29 @@
+# Caddy config for the standalone example. {$DOMAIN} comes from the environment.
+
+{
+	# Uncomment and set a contact address for Let's Encrypt:
+	# email you@example.com
+}
+
+# Reusable guard. A protected site adds `import protected`, then reverse_proxies
+# its backend. Unauthenticated -> /verify returns 302 to the login page; a valid
+# session -> 200 and Caddy forwards Remote-User / Remote-Email / Remote-Groups
+# upstream (stripping any client-supplied copies first).
+(protected) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+	}
+}
+
+# The login site. No auth in front of this — it IS the login.
+auth.{$DOMAIN} {
+	reverse_proxy auth:8080
+}
+
+# A protected demo app. Visit https://app.{$DOMAIN}: you'll be redirected to the
+# login, and after signing in you'll see the Remote-* identity headers echoed.
+app.{$DOMAIN} {
+	import protected
+	reverse_proxy whoami:80
+}

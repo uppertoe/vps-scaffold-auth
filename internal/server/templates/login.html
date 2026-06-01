@@ -9,6 +9,7 @@
   <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
          autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus
          value="{{.Email}}" placeholder="you@example.com">
+  <label class="check"><input type="checkbox" name="remember" value="1" {{if .Remember}}checked{{end}}> Keep me signed in</label>
   <button type="submit">Send code</button>
 </form>
 {{end}}

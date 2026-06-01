@@ -11,6 +11,7 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 	"github.com/uppertoe/vps-scaffold-auth/internal/ratelimit"
+	"github.com/uppertoe/vps-scaffold-auth/internal/secretbox"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
@@ -22,9 +23,11 @@ type Server struct {
 	sender       email.Sender
 	sessions     *session.Manager
 	policy       *authz.Policy
+	secrets      *secretbox.Box
 	emailLimiter *ratelimit.Limiter
 	ipLimiter    *ratelimit.Limiter
 	pages        pages
+	adminPages   pages
 	handler      http.Handler
 	now          func() time.Time
 }
@@ -35,15 +38,25 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	if err != nil {
 		return nil, err
 	}
+	adminTmpls, err := loadAdminTemplates()
+	if err != nil {
+		return nil, err
+	}
+	secrets, err := secretbox.NewFromConfig(cfg.SessionSecret, cfg.DataEncryptionKey)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
 		cfg:          cfg,
 		store:        st,
 		sender:       sender,
 		sessions:     session.NewManager(cfg.SessionSecret, cfg.SessionTTL, cfg.SessionRenew, cfg.CookieDomain, !cfg.CookieInsecure),
 		policy:       authz.NewPolicy(cfg.AllowedDomains, cfg.AdminEmails),
+		secrets:      secrets,
 		emailLimiter: ratelimit.New(cfg.RateLimitPerEmail.Count, cfg.RateLimitPerEmail.Window),
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
 		pages:        tmpls,
+		adminPages:   adminTmpls,
 		now:          time.Now,
 	}
 	s.handler = s.routes()
@@ -62,9 +75,34 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /totp", s.handleTOTP)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	mux.HandleFunc("GET /", s.handleRoot)
+	mux.HandleFunc("GET /break/{token}", s.handleBreakGlass)
+	mux.HandleFunc("GET /logo.img", s.handleLogo)
+
+	// Admin subtree: one gate wraps the whole /admin/ tree. The inner mux
+	// matches on the full path, so no prefix stripping is needed.
+	admin := http.NewServeMux()
+	s.adminRoutes(admin)
+	mux.Handle("/admin/", s.requireAdmin(admin))
+	// Bare /admin (no trailing slash) redirects into the gated subtree.
+	mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin/", http.StatusFound)
+	})
+
+	// Catch-all (all methods) so it doesn't conflict with the /admin/ subtree
+	// pattern under the Go 1.22 mux precedence rules.
+	mux.HandleFunc("/", s.handleRoot)
 	return securityHeaders(mux)
 }
+
+// Content-Security-Policy values. The base policy forbids everything; the admin
+// variant additionally allows same-origin images so QR previews render. Neither
+// permits scripts.
+// Both policies allow same-origin images (the optional branding logo on the
+// login pages, and QR previews in the admin UI) but still forbid all scripts.
+const (
+	cspBase  = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+	cspAdmin = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+)
 
 // securityHeaders applies conservative defaults to every response. The pages
 // use only inline styles and no scripts, so the CSP can be very tight.
@@ -75,8 +113,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
-		h.Set("Content-Security-Policy",
-			"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+		h.Set("Content-Security-Policy", cspBase)
 		next.ServeHTTP(w, r)
 	})
 }

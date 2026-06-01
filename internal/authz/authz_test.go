@@ -9,16 +9,16 @@ func TestRole(t *testing.T) {
 		email string
 		want  string
 	}{
-		{"admin@example.com", RoleAdmin},     // whitelist, case-insensitive
-		{"ADMIN@EXAMPLE.COM", RoleAdmin},     // case-insensitive
-		{"user@example.com", RoleUser},       // allowed domain
-		{"user@example.org", RoleUser},       // second allowed domain
-		{"user@EXAMPLE.com", RoleUser},       // domain case-insensitive
-		{"user@evil.com", RoleDeny},          // domain not allowed
-		{"", RoleDeny},                       // empty
-		{"nobody", RoleDeny},                 // no @
-		{"trailing@", RoleDeny},              // empty domain
-		{"admin@evil.com", RoleDeny},         // admin local-part at wrong domain
+		{"admin@example.com", RoleAdmin}, // whitelist, case-insensitive
+		{"ADMIN@EXAMPLE.COM", RoleAdmin}, // case-insensitive
+		{"user@example.com", RoleUser},   // allowed domain
+		{"user@example.org", RoleUser},   // second allowed domain
+		{"user@EXAMPLE.com", RoleUser},   // domain case-insensitive
+		{"user@evil.com", RoleDeny},      // domain not allowed
+		{"", RoleDeny},                   // empty
+		{"nobody", RoleDeny},             // no @
+		{"trailing@", RoleDeny},          // empty domain
+		{"admin@evil.com", RoleDeny},     // admin local-part at wrong domain
 	}
 	for _, c := range cases {
 		if got := p.Role(c.email); got != c.want {
@@ -53,15 +53,15 @@ func TestValidateRedirect(t *testing.T) {
 
 	bad := []string{
 		"",
-		"http://example.com/",            // scheme downgrade
-		"//evil.com",                     // protocol-relative
-		"https://evil.com/",              // wrong host
-		"https://example.com.evil.com/",  // look-alike suffix
-		"https://evilexample.com/",       // no dot boundary
-		"https://user@example.com/",      // userinfo
-		"https://user:pass@evil.com/",    // userinfo + wrong host
-		"ftp://example.com/",             // wrong scheme
-		"javascript:alert(1)",            // not a URL host
+		"http://example.com/",           // scheme downgrade
+		"//evil.com",                    // protocol-relative
+		"https://evil.com/",             // wrong host
+		"https://example.com.evil.com/", // look-alike suffix
+		"https://evilexample.com/",      // no dot boundary
+		"https://user@example.com/",     // userinfo
+		"https://user:pass@evil.com/",   // userinfo + wrong host
+		"ftp://example.com/",            // wrong scheme
+		"javascript:alert(1)",           // not a URL host
 	}
 	for _, rd := range bad {
 		if v, ok := ValidateRedirect(rd, domain); ok {

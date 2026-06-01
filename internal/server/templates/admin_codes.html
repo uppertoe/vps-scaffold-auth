@@ -1,0 +1,49 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+<h1>Break-glass codes</h1>
+<p class="sub">Physical QR cards that grant temporary, group-scoped emergency access. Every scan is logged.</p>
+
+<div class="panel">
+  <h2 style="margin-top:0">Codes</h2>
+  {{if .Codes}}
+  <table>
+    <thead><tr><th>Label</th><th>Group</th><th>Status</th><th>Created</th><th></th></tr></thead>
+    <tbody>
+    {{range .Codes}}
+      <tr>
+        <td><a href="/admin/break/{{.ID}}">{{.Label}}</a>{{if .Note}}<div class="muted">{{.Note}}</div>{{end}}</td>
+        <td><code class="mono">{{.TargetGroup}}</code></td>
+        <td>{{if .Active}}<span class="pill ok">active</span>{{else}}<span class="pill off">revoked</span>{{end}}</td>
+        <td class="muted">{{.Created}}</td>
+        <td><a href="/admin/break/{{.ID}}">Manage →</a></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No codes yet. Create one below.</p>
+  {{end}}
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">New code</h2>
+  <form method="post" action="/admin/break">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="row">
+      <div>
+        <label for="label">Location label</label>
+        <input id="label" name="label" type="text" required placeholder="Angiography Lab 1">
+      </div>
+      <div>
+        <label for="group">Target group</label>
+        <input id="group" name="group" type="text" required placeholder="code_stroke_break_glass">
+      </div>
+    </div>
+    <label for="note">Note (optional)</label>
+    <input id="note" name="note" type="text" placeholder="Laminated card by the workstation">
+    <label for="redirect">Redirect after access (optional)</label>
+    <input id="redirect" name="redirect" type="url" placeholder="https://app.example.com/">
+    <button type="submit">Create code</button>
+  </form>
+</div>
+{{end}}

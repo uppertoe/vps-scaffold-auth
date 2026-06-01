@@ -1,0 +1,31 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+{{with .Settings}}
+<h1>Settings</h1>
+<p class="sub">Runtime operational settings. These override the environment defaults and take effect immediately.</p>
+
+<form method="post" action="/admin/settings">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+
+  <div class="panel">
+    <h2 style="margin-top:0">Break-glass access</h2>
+    <label for="hours">Session duration (hours)</label>
+    <input id="hours" name="hours" type="number" min="0.25" max="168" step="0.25" value="{{.BreakGlassHours}}" style="max-width:160px">
+    <p class="muted">How long a session granted by scanning a break-glass card lasts. These sessions are never renewed; they expire at this timeout.</p>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">Use notifications</h2>
+    <label for="emails">Notify emails</label>
+    <input id="emails" name="emails" type="text" value="{{.NotifyEmails}}" placeholder="oncall@example.com, lead@example.com">
+    <p class="muted">Comma-separated. Emailed whenever a break-glass code is used. Leave blank to disable email notifications.</p>
+
+    <label for="webhook">Webhook URL</label>
+    <input id="webhook" name="webhook" type="url" value="{{.WebhookURL}}" placeholder="https://ntfy.sh/your-topic">
+    <p class="muted">Optional. A JSON payload is POSTed here on each use (ntfy / Slack / Pushover style). Timeout: {{.WebhookTimeout}}. Leave blank to disable.</p>
+  </div>
+
+  <button type="submit">Save settings</button>
+</form>
+{{end}}
+{{end}}

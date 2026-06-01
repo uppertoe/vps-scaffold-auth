@@ -1,0 +1,116 @@
+{{define "title"}}{{.Code.Label}}{{end}}
+{{define "content"}}
+{{with .Code}}
+<p><a href="/admin/break">← All codes</a></p>
+<h1>{{.Label}}</h1>
+<p class="sub">
+  {{if .Active}}<span class="pill ok">active</span>{{else}}<span class="pill off">revoked</span>{{end}}
+  &nbsp;·&nbsp; group <code class="mono">{{.TargetGroup}}</code>
+</p>
+
+<div class="row">
+  <div class="panel qrbox" style="flex:0 0 280px">
+    {{if .Active}}
+      <img src="/admin/break/{{.ID}}/qr.png" alt="QR code for {{.Label}}" width="240" height="240">
+      <p class="muted">Scan to grant access</p>
+      <p><a href="/admin/break/{{.ID}}/pdf">Download printable PDF →</a></p>
+    {{else}}
+      <p class="muted">This code is revoked. Re-mint to issue a new card.</p>
+    {{end}}
+  </div>
+  <div class="panel" style="flex:1 1 320px">
+    <h2 style="margin-top:0">Details</h2>
+    <table>
+      <tr><th>Label</th><td>{{.Label}}</td></tr>
+      <tr><th>Note</th><td>{{if .Note}}{{.Note}}{{else}}<span class="muted">—</span>{{end}}</td></tr>
+      <tr><th>Group</th><td><code class="mono">{{.TargetGroup}}</code></td></tr>
+      <tr><th>Redirect</th><td>{{if .Redirect}}{{.Redirect}}{{else}}<span class="muted">default</span>{{end}}</td></tr>
+      <tr><th>Created</th><td class="muted">{{.Created}}</td></tr>
+      <tr><th>Updated</th><td class="muted">{{.Updated}}</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">Manage</h2>
+  <div class="row">
+    <form class="inline" method="post" action="/admin/break/{{.ID}}/remint">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <button type="submit" class="ghost">Re-mint token</button>
+    </form>
+    {{if .Active}}
+    <form class="inline" method="post" action="/admin/break/{{.ID}}/revoke">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <button type="submit" class="danger">Revoke</button>
+    </form>
+    {{end}}
+  </div>
+  <p class="muted" style="margin-top:12px">
+    Re-minting invalidates every already-printed card for this location and issues a new one.
+    Revoking blocks future scans immediately; sessions already granted expire on their own short timeout.
+  </p>
+</div>
+{{end}}
+
+{{with .CodeBranding}}
+<div class="panel">
+  <h2 style="margin-top:0">Card customisation</h2>
+  <p class="muted">Override the PDF for this card. Leave a field blank to inherit the global <a href="/admin/branding">PDF branding</a>.</p>
+  <form method="post" action="/admin/break/{{$.Code.ID}}/branding" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <label for="cb-title">Title</label>
+    <input id="cb-title" name="title" type="text" value="{{.Title}}" placeholder="{{.InhTitle}}">
+    <label for="cb-body">Body</label>
+    <textarea id="cb-body" name="body" rows="2" placeholder="{{.InhBody}}">{{.Body}}</textarea>
+    <label for="cb-instr">Instructions</label>
+    <textarea id="cb-instr" name="instructions" rows="4" placeholder="{{.InhInstr}}">{{.Instructions}}</textarea>
+
+    <label class="ck"><input type="checkbox" name="custom_colors" value="1" {{if .CustomColors}}checked{{end}}> Use custom colours for this card</label>
+    <div class="row">
+      <div class="swatch"><label for="cb-header">Header</label><input id="cb-header" name="header_color" type="color" value="{{.HeaderColor}}"></div>
+      <div class="swatch"><label for="cb-accent">Accent</label><input id="cb-accent" name="accent_color" type="color" value="{{.AccentColor}}"></div>
+      <div class="swatch"><label for="cb-bar1">Bar 1</label><input id="cb-bar1" name="bar1_color" type="color" value="{{.Bar1Color}}"></div>
+      <div class="swatch"><label for="cb-bar2">Bar 2</label><input id="cb-bar2" name="bar2_color" type="color" value="{{.Bar2Color}}"></div>
+      <div class="swatch"><label for="cb-bar3">Bar 3</label><input id="cb-bar3" name="bar3_color" type="color" value="{{.Bar3Color}}"></div>
+    </div>
+
+    <div class="row">
+      <div style="flex:1 1 240px">
+        <label>Logo override</label>
+        {{if .HasLogo}}<p><img src="/admin/break/{{$.Code.ID}}/branding/logo/img" alt="Logo" style="max-height:48px;background:#003a5c;padding:6px;border-radius:8px"></p>
+        <label class="ck"><input type="checkbox" name="remove_logo" value="1"> Remove (use global)</label>{{else}}<p class="muted">Using global logo.</p>{{end}}
+        <input name="logo" type="file" accept="image/png,image/jpeg,image/svg+xml">
+      </div>
+      <div style="flex:1 1 240px">
+        <label>Glyph override</label>
+        {{if .HasGlyph}}<p><img src="/admin/break/{{$.Code.ID}}/branding/glyph/img" alt="Glyph" style="max-height:48px;padding:6px;border:1px solid #ccd0d5;border-radius:8px"></p>
+        <label class="ck"><input type="checkbox" name="remove_glyph" value="1"> Remove (use global)</label>{{else}}<p class="muted">Using global glyph.</p>{{end}}
+        <input name="glyph" type="file" accept="image/png,image/jpeg,image/svg+xml">
+      </div>
+    </div>
+    <button type="submit">Save customisation</button>
+  </form>
+</div>
+{{end}}
+
+<div class="panel">
+  <h2 style="margin-top:0">Use log</h2>
+  {{if .Events}}
+  <table>
+    <thead><tr><th>Time</th><th>Outcome</th><th>Client IP</th><th>User agent</th></tr></thead>
+    <tbody>
+    {{range .Events}}
+      <tr>
+        <td class="muted">{{.CreatedAt.UTC.Format "2006-01-02 15:04:05 UTC"}}</td>
+        <td>{{if eq .Outcome "granted"}}<span class="pill ok">granted</span>{{else}}<span class="pill off">{{.Outcome}}</span>{{end}}</td>
+        <td><code class="mono">{{.ClientIP}}</code></td>
+        <td class="muted">{{.UserAgent}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No recorded uses yet.</p>
+  {{end}}
+</div>
+{{end}}

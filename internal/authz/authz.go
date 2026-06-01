@@ -64,6 +64,42 @@ func (p *Policy) Allowed(email string) bool {
 	return p.Role(email) != RoleDeny
 }
 
+// BuildGroups composes the comma-separated Remote-Groups value baked into a
+// session: the base role (admin/user) first, followed by any DB-managed group
+// names, de-duplicated and with blanks dropped. Keeping the role in the set
+// preserves compatibility with existing role-equality Caddy matchers and the
+// admin-UI gate.
+func BuildGroups(role string, dbGroups []string) string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(g string) {
+		g = strings.TrimSpace(g)
+		if g == "" {
+			return
+		}
+		if _, ok := seen[g]; ok {
+			return
+		}
+		seen[g] = struct{}{}
+		out = append(out, g)
+	}
+	add(role)
+	for _, g := range dbGroups {
+		add(g)
+	}
+	return strings.Join(out, ",")
+}
+
+// HasGroup reports whether the comma-separated groups string contains target.
+func HasGroup(groups, target string) bool {
+	for _, g := range strings.Split(groups, ",") {
+		if strings.TrimSpace(g) == target {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateRedirect returns a safe post-login redirect target. It accepts only
 // absolute https URLs whose host is exactly domain or a subdomain of it. This
 // blocks open-redirect tricks (//evil, scheme downgrade, userinfo, look-alike

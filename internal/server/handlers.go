@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -11,8 +12,10 @@ import (
 	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
+	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
+	"github.com/uppertoe/vps-scaffold-auth/internal/secretbox"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 	"github.com/uppertoe/vps-scaffold-auth/internal/totp"
@@ -25,7 +28,15 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	if id, ok := s.sessions.ReadSession(r, now); ok {
 		if s.sessions.NeedsRenew(id, now) {
-			_ = s.sessions.IssueSession(w, id.Email, id.Groups, now)
+			// Recompute groups from the DB so membership changes (and access
+			// revocation) take effect at renewal, not only at next full login.
+			// Break-glass sessions are never renewed (NeedsRenew returns false),
+			// so this path only handles normal logins.
+			groups := id.Groups
+			if role := s.policy.Role(id.Email); role != authz.RoleDeny {
+				groups = s.computeGroups(r.Context(), id.Email, role)
+			}
+			_ = s.sessions.IssueSessionTTL(w, id.Email, groups, id.Kind, s.sessions.SessionTTL(id), now)
 		}
 		// These headers are the identity passed to the upstream app. Caddy
 		// strips any client-supplied copies before re-adding ours.
@@ -72,10 +83,11 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	emailAddr := normalizeEmail(r.PostFormValue("email"))
 	rd := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, s.cfg.DefaultRedirect)
+	remember := r.PostFormValue("remember") != ""
 
 	if !validEmail(emailAddr) {
 		s.render(w, http.StatusBadRequest, "login", pageData{
-			Error: "Please enter a valid email address.", Redirect: rd,
+			Error: "Please enter a valid email address.", Redirect: rd, Remember: remember,
 		})
 		return
 	}
@@ -88,11 +100,11 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.sessions.SetState(w, session.State{Email: emailAddr, Redirect: rd}, s.cfg.OTPTTL, now); err != nil {
+	if err := s.sessions.SetState(w, session.State{Email: emailAddr, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
-	s.render(w, http.StatusOK, "code", pageData{Email: emailAddr, Redirect: rd})
+	s.render(w, http.StatusOK, "code", pageData{Email: emailAddr, Redirect: rd, Remember: remember})
 }
 
 // sendCode generates, stores, and emails a fresh OTP code.
@@ -139,10 +151,10 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if role == authz.RoleAdmin && s.cfg.TOTPEnabled {
-			s.startTOTP(w, r, st.Email, role, st.Redirect, now)
+			s.startTOTP(w, r, st.Email, role, st.Redirect, st.Remember, now)
 			return
 		}
-		s.completeLogin(w, r, st.Email, role, st.Redirect, now)
+		s.completeLogin(w, r, st.Email, role, st.Redirect, st.Remember, now)
 	case store.ConsumeMismatch:
 		s.render(w, http.StatusUnauthorized, "code", pageData{
 			Error: "Incorrect code. Please try again.", Email: st.Email, Redirect: st.Redirect,
@@ -161,8 +173,8 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 }
 
 // startTOTP enrolls (first time) or challenges an admin for their TOTP code.
-func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, now time.Time) {
-	secret, ok, err := s.store.GetTOTPSecret(r.Context(), emailAddr)
+func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember bool, now time.Time) {
+	secret, ok, err := s.getTOTPSecret(r.Context(), emailAddr)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
@@ -174,7 +186,7 @@ func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, ro
 			s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 			return
 		}
-		if err := s.store.SetTOTPSecret(r.Context(), emailAddr, en.Secret); err != nil {
+		if err := s.setTOTPSecret(r.Context(), emailAddr, en.Secret); err != nil {
 			s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 			return
 		}
@@ -183,7 +195,7 @@ func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, ro
 		data.TOTPURL = en.URL
 	}
 	_ = secret
-	if err := s.sessions.SetPending(w, session.Pending{Email: emailAddr, Role: role, Redirect: rd}, s.cfg.OTPTTL, now); err != nil {
+	if err := s.sessions.SetPending(w, session.Pending{Email: emailAddr, Role: role, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
@@ -205,7 +217,7 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	secret, ok, err := s.store.GetTOTPSecret(r.Context(), p.Email)
+	secret, ok, err := s.getTOTPSecret(r.Context(), p.Email)
 	if err != nil || !ok {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
@@ -217,12 +229,18 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.completeLogin(w, r, p.Email, p.Role, p.Redirect, now)
+	s.completeLogin(w, r, p.Email, p.Role, p.Redirect, p.Remember, now)
 }
 
-// completeLogin issues the session cookie and redirects to the target.
-func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, now time.Time) {
-	if err := s.sessions.IssueSession(w, emailAddr, role, now); err != nil {
+// completeLogin bakes the group set, issues the session cookie (using the
+// remember-me lifetime when requested), and redirects to the target.
+func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember bool, now time.Time) {
+	groups := s.computeGroups(r.Context(), emailAddr, role)
+	ttl := s.cfg.SessionTTL
+	if remember {
+		ttl = s.cfg.SessionRememberTTL
+	}
+	if err := s.sessions.IssueSessionTTL(w, emailAddr, groups, "", ttl, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
@@ -231,10 +249,140 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	http.Redirect(w, r, authz.SafeRedirect(rd, s.cfg.Domain, s.cfg.DefaultRedirect), http.StatusFound)
 }
 
+// computeGroups returns the comma-separated Remote-Groups value for an email:
+// the base role plus any DB-managed group memberships.
+func (s *Server) computeGroups(ctx context.Context, emailAddr, role string) string {
+	dbGroups, err := s.store.GroupsForEmail(ctx, emailAddr)
+	if err != nil {
+		log.Printf("groups for %s: %v", emailAddr, err)
+	}
+	return authz.BuildGroups(role, dbGroups)
+}
+
+// getTOTPSecret reads and decrypts the stored TOTP secret. A legacy plaintext
+// value is returned as-is and transparently re-encrypted for next time.
+func (s *Server) getTOTPSecret(ctx context.Context, emailAddr string) (string, bool, error) {
+	stored, ok, err := s.store.GetTOTPSecret(ctx, emailAddr)
+	if err != nil || !ok {
+		return "", ok, err
+	}
+	plain, err := s.secrets.Open(stored)
+	if err == secretbox.ErrLegacyPlaintext {
+		if reErr := s.setTOTPSecret(ctx, emailAddr, plain); reErr != nil {
+			log.Printf("totp re-encrypt for %s: %v", emailAddr, reErr)
+		}
+		return plain, true, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return plain, true, nil
+}
+
+// setTOTPSecret encrypts and stores a TOTP secret.
+func (s *Server) setTOTPSecret(ctx context.Context, emailAddr, secret string) error {
+	enc, err := s.secrets.Seal(secret)
+	if err != nil {
+		return err
+	}
+	return s.store.SetTOTPSecret(ctx, emailAddr, enc)
+}
+
 // handleLogout clears the session.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.sessions.ClearSession(w)
 	http.Redirect(w, r, s.cfg.PublicURL+"/login", http.StatusFound)
+}
+
+// handleBreakGlass grants emergency access from a scanned QR code. It is public
+// (the token in the URL is the only credential, by design), instant (no second
+// factor), rate-limited per IP, audited synchronously, and notifies admins
+// asynchronously. The granted session is short-lived and never renewed.
+func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
+	now := s.now()
+	ip := clientIP(r)
+	if !s.ipLimiter.Allow(ip) {
+		s.render(w, http.StatusTooManyRequests, "message", pageData{
+			Title:   "Too many requests",
+			Message: "Please wait a little while and try again.",
+		})
+		return
+	}
+
+	token := r.PathValue("token")
+	code, ok, err := s.store.LookupBreakGlassByTokenHash(r.Context(), otp.Hash(token))
+	if err != nil {
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+		return
+	}
+
+	// Unknown or revoked codes look identical to the scanner: a neutral page.
+	if !ok || code.Status != store.BreakGlassActive {
+		outcome := store.OutcomeUnknown
+		if ok {
+			outcome = store.OutcomeRevoked
+			// Audit a stale-card scan against the known code.
+			_ = s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
+				CodeID: code.ID, Label: code.Label, ClientIP: ip,
+				UserAgent: r.UserAgent(), Outcome: outcome,
+			})
+		}
+		log.Printf("break-glass denied (%s) from %s", outcome, ip)
+		s.render(w, http.StatusNotFound, "message", pageData{
+			Title:   "Access code not available",
+			Message: "This emergency access code is not active. Please contact an administrator.",
+		})
+		return
+	}
+
+	// Source-of-truth audit, written before granting.
+	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
+		CodeID: code.ID, Label: code.Label, ClientIP: ip,
+		UserAgent: r.UserAgent(), Outcome: store.OutcomeGranted,
+	}); err != nil {
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+		return
+	}
+
+	// Resolve runtime settings (admin overrides, else env defaults).
+	ttl, notifyEmails, webhookURL := s.effectiveSettings(r.Context())
+
+	// Notify admins out of band so a slow mail server or webhook never delays
+	// the emergency grant.
+	breakglass.NewNotifier(s.sender, notifyEmails, webhookURL, s.cfg.BreakGlassWebhookTimeout).
+		Notify(breakglass.UseEvent{
+			Label: code.Label, TargetGroup: code.TargetGroup, Outcome: store.OutcomeGranted,
+			ClientIP: ip, UserAgent: r.UserAgent(), Time: now,
+		})
+
+	groups := authz.BuildGroups(code.TargetGroup, nil)
+	principal := "breakglass:" + code.Label
+	if err := s.sessions.IssueSessionTTL(w, principal, groups, session.KindBreakGlass, ttl, now); err != nil {
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+		return
+	}
+	rd := authz.SafeRedirect(code.Redirect, s.cfg.Domain, s.cfg.BreakGlassRedirect)
+	http.Redirect(w, r, rd, http.StatusFound)
+}
+
+// handleLogo serves the global branding logo for the public login pages.
+// Returns 404 when no logo is configured.
+func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
+	b, ok, err := s.store.GetBranding(r.Context())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !ok || len(b.Logo) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	mime := b.LogoType
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", mime)
+	w.Write(b.Logo)
 }
 
 // handleHealthz is a liveness probe. It never touches the mail backend so a

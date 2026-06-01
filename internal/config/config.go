@@ -4,7 +4,9 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -26,11 +28,16 @@ type Config struct {
 	AdminEmails     []string
 	DefaultRedirect string
 
-	SessionSecret  []byte
-	CookieDomain   string
-	CookieInsecure bool // dev only: drop the Secure attribute (no TLS)
-	SessionTTL     time.Duration
-	SessionRenew   time.Duration
+	SessionSecret      []byte
+	CookieDomain       string
+	CookieInsecure     bool // dev only: drop the Secure attribute (no TLS)
+	SessionTTL         time.Duration
+	SessionRenew       time.Duration
+	SessionRememberTTL time.Duration // "remember me" lifetime (>= SessionTTL)
+
+	// DataEncryptionKey, if set (32 bytes), encrypts at-rest secrets; otherwise
+	// the key is derived from SessionSecret. Decoded from a hex env value.
+	DataEncryptionKey []byte
 
 	OTPTTL         time.Duration
 	OTPLength      int
@@ -46,6 +53,15 @@ type Config struct {
 
 	TOTPEnabled bool
 	TOTPIssuer  string
+
+	// Break-the-glass QR codes.
+	BreakGlassSessionTTL     time.Duration
+	BreakGlassRedirect       string // default redirect after a break-glass grant
+	BreakGlassWebhookURL     string // optional notification webhook
+	BreakGlassWebhookTimeout time.Duration
+	BreakGlassNotifyEmails   []string // recipients of use-notifications
+	BreakGlassPDFHeader      string
+	BreakGlassPDFBody        string
 
 	RateLimitPerEmail RateLimit
 	RateLimitPerIP    RateLimit
@@ -75,6 +91,12 @@ func Load() (*Config, error) {
 		TOTPIssuer:      getenv("TOTP_ISSUER", ""),
 		SQLitePath:      getenv("SQLITE_PATH", "/data/auth.db"),
 		ListenAddr:      getenv("LISTEN_ADDR", ":8080"),
+
+		BreakGlassRedirect:     getenv("BREAKGLASS_REDIRECT", ""),
+		BreakGlassWebhookURL:   getenv("BREAKGLASS_WEBHOOK_URL", ""),
+		BreakGlassNotifyEmails: splitLowerCSV(getenv("BREAKGLASS_NOTIFY_EMAILS", "")),
+		BreakGlassPDFHeader:    getenv("BREAKGLASS_PDF_HEADER", "Emergency access"),
+		BreakGlassPDFBody:      getenv("BREAKGLASS_PDF_BODY", "Scan this code to gain temporary emergency access. Every use is logged and an administrator is notified."),
 	}
 
 	var err error
@@ -82,6 +104,18 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.SessionRenew, err = getdur("SESSION_RENEW_AFTER", 6*time.Hour); err != nil {
+		return nil, err
+	}
+	if c.SessionRememberTTL, err = getdur("SESSION_REMEMBER_TTL", 720*time.Hour); err != nil {
+		return nil, err
+	}
+	if c.BreakGlassSessionTTL, err = getdur("BREAKGLASS_SESSION_TTL", 8*time.Hour); err != nil {
+		return nil, err
+	}
+	if c.BreakGlassWebhookTimeout, err = getdur("BREAKGLASS_WEBHOOK_TIMEOUT", 5*time.Second); err != nil {
+		return nil, err
+	}
+	if c.DataEncryptionKey, err = gethexkey("DATA_ENCRYPTION_KEY"); err != nil {
 		return nil, err
 	}
 	if c.OTPTTL, err = getdur("OTP_TTL", 10*time.Minute); err != nil {
@@ -108,6 +142,15 @@ func Load() (*Config, error) {
 	// itself a subdomain to avoid over-scoping the session cookie.
 	if c.CookieDomain == "" && c.Domain != "" {
 		c.CookieDomain = "." + c.Domain
+	}
+
+	// Break-glass notifications and redirect fall back to the existing global
+	// settings when not explicitly configured.
+	if c.BreakGlassRedirect == "" {
+		c.BreakGlassRedirect = c.DefaultRedirect
+	}
+	if len(c.BreakGlassNotifyEmails) == 0 {
+		c.BreakGlassNotifyEmails = c.AdminEmails
 	}
 
 	if err := c.validate(); err != nil {
@@ -151,7 +194,33 @@ func (c *Config) validate() error {
 	if c.TOTPEnabled && c.TOTPIssuer == "" {
 		c.TOTPIssuer = c.Domain
 	}
+	if c.SessionRememberTTL < c.SessionTTL {
+		return fmt.Errorf("SESSION_REMEMBER_TTL (%s) must be >= SESSION_TTL (%s)", c.SessionRememberTTL, c.SessionTTL)
+	}
+	if c.BreakGlassWebhookURL != "" {
+		u, err := url.Parse(c.BreakGlassWebhookURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("BREAKGLASS_WEBHOOK_URL must be an absolute http(s) URL")
+		}
+	}
 	return nil
+}
+
+// gethexkey decodes an optional hex-encoded key. Empty yields a nil key; a
+// non-empty value must decode to exactly 32 bytes (AES-256).
+func gethexkey(key string) ([]byte, error) {
+	v := getenv(key, "")
+	if v == "" {
+		return nil, nil
+	}
+	b, err := hex.DecodeString(strings.TrimSpace(v))
+	if err != nil {
+		return nil, fmt.Errorf("%s: invalid hex: %w", key, err)
+	}
+	if len(b) != 32 {
+		return nil, fmt.Errorf("%s: must decode to 32 bytes (got %d)", key, len(b))
+	}
+	return b, nil
 }
 
 func getenv(key, def string) string {

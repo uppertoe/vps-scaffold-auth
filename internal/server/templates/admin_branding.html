@@ -1,0 +1,64 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+{{with .Branding}}
+<h1>PDF branding</h1>
+<p class="sub">Customise the printable break-glass cards. Empty text fields fall back to sensible defaults. Each card also shows its own location label and note.</p>
+
+<form method="post" action="/admin/branding" enctype="multipart/form-data">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+
+  <div class="panel">
+    <h2 style="margin-top:0">Text</h2>
+    <label for="title">Title</label>
+    <input id="title" name="title" type="text" value="{{.Title}}" placeholder="{{.Placeholder.Title}}">
+
+    <label for="body">Body</label>
+    <textarea id="body" name="body" rows="2" placeholder="{{.Placeholder.Body}}">{{.Body}}</textarea>
+
+    <label for="instructions">Instructions</label>
+    <textarea id="instructions" name="instructions" rows="4" placeholder="{{.Placeholder.Instructions}}">{{.Instructions}}</textarea>
+    <p class="muted">Each line becomes a line on the card. Leave blank for the default steps.</p>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">Colours</h2>
+    <p class="muted">Defaults are the RCH palette. Body text and the panel tint adapt automatically.</p>
+    <div class="row">
+      <div class="swatch"><label for="header_color">Header</label><input id="header_color" name="header_color" type="color" value="{{.HeaderColor}}"></div>
+      <div class="swatch"><label for="accent_color">Accent</label><input id="accent_color" name="accent_color" type="color" value="{{.AccentColor}}"></div>
+      <div class="swatch"><label for="bar1_color">Bar 1</label><input id="bar1_color" name="bar1_color" type="color" value="{{.Bar1Color}}"></div>
+      <div class="swatch"><label for="bar2_color">Bar 2</label><input id="bar2_color" name="bar2_color" type="color" value="{{.Bar2Color}}"></div>
+      <div class="swatch"><label for="bar3_color">Bar 3</label><input id="bar3_color" name="bar3_color" type="color" value="{{.Bar3Color}}"></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="panel" style="flex:1 1 280px">
+      <h2 style="margin-top:0">Logo</h2>
+      <p class="muted">Shown in the header band. PNG, JPEG, or SVG, under 2 MB.</p>
+      {{if .HasLogo}}
+        <p><img src="/admin/branding/logo/img" alt="Current logo" style="max-height:64px;max-width:100%;background:#003a5c;padding:8px;border-radius:8px"></p>
+        <label class="ck"><input type="checkbox" name="remove_logo" value="1"> Remove logo</label>
+      {{end}}
+      <label for="logo">Upload logo</label>
+      <input id="logo" name="logo" type="file" accept="image/png,image/jpeg,image/svg+xml">
+    </div>
+
+    <div class="panel" style="flex:1 1 280px">
+      <h2 style="margin-top:0">Glyph</h2>
+      <p class="muted">Optional accent icon shown above the label. PNG, JPEG, or SVG.</p>
+      {{if .HasGlyph}}
+        <p><img src="/admin/branding/glyph/img" alt="Current glyph" style="max-height:64px;max-width:100%;padding:8px;border:1px solid #ccd0d5;border-radius:8px"></p>
+        <label class="ck"><input type="checkbox" name="remove_glyph" value="1"> Remove glyph</label>
+      {{end}}
+      <label for="glyph">Upload glyph</label>
+      <input id="glyph" name="glyph" type="file" accept="image/png,image/jpeg,image/svg+xml">
+    </div>
+  </div>
+
+  <button type="submit">Save branding</button>
+</form>
+
+<p class="muted" style="margin-top:14px">Tip: open any code's detail page and download its PDF to preview the result.</p>
+{{end}}
+{{end}}

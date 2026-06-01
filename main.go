@@ -41,6 +41,13 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 
+	if len(cfg.DataEncryptionKey) == 0 {
+		log.Print("WARNING: DATA_ENCRYPTION_KEY is not set; deriving the at-rest " +
+			"encryption key from SESSION_SECRET. Set a dedicated DATA_ENCRYPTION_KEY " +
+			"(openssl rand -hex 32) so rotating SESSION_SECRET does not make stored " +
+			"break-glass tokens and TOTP secrets undecryptable.")
+	}
+
 	st, err := store.OpenSQLite(cfg.SQLitePath)
 	if err != nil {
 		return fmt.Errorf("store: %w", err)

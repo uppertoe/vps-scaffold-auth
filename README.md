@@ -36,13 +36,26 @@ browser ──▶ Caddy (app.example.com)
 4. User types the code → an HMAC-signed session cookie is set on `.example.com`
    (shared across all app subdomains).
 5. `/verify` now returns 200 plus `Remote-User`, `Remote-Email`, and
-   `Remote-Groups` (`admin`/`user`), which Caddy forwards to the app.
+   `Remote-Groups`, which Caddy forwards to the app.
 
-Sessions are **stateless signed cookies** — no session store. The only
-persisted state is single-use OTP codes (SHA-256 hashed) and optional admin
-TOTP secrets, in a small **SQLite** file. No Postgres, no Redis.
+`Remote-Groups` is a **comma-separated set**: the base role (`admin` or `user`)
+followed by any DB-managed groups the user belongs to (e.g.
+`user,whitelisted`). The role is always present, so existing role-equality
+matchers keep working — but matchers that want the richer groups should test for
+membership in the list. The group set is computed at login and re-computed when a
+session renews, so membership changes take effect within `SESSION_RENEW_AFTER`.
+
+Sessions are **stateless signed cookies** — no session store. Persisted state
+(single-use OTP codes, admin TOTP secrets, DB-managed groups, and break-glass
+codes + their audit log) lives in a small **SQLite** file. No Postgres, no Redis.
+Reversible secrets in that file (break-glass tokens, TOTP seeds) are **encrypted
+at rest** with AES-256-GCM.
 
 ## Using it in a server repo
+
+Want to try it standalone first? [`deploy/standalone/`](deploy/standalone/) is a
+complete, runnable example (Caddy + this image from GHCR + a demo protected app)
+— `cp .env.example .env && docker compose up -d`.
 
 The `server-instance-template` ships the wiring under `apps/auth/`
 (`docker-compose.yml`, `auth.caddy`, `.env.example`) — reference copies live in
@@ -100,6 +113,65 @@ admin tier you can require TOTP: set `TOTP_ENABLED=true`. Admins are enrolled on
 first login (shown an `otpauth://` URL for their authenticator app) and
 challenged for a code thereafter. Regular users stay code-only.
 
+**Strongly recommended when using the admin UI** (below): the admin UI can mint
+instant-grant break-glass credentials, so the admin tier should carry a second
+factor.
+
+### Staying signed in
+
+The login page has a **"Keep me signed in"** checkbox. Unchecked, a session
+lasts `SESSION_TTL` (default 12h); checked, it lasts `SESSION_REMEMBER_TTL`
+(default 30 days). Both are still stateless cookies.
+
+### Groups and the admin UI
+
+Admins (anyone in the `admin` group) get a web UI on the `auth.<domain>` host:
+
+- **`/admin/groups`** — define named groups (e.g. `whitelisted`) and manage their
+  member emails. Memberships surface in `Remote-Groups` at next login/renewal.
+- **`/admin/break`** — manage break-the-glass codes (below).
+- **`/admin/branding`** — the global PDF card content (title/body/instructions),
+  a logo, an optional glyph, and the five palette colours (default to the RCH
+  palette). The logo also appears on the login page. Each break-glass code can
+  **override any of these per card** on its detail page (blank fields inherit the
+  global branding), so cards for different services can look distinct.
+- **`/admin/settings`** — runtime operational settings that override the env
+  defaults: the break-glass session duration, and the notification email list +
+  webhook URL.
+
+The UI is script-free (tight CSP, same as the login pages) and protects every
+state-changing action with a signed CSRF token.
+
+### Break-the-glass QR codes
+
+For physical, emergency access — laminated QR cards left in known locations (an
+angiography lab, a resus bay) so that someone who **cannot otherwise log in** can
+still reach an app during a time-critical event (e.g. a code stroke).
+
+- Each code has a unique **label** (e.g. "Angiography Lab 1"), a note, and a
+  **target group** (e.g. `code_stroke_break_glass`) that the granted session
+  carries.
+- **Scanning is an instant grant**: the token in the QR URL is the only
+  credential, by design. The scan is rate-limited, **logged synchronously**
+  (label, client IP, user-agent, time), and **notifies admins** out of band via
+  email and/or a webhook — never blocking the grant.
+- The granted session is **short-lived** (`BREAKGLASS_SESSION_TTL`, default 8h,
+  overridable on the admin Settings page) and is **never renewed**, so it always
+  expires at that absolute timeout.
+- Codes can be **revoked** (blocks future scans immediately; sessions already
+  granted lapse on their own short timeout) and **re-minted** (issues a fresh
+  token, invalidating every already-printed card for that location).
+- Each code has a printable **PDF** (RCH-branded, with the QR), downloadable from
+  its detail page, for lamination and placement. The card's title, body,
+  instructions, logo, and an optional accent glyph are editable in the admin
+  **PDF branding** page (`/admin/branding`); logos with text should be PNG/JPEG
+  (the SVG rasteriser draws shapes, not fonts).
+
+> **Accepted risk:** a break-glass QR is a bearer secret left in the open. Anyone
+> who photographs a card gets temporary, group-scoped access with no second
+> factor. That is the point — the mitigations are the short TTL, the mandatory
+> audit log, the admin notification on every use, and instant revocation.
+
 ## Security notes
 
 - One-time codes are single-use, short-lived, attempt-capped, and stored only
@@ -109,8 +181,12 @@ challenged for a code thereafter. Regular users stay code-only.
 - Open-redirect safe: the post-login target must be `https` and within the
   server domain.
 - Tight CSP, `Secure`/`HttpOnly`/`SameSite=Lax` cookies, no inline scripts.
+  Admin state-changing actions require a signed CSRF token.
+- Reversible secrets (break-glass tokens, admin TOTP seeds) are encrypted at
+  rest with AES-256-GCM; a stolen `auth.db` is inert without the key.
 - The session cookie is stateless, so individual sessions can't be revoked
-  before expiry — keep `SESSION_TTL` moderate.
+  before expiry — keep `SESSION_TTL` moderate. Break-glass sessions use a short,
+  non-renewable TTL so revoking a code bounds exposure tightly.
 
 ## Local development
 
@@ -136,12 +212,15 @@ protected app, see the auth doc in the scaffold (`docs/07-auth.md`).
 main.go                 entrypoint + graceful shutdown + -healthcheck probe
 internal/config         env parsing + validation (fail fast)
 internal/server         routes, handlers, embedded HTML templates
-internal/session        HMAC-signed session / state / pending cookies
+internal/session        HMAC-signed session / state / pending / CSRF cookies
 internal/otp            6-digit code generation + hashing
 internal/store          Store interface + CGO-free SQLite implementation
-internal/authz          domain/whitelist roles + redirect validation
+internal/authz          domain/whitelist roles, group set, redirect validation
 internal/email          smtp | resend | log backends
 internal/totp           optional admin TOTP (pquerna/otp)
+internal/secretbox      AES-256-GCM at-rest encryption for stored secrets
+internal/breakglass     token gen, QR (boombuler), branded PDF (go-pdf/fpdf
+                        + oksvg), async notifier
 internal/ratelimit      in-memory token-bucket limiter
 deploy/                 reference server wiring (compose, caddy, env)
 ```

@@ -1,0 +1,72 @@
+# Self-contained example deployment of vps-scaffold-auth.
+#
+# It runs three services:
+#   - caddy:   reverse proxy that terminates TLS and calls the gateway's
+#              /verify on every request to a protected app (forward_auth).
+#   - auth:    this service, pulled prebuilt from GHCR.
+#   - whoami:  a demo protected app that echoes the identity headers the
+#              gateway injects (delete it once you've seen it work).
+#
+# Usage:
+#   cp .env.example .env        # then edit DOMAIN, SESSION_SECRET, email, ...
+#   docker compose up -d
+#   # visit https://app.<DOMAIN>  -> bounced to login -> enter email -> code -> in
+#
+# Caddy obtains real certificates automatically when DOMAIN is a public domain
+# whose auth.<DOMAIN> and app.<DOMAIN> records point at this host. For local
+# testing without a domain, see the note at the bottom of .env.example.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [web]
+    depends_on: [auth]
+
+  auth:
+    image: ghcr.io/uppertoe/vps-scaffold-auth:latest # pin to a :vX.Y.Z tag in production
+    restart: unless-stopped
+    env_file:
+      - path: ./.env
+        required: false # keep `docker compose config` valid before you create .env
+    volumes:
+      - auth_data:/data # SQLite: OTP codes, TOTP secrets, groups, break-glass codes
+    networks: [web]
+    # Hardening: the binary is the only writable surface it needs is /data + /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 128m
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "/app", "-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # NOTE: no published ports — only Caddy may reach the gateway. Never expose
+    # a protected app (or this service's /verify) directly to the internet.
+
+  # Demo protected app. Remove this once you've confirmed the flow.
+  whoami:
+    image: traefik/whoami
+    restart: unless-stopped
+    networks: [web]
+
+volumes:
+  caddy_data:
+  caddy_config:
+  auth_data:
+
+networks:
+  web:
