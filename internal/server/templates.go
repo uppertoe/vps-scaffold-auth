@@ -28,6 +28,15 @@ type pageData struct {
 	Identity   string
 	LoginURL   string
 	BreakGlass bool
+	// HintDomains shows the expected email domain(s) on the login page;
+	// RequireDomains carries the app's required domain(s) through to /request.
+	HintDomains    string
+	RequireDomains string
+	// AltLoginURL/AltLoginLabel offer a small "sign in another way" link for
+	// people who can't match the domain (e.g. admins via a separate route). The
+	// URL is validated to be within the server domain before it's ever rendered.
+	AltLoginURL   string
+	AltLoginLabel string
 }
 
 // pages holds each page template composed with the shared base layout.

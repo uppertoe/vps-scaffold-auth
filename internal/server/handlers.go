@@ -75,7 +75,26 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	orig := s.reconstructOriginalURL(r)
 	rd := authz.SafeRedirect(orig, s.cfg.Domain, s.cfg.DefaultRedirect)
-	http.Redirect(w, r, s.cfg.PublicURL+"/login?rd="+url.QueryEscape(rd), http.StatusFound)
+	loginURL := s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd)
+	// Carry the app's required domain(s) (set by its Caddy snippet as header_up
+	// on this /verify subrequest) into the login URL, so the login page can hint
+	// the expected domain and /request can decline a non-matching address early.
+	// UX only — see the note in handleRequest; enforcement remains in
+	// handleVerify. A group-only route (admin/collaborator door) declares no
+	// domain, so nothing is carried and it neither hints nor declines.
+	if v := clampHint(r.Header.Get("X-Auth-Require-Domains")); v != "" {
+		loginURL += "&rqd=" + url.QueryEscape(v)
+	}
+	// Optional alternate-entrance link (set by the app's snippet). Validated to
+	// be within the server domain before it is carried, so it can't become an
+	// off-domain link on the login page.
+	if alt, ok := authz.ValidateRedirect(clampHint(r.Header.Get("X-Auth-Alt-Login")), s.cfg.Domain); ok {
+		loginURL += "&alt=" + url.QueryEscape(alt)
+		if label := clampHint(r.Header.Get("X-Auth-Alt-Label")); label != "" {
+			loginURL += "&altlabel=" + url.QueryEscape(label)
+		}
+	}
+	http.Redirect(w, r, loginURL, http.StatusFound)
 }
 
 // redirectToDenied sends an authenticated-but-unauthorized request to the
@@ -116,7 +135,59 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 // handleLogin renders the email-entry page.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, s.cfg.DefaultRedirect)
-	s.render(w, http.StatusOK, "login", pageData{Redirect: rd})
+	data := pageData{Redirect: rd}
+	applyAccessHint(&data, r.URL.Query().Get("rqd"))
+	s.applyAltLogin(&data, r.URL.Query().Get("alt"), r.URL.Query().Get("altlabel"))
+	s.render(w, http.StatusOK, "login", data)
+}
+
+// applyAccessHint records the app's required domain(s) (carried from the /verify
+// redirect) on the page so they survive to /request as a hidden field, and sets
+// a human hint of the expected domain(s). It fires whenever a domain is declared
+// — a group-only route (admin/collaborator door) carries none, so it gets no
+// hint and no early decline.
+func applyAccessHint(d *pageData, rqd string) {
+	rqd = clampHint(rqd)
+	d.RequireDomains = rqd
+	if rqd != "" {
+		d.HintDomains = formatDomains(rqd)
+	}
+}
+
+// clampHint trims and bounds a UX hint value carried in the login URL.
+func clampHint(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 512 {
+		return ""
+	}
+	return s
+}
+
+// applyAltLogin sets an optional "sign in another way" link on the page — for
+// users who can't match the domain (e.g. admins routed to a separate door). The
+// URL is carried in the (client-modifiable) login URL, so it is validated to be
+// an https URL within the server domain before rendering; an external or
+// malformed value is dropped, so this can never become a phishing link on the
+// trusted login page. The label is shown verbatim (auto-escaped by the
+// template) with a neutral default.
+func (s *Server) applyAltLogin(d *pageData, rawURL, rawLabel string) {
+	u, ok := authz.ValidateRedirect(clampHint(rawURL), s.cfg.Domain)
+	if !ok {
+		return
+	}
+	d.AltLoginURL = u
+	d.AltLoginLabel = clampHint(rawLabel)
+	if d.AltLoginLabel == "" {
+		d.AltLoginLabel = "Sign in another way"
+	}
+}
+
+// formatDomains renders a space/comma-separated domain list for display.
+func formatDomains(s string) string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == ';' || r == '\n' || r == '\r' || r == '\t'
+	})
+	return strings.ToLower(strings.Join(fields, ", "))
 }
 
 // handleRoot sends bare hits to the login page; everything else is 404.
@@ -145,10 +216,33 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	rd := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, s.cfg.DefaultRedirect)
 	remember := r.PostFormValue("remember") != ""
 
+	rqd := clampHint(r.PostFormValue("rqd"))
+	alt, altLabel := r.PostFormValue("alt"), r.PostFormValue("altlabel")
+
 	if !validEmail(emailAddr) {
-		s.render(w, http.StatusBadRequest, "login", pageData{
-			Error: "Please enter a valid email address.", Redirect: rd, Remember: remember,
-		})
+		data := pageData{Error: "Please enter a valid email address.", Redirect: rd, Remember: remember}
+		applyAccessHint(&data, rqd)
+		s.applyAltLogin(&data, alt, altLabel)
+		s.render(w, http.StatusBadRequest, "login", data)
+		return
+	}
+
+	// UX-only early decline: when the route declares a required domain, an
+	// address whose domain isn't accepted can never get in here, so say so now
+	// instead of emailing a code that would be rejected after login. Users who
+	// legitimately don't match the domain (admins, collaborators) belong on a
+	// separate group-only route, which declares no domain and so never declines.
+	// This is a courtesy, NOT a security boundary: rqd rides in the
+	// (client-modifiable) login URL, so the authoritative check stays in
+	// handleVerify with Caddy's trusted header_up.
+	if rqd != "" && !authz.CanAccessApp(emailAddr, "", false, rqd, "") {
+		data := pageData{
+			Error:    "This app is only available to " + formatDomains(rqd) + " email addresses. Please sign in with one of those.",
+			Redirect: rd, Remember: remember,
+		}
+		applyAccessHint(&data, rqd)
+		s.applyAltLogin(&data, alt, altLabel)
+		s.render(w, http.StatusForbidden, "login", data)
 		return
 	}
 

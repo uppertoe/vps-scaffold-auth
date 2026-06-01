@@ -12,10 +12,19 @@
 # with a sign-in link.
 #
 #   import protected                       # any signed-in user (not break-glass)
-#   import protected_domains "rch.org.au"  # signed-in user at a listed domain
+#   import protected_domains "rch.org.au"  # signed-in user at a listed domain;
+#                                          #   login hints the domain + declines early
 #   import protected_groups  "bg_stroke"   # a listed group, or a break-glass card
 #                                          #   whose target group is listed
-#   import protected_access  "rch.org.au" "admin"   # in a listed domain OR group
+#   import protected_admin                 # admins only; for a separate admin door
+#   import protected_access  "rch.org.au" "dash_guests"   # in a listed domain OR group
+#
+# Any route that declares a domain (protected_domains, or protected_access) gives
+# the login hint + early decline by that domain. Group-only routes
+# (protected_groups, protected_admin) declare no domain, so they neither hint nor
+# decline -- that's the door for people who can't match the domain. The domain
+# door declines off-domain users (admins included), so give admins their own
+# route via import protected_admin rather than the main gate.
 #
 # Each guard sets the requirement headers it needs and deletes the rest, so a
 # client can never inject X-Auth-Require-* to widen its own access. Break-glass
@@ -33,12 +42,16 @@
 #           reverse_proxy clinical:3000
 #       }
 #   }
+# Every guard fully controls the X-Auth-* namespace (sets what it needs, deletes
+# the rest), so a client can't inject its own requirement or alt-login link.
 (protected) {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up -X-Auth-Require-Domains
 		header_up -X-Auth-Require-Groups
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
 	}
 }
 
@@ -48,6 +61,22 @@
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up X-Auth-Require-Domains "{args[0]}"
 		header_up -X-Auth-Require-Groups
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
+	}
+}
+
+# protected_domains plus a small "sign in another way" link for users who can't
+# match the domain. Args: domains, alt-login URL (absolute https within the
+# server domain), link label.
+(protected_domains_alt) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up X-Auth-Require-Domains "{args[0]}"
+		header_up -X-Auth-Require-Groups
+		header_up X-Auth-Alt-Login "{args[1]}"
+		header_up X-Auth-Alt-Label "{args[2]}"
 	}
 }
 
@@ -57,6 +86,21 @@
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up -X-Auth-Require-Domains
 		header_up X-Auth-Require-Groups "{args[0]}"
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
+	}
+}
+
+# Admin door: admins only, no login hint or early decline. Put it on a separate
+# route/host so the app's main door can stay a pure domain gate.
+(protected_admin) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up -X-Auth-Require-Domains
+		header_up X-Auth-Require-Groups "admin"
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
 	}
 }
 
@@ -66,6 +110,8 @@
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up X-Auth-Require-Domains "{args[0]}"
 		header_up X-Auth-Require-Groups "{args[1]}"
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
 	}
 }
 
