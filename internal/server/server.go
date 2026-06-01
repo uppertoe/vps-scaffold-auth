@@ -75,6 +75,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /totp", s.handleTOTP)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /denied", s.handleDenied)
 	mux.HandleFunc("GET /break/{token}", s.handleBreakGlass)
 	mux.HandleFunc("GET /logo.img", s.handleLogo)
 

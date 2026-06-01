@@ -46,6 +46,18 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			// the renewed cookie, so a demotion takes effect immediately.
 			id.Groups = groups
 		}
+		// Per-app authorization. The app's Caddy snippet declares who may reach
+		// it via these headers (set with header_up, so a client can't weaken
+		// them); the gateway enforces the union. An authenticated-but-unallowed
+		// principal is sent to a denial page, NOT back to login — they are
+		// already signed in; logging in again wouldn't help and would clobber a
+		// working (e.g. break-glass) session. Their cookie is left untouched, so
+		// access to apps they *are* allowed on keeps working.
+		if !authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass,
+			r.Header.Get("X-Auth-Require-Domains"), r.Header.Get("X-Auth-Require-Groups")) {
+			s.redirectToDenied(w, r)
+			return
+		}
 		// These headers are the identity passed to the upstream app. Caddy
 		// strips any client-supplied copies before re-adding ours.
 		w.Header().Set("Remote-User", id.Email)
@@ -64,6 +76,41 @@ func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	orig := s.reconstructOriginalURL(r)
 	rd := authz.SafeRedirect(orig, s.cfg.Domain, s.cfg.DefaultRedirect)
 	http.Redirect(w, r, s.cfg.PublicURL+"/login?rd="+url.QueryEscape(rd), http.StatusFound)
+}
+
+// redirectToDenied sends an authenticated-but-unauthorized request to the
+// gateway-hosted denial page (on the auth host, so its logo, styles, and the
+// sign-in link all resolve correctly), carrying the app they were trying to
+// reach so the page's sign-in button returns them there afterwards.
+func (s *Server) redirectToDenied(w http.ResponseWriter, r *http.Request) {
+	orig := s.reconstructOriginalURL(r)
+	rd := authz.SafeRedirect(orig, s.cfg.Domain, s.cfg.DefaultRedirect)
+	http.Redirect(w, r, s.cfg.PublicURL+"/denied?rd="+url.QueryEscape(rd), http.StatusFound)
+}
+
+// handleDenied renders the "signed in, but no access to this app" page. It is
+// served on the auth host (reached via the redirect from /verify), reads the
+// session only to tailor the message, and always offers a prominent sign-in
+// link — essential for non-technical users who would otherwise be stuck. It
+// never clears the session, so the user keeps access to apps they are allowed
+// on.
+func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
+	now := s.now()
+	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, s.cfg.DefaultRedirect)
+	data := pageData{
+		Redirect: rd,
+		LoginURL: s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd),
+	}
+	if id, ok := s.sessions.ReadSession(r, now); ok {
+		if id.Kind == session.KindBreakGlass {
+			data.BreakGlass = true
+			// principal is "breakglass:<label>"; show the human label.
+			data.Identity = strings.TrimPrefix(id.Email, "breakglass:")
+		} else {
+			data.Identity = id.Email
+		}
+	}
+	s.render(w, http.StatusForbidden, "denied", data)
 }
 
 // handleLogin renders the email-entry page.

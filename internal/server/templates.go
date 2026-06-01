@@ -24,6 +24,10 @@ type pageData struct {
 	Message    string
 	Remember   bool
 	LogoURL    string
+	// Identity / LoginURL / BreakGlass drive the access-denied page.
+	Identity   string
+	LoginURL   string
+	BreakGlass bool
 }
 
 // pages holds each page template composed with the shared base layout.
@@ -35,7 +39,7 @@ func loadTemplates() (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"login", "code", "totp", "message"} {
+	for _, name := range []string{"login", "code", "totp", "message", "denied"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err

@@ -112,6 +112,61 @@ func HasGroup(groups, target string) bool {
 	return false
 }
 
+// DomainOf returns the lowercased domain part of an email, or "" if there
+// isn't one. Break-glass principals (e.g. "breakglass:Lab 1") have no domain,
+// so they never satisfy a domain-based requirement.
+func DomainOf(email string) string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	at := strings.LastIndex(email, "@")
+	if at < 0 || at == len(email)-1 {
+		return ""
+	}
+	return email[at+1:]
+}
+
+// splitList parses a comma/space/semicolon/newline-separated list, lowercased,
+// trimmed, with blanks dropped. Used for the per-app requirement headers and
+// matches how group names and domains are stored (lowercased).
+func splitList(s string) []string {
+	var out []string
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == ';' || r == '\n' || r == '\r' || r == '\t'
+	}) {
+		out = append(out, strings.ToLower(f))
+	}
+	return out
+}
+
+// CanAccessApp decides whether a principal may reach a specific app, given that
+// app's declared requirements (the comma/space-separated allow-lists a Caddy
+// snippet passes via the X-Auth-Require-Domains / X-Auth-Require-Groups
+// headers). email and groups come from the validated session; breakGlass marks
+// an emergency QR session.
+//
+//   - No requirement declared: a normal session is allowed (status quo), but a
+//     break-glass session is DENIED — emergency access must be explicitly opted
+//     into by group, so it can never reach a plain `import protected` app.
+//   - Requirement declared: allowed when the email's domain is in reqDomains OR
+//     the session's groups intersect reqGroups (an OR across the two lists).
+func CanAccessApp(email, groups string, breakGlass bool, reqDomains, reqGroups string) bool {
+	if strings.TrimSpace(reqDomains) == "" && strings.TrimSpace(reqGroups) == "" {
+		return !breakGlass
+	}
+	if d := DomainOf(email); d != "" {
+		for _, want := range splitList(reqDomains) {
+			if d == want {
+				return true
+			}
+		}
+	}
+	for _, want := range splitList(reqGroups) {
+		if HasGroup(groups, want) {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateRedirect returns a safe post-login redirect target. It accepts only
 // absolute https URLs whose host is exactly domain or a subdomain of it. This
 // blocks open-redirect tricks (//evil, scheme downgrade, userinfo, look-alike

@@ -1,0 +1,14 @@
+{{define "title"}}No access{{end}}
+{{define "content"}}
+<h1>You don't have access to this page</h1>
+{{if .BreakGlass}}
+<p class="sub">You're signed in for emergency access (<strong>{{.Identity}}</strong>). That emergency code only opens its own page.</p>
+<p class="sub">To open the page you just tried to reach, sign in below — or scan the emergency code kept at this location.</p>
+{{else if .Identity}}
+<p class="sub">You're signed in as <strong>{{.Identity}}</strong>, but this account isn't allowed to open this page.</p>
+<p class="sub">If you have another account that should have access, sign in with it below.</p>
+{{else}}
+<p class="sub">This account isn't allowed to open this page. You can sign in with a different account below.</p>
+{{end}}
+<a href="{{.LoginURL}}" style="display:block;width:100%;padding:12px 14px;font-size:16px;font-weight:600;border-radius:10px;background:#2563eb;color:#fff;text-align:center;text-decoration:none">Sign in to continue</a>
+{{end}}

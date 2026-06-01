@@ -90,6 +90,47 @@ them.
 > them** — they publish no host ports, and Caddy strips any client-supplied
 > `Remote-*` before injecting its own. Never expose a protected app directly.
 
+#### Per-app access
+
+`import protected` lets in **any** signed-in user. To restrict an app to
+particular people, the access rule lives in **that app's own `.caddy` snippet**
+(the scaffold's per-app folder), and the gateway enforces it. Authentication
+stays global (`ALLOWED_EMAIL_DOMAINS` is the superset of who can sign in *at
+all*); each app then narrows to its own subset:
+
+```caddyfile
+# only @rch.org.au may open this one
+clinical.{$DOMAIN}  { import protected_domains "rch.org.au";          reverse_proxy clinical:3000 }
+# two domains may open this one
+shared.{$DOMAIN}    { import protected_domains "rch.org.au partner.com"; reverse_proxy shared:3000 }
+# members of a group (manage membership in /admin/groups)
+reports.{$DOMAIN}   { import protected_groups  "reports_team";        reverse_proxy reports:3000 }
+# in a domain OR a group (here: all RCH staff, plus named external guests)
+dash.{$DOMAIN}      { import protected_access   "rch.org.au" "dash_guests"; reverse_proxy dash:3000 }
+```
+
+Guard summary (domains/groups are space- or comma-separated):
+
+| Snippet | Grants access to |
+|---|---|
+| `import protected` | any signed-in user (**not** break-glass) |
+| `import protected_domains "<domains>"` | signed-in users at a listed email domain |
+| `import protected_groups "<groups>"` | members of a listed group, or a break-glass card whose target group is listed |
+| `import protected_access "<domains>" "<groups>"` | in a listed domain **OR** a listed group |
+
+A signed-in user who isn't allowed on an app is **not** bounced to login (they
+*are* authenticated); they get a "no access to this page" page with a sign-in
+link, and their session is left intact so apps they *can* reach keep working.
+Admins are **not** auto-allowed — add the `admin` role to a group list (e.g.
+`import protected_access "rch.org.au" "admin"`) to let them in. Always use these
+snippets rather than hand-rolling `forward_auth`: each one sets the requirement
+headers it needs and deletes the rest, so a client can't inject its own to widen
+access.
+
+Per-route is just per-route Caddy: put a guard inside a `handle @path { … }`
+block so one app can have, say, a staff entrance and a separate emergency one
+(see the worked example in [`deploy/standalone/Caddyfile`](deploy/standalone/Caddyfile)).
+
 ## Configuration
 
 All settings come from the environment; see [`deploy/.env.example`](deploy/.env.example)
@@ -151,6 +192,14 @@ still reach an app during a time-critical event (e.g. a code stroke).
 - Each code has a unique **label** (e.g. "Angiography Lab 1"), a note, and a
   **target group** (e.g. `code_stroke_break_glass`) that the granted session
   carries.
+- **The target group scopes the card to specific apps/routes.** A break-glass
+  session is *deny-by-default*: it reaches only an app (or route) whose Caddy
+  guard lists that group — `import protected_groups "code_stroke_break_glass"`.
+  A plain `import protected` app rejects it, and a domain-gated app rejects it
+  (the card has no email domain). So a card opens exactly the location(s) you
+  opt in, not the whole estate. Use a dedicated group per card for the tightest
+  scope. A holder who reaches a non-covered app gets the "no access" page (with
+  a sign-in link), and their card keeps working everywhere it *is* allowed.
 - **Scanning is an instant grant**: the token in the QR URL is the only
   credential, by design. The scan is rate-limited, **logged synchronously**
   (label, client IP, user-agent, time), and **notifies admins** out of band via
