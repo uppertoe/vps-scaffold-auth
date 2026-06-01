@@ -32,9 +32,14 @@ services:
       - caddy_config:/config
     networks: [web]
     depends_on: [auth]
+    # Caddy keeps the caps it needs to bind :80/:443; we just stop it gaining more.
+    security_opt:
+      - no-new-privileges:true
 
   auth:
-    image: ghcr.io/uppertoe/vps-scaffold-auth:latest # pin to a :vX.Y.Z tag in production
+    # Latest build, for kicking the tyres. Pin to a :vX.Y.Z tag (ideally by
+    # digest) in production. The image is distroless and runs as nonroot (65532).
+    image: ghcr.io/uppertoe/vps-scaffold-auth:latest
     restart: unless-stopped
     env_file:
       - path: ./.env
@@ -42,7 +47,13 @@ services:
     volumes:
       - auth_data:/data # SQLite: OTP codes, TOTP secrets, groups, break-glass codes
     networks: [web]
-    # Hardening: the binary is the only writable surface it needs is /data + /tmp.
+    # CIS Docker §5 runtime hardening. The only writable surface the binary needs
+    # is /data + /tmp; it binds an internal :8080 and needs no extra capabilities.
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp
@@ -62,6 +73,8 @@ services:
     image: traefik/whoami
     restart: unless-stopped
     networks: [web]
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   caddy_data:

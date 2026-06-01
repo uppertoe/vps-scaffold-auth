@@ -8,8 +8,17 @@
 # to the server's root docker-compose.yml.
 services:
   auth:
-    image: ghcr.io/uppertoe/vps-scaffold-auth:latest # pin to a tag in production
+    # Released tag pinned by digest; Renovate bumps it. The image is distroless
+    # and already runs as the nonroot user (65532). See scaffold/docs/08-security-model.md.
+    image: ghcr.io/uppertoe/vps-scaffold-auth:v0.1.0@sha256:dc9b3bd46b5fbc0a0087b5312ed626d496eff27cb4f6531473dc6e2b5564ca2f
     restart: unless-stopped
+    # CIS Docker §5 runtime hardening. The auth binary needs no extra capabilities
+    # and binds only an internal port (:8080) behind Caddy.
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - path: ./.env
         required: false # keep `docker compose config` valid in CI without a real .env
@@ -18,9 +27,7 @@ services:
     volumes:
       - auth_data:/data
     networks:
-      caddy:
-        external: true
-        name: caddy
+      - caddy
     read_only: true
     tmpfs:
       - /tmp
@@ -32,6 +39,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    # NOTE: no published ports — only Caddy may reach the gateway. Never expose
+    # this service's /verify (or a protected app) directly to the internet.
 
 volumes:
   auth_data:
