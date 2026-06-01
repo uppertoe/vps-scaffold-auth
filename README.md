@@ -115,6 +115,7 @@ Guard summary (domains/groups are space- or comma-separated):
 |---|---|---|
 | `import protected` | any signed-in user (**not** break-glass) | no |
 | `import protected_domains "<domains>"` | signed-in users at a listed email domain | **yes** |
+| `import protected_domains_labeled "<domains>" "<label>"` | same, but the hint/decline shows `<label>` instead of listing the domains | **yes** |
 | `import protected_domains_alt "<domains>" "<url>" "<label>"` | same, plus a "sign in another way" link to `<url>` for non-domain users | **yes** |
 | `import protected_groups "<groups>"` | members of a listed group, or a break-glass card whose target group is listed | no |
 | `import protected_admin` | admins only (= `protected_groups "admin"`); for a separate admin entrance | no |
@@ -137,6 +138,11 @@ declares no domain, so it neither hints nor declines — that's the door for peo
 who legitimately don't match the domain. This is a UX courtesy, **not** the
 security boundary: the requirement rides in the (client-modifiable) login URL, so
 the authoritative check always happens at `/verify` with Caddy's trusted header.
+
+When a route allows several domains, enumerating them gets unwieldy — use
+`protected_domains_labeled "<domains>" "<label>"` to show a phrase instead:
+*"This page is for **an approved Victorian health service** email address."* The
+full domain list still drives the actual hint/decline; only the wording changes.
 
 **Admins (and other non-domain users) get their own door.** Admins are **not**
 auto-allowed. The domain door declines any address that doesn't match its

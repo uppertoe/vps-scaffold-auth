@@ -52,6 +52,7 @@
 		header_up -X-Auth-Require-Groups
 		header_up -X-Auth-Alt-Login
 		header_up -X-Auth-Alt-Label
+		header_up -X-Auth-Domain-Label
 	}
 }
 
@@ -63,6 +64,23 @@
 		header_up -X-Auth-Require-Groups
 		header_up -X-Auth-Alt-Login
 		header_up -X-Auth-Alt-Label
+		header_up -X-Auth-Domain-Label
+	}
+}
+
+# protected_domains, but shows a friendly label instead of listing the domains
+# (handy when the list is long). Args: domains, label. The label slots into
+# "This page is for <label> email addresses". The full list still governs the
+# actual hint/decline.
+(protected_domains_labeled) {
+	forward_auth auth:8080 {
+		uri /verify
+		copy_headers Remote-User Remote-Email Remote-Groups
+		header_up X-Auth-Require-Domains "{args[0]}"
+		header_up -X-Auth-Require-Groups
+		header_up -X-Auth-Alt-Login
+		header_up -X-Auth-Alt-Label
+		header_up X-Auth-Domain-Label "{args[1]}"
 	}
 }
 
@@ -77,6 +95,7 @@
 		header_up -X-Auth-Require-Groups
 		header_up X-Auth-Alt-Login "{args[1]}"
 		header_up X-Auth-Alt-Label "{args[2]}"
+		header_up -X-Auth-Domain-Label
 	}
 }
 
@@ -88,6 +107,7 @@
 		header_up X-Auth-Require-Groups "{args[0]}"
 		header_up -X-Auth-Alt-Login
 		header_up -X-Auth-Alt-Label
+		header_up -X-Auth-Domain-Label
 	}
 }
 
@@ -101,6 +121,7 @@
 		header_up X-Auth-Require-Groups "admin"
 		header_up -X-Auth-Alt-Login
 		header_up -X-Auth-Alt-Label
+		header_up -X-Auth-Domain-Label
 	}
 }
 
@@ -112,6 +133,7 @@
 		header_up X-Auth-Require-Groups "{args[1]}"
 		header_up -X-Auth-Alt-Login
 		header_up -X-Auth-Alt-Label
+		header_up -X-Auth-Domain-Label
 	}
 }
 

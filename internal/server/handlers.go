@@ -84,6 +84,10 @@ func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	// domain, so nothing is carried and it neither hints nor declines.
 	if v := clampHint(r.Header.Get("X-Auth-Require-Domains")); v != "" {
 		loginURL += "&rqd=" + url.QueryEscape(v)
+		// Optional friendly label to display instead of enumerating domains.
+		if lbl := clampHint(r.Header.Get("X-Auth-Domain-Label")); lbl != "" {
+			loginURL += "&dlabel=" + url.QueryEscape(lbl)
+		}
 	}
 	// Optional alternate-entrance link (set by the app's snippet). Validated to
 	// be within the server domain before it is carried, so it can't become an
@@ -136,22 +140,34 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, s.cfg.DefaultRedirect)
 	data := pageData{Redirect: rd}
-	applyAccessHint(&data, r.URL.Query().Get("rqd"))
+	applyAccessHint(&data, r.URL.Query().Get("rqd"), r.URL.Query().Get("dlabel"))
 	s.applyAltLogin(&data, r.URL.Query().Get("alt"), r.URL.Query().Get("altlabel"))
 	s.render(w, http.StatusOK, "login", data)
 }
 
-// applyAccessHint records the app's required domain(s) (carried from the /verify
-// redirect) on the page so they survive to /request as a hidden field, and sets
-// a human hint of the expected domain(s). It fires whenever a domain is declared
-// — a group-only route (admin/collaborator door) carries none, so it gets no
-// hint and no early decline.
-func applyAccessHint(d *pageData, rqd string) {
-	rqd = clampHint(rqd)
+// applyAccessHint records the app's required domain(s) and optional display
+// label (carried from the /verify redirect) on the page so they survive to
+// /request as hidden fields, and sets the human hint string. It fires whenever a
+// domain is declared — a group-only route (admin/collaborator door) carries
+// none, so it gets no hint and no early decline.
+func applyAccessHint(d *pageData, rqd, label string) {
+	rqd, label = clampHint(rqd), clampHint(label)
 	d.RequireDomains = rqd
+	d.RequireDomainLabel = label
 	if rqd != "" {
-		d.HintDomains = formatDomains(rqd)
+		d.HintDomains = domainLabel(rqd, label)
 	}
+}
+
+// domainLabel is the human display of a route's domain requirement: the
+// app-supplied label when set (e.g. "an approved Victorian health service"),
+// otherwise the enumerated domain list. Keeps the long-list case readable while
+// the precise list still governs the actual hint/decline logic.
+func domainLabel(rqd, label string) string {
+	if label != "" {
+		return label
+	}
+	return formatDomains(rqd)
 }
 
 // clampHint trims and bounds a UX hint value carried in the login URL.
@@ -217,11 +233,12 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	remember := r.PostFormValue("remember") != ""
 
 	rqd := clampHint(r.PostFormValue("rqd"))
+	dlabel := clampHint(r.PostFormValue("dlabel"))
 	alt, altLabel := r.PostFormValue("alt"), r.PostFormValue("altlabel")
 
 	if !validEmail(emailAddr) {
 		data := pageData{Error: "Please enter a valid email address.", Redirect: rd, Remember: remember}
-		applyAccessHint(&data, rqd)
+		applyAccessHint(&data, rqd, dlabel)
 		s.applyAltLogin(&data, alt, altLabel)
 		s.render(w, http.StatusBadRequest, "login", data)
 		return
@@ -237,10 +254,10 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// handleVerify with Caddy's trusted header_up.
 	if rqd != "" && !authz.CanAccessApp(emailAddr, "", false, rqd, "") {
 		data := pageData{
-			Error:    "This app is only available to " + formatDomains(rqd) + " email addresses. Please sign in with one of those.",
+			Error:    "This app is only available to " + domainLabel(rqd, dlabel) + " email addresses. Please sign in with one of those.",
 			Redirect: rd, Remember: remember,
 		}
-		applyAccessHint(&data, rqd)
+		applyAccessHint(&data, rqd, dlabel)
 		s.applyAltLogin(&data, alt, altLabel)
 		s.render(w, http.StatusForbidden, "login", data)
 		return
