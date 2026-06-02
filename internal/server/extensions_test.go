@@ -110,7 +110,7 @@ func TestBreakGlassGrantsAndLogs(t *testing.T) {
 	}
 	// Session granted, but only on a route that requires this code's group
 	// (break-glass is deny-by-default elsewhere).
-	rec = c.get("/verify", map[string]string{"X-Auth-Require-Groups": "code_stroke_break_glass"})
+	rec = c.get("/verify", requireGroups("code_stroke_break_glass"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/verify after scan = %d, want 200", rec.Code)
 	}
@@ -152,7 +152,7 @@ func TestBreakGlassSessionNotRenewed(t *testing.T) {
 	before := c.cookies[session.SessionCookie].Value
 	// Advance time beyond the renew window; a normal session would re-issue.
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
-	c.get("/verify", map[string]string{"X-Auth-Require-Groups": "g"})
+	c.get("/verify", requireGroups("g"))
 	after := c.cookies[session.SessionCookie]
 	if after != nil && after.Value != before {
 		t.Error("break-glass session was renewed; it must expire at its short TTL")

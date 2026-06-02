@@ -124,9 +124,14 @@ Guard summary (domains/groups are space- or comma-separated):
 A signed-in user who isn't allowed on an app is **not** bounced to login (they
 *are* authenticated); they get a "no access to this page" page with a sign-in
 link, and their session is left intact so apps they *can* reach keep working.
-Always use these snippets rather than hand-rolling `forward_auth`: each one sets
-the requirement headers it needs and deletes the rest, so a client can't inject
-its own to widen access.
+Always use these snippets rather than hand-rolling `forward_auth`: each one
+declares its requirement in a single `X-Auth-Policy` header set with `header_up`,
+which **replaces** any client-sent value — so a client can't inject or widen it,
+and there's no per-guard "delete the rest" list to keep in sync as features are
+added. A custom guard that omits `X-Auth-Policy` is treated as a plain
+`protected` (any signed-in user), and the gateway logs a warning if it still
+sends the old `X-Auth-Require-*` headers, so an unmigrated guard is caught loudly
+rather than silently failing open.
 
 **Early hint + decline (any route with a domain).** Whenever a route declares a
 required domain (`protected_domains`, or the domain side of `protected_access`),

@@ -46,15 +46,17 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			// the renewed cookie, so a demotion takes effect immediately.
 			id.Groups = groups
 		}
-		// Per-app authorization. The app's Caddy snippet declares who may reach
-		// it via these headers (set with header_up, so a client can't weaken
-		// them); the gateway enforces the union. An authenticated-but-unallowed
-		// principal is sent to a denial page, NOT back to login — they are
-		// already signed in; logging in again wouldn't help and would clobber a
-		// working (e.g. break-glass) session. Their cookie is left untouched, so
-		// access to apps they *are* allowed on keeps working.
+		// Per-app authorization. The app's Caddy snippet declares who may reach it
+		// in a single X-Auth-Policy header set with header_up (replace semantics),
+		// so a client can't inject or widen it; the gateway enforces the union. An
+		// authenticated-but-unallowed principal is sent to a denial page, NOT back
+		// to login — they are already signed in; logging in again wouldn't help and
+		// would clobber a working (e.g. break-glass) session. Their cookie is left
+		// untouched, so access to apps they *are* allowed on keeps working.
+		reqDomains, reqGroups := parsePolicy(r.Header.Get(headerPolicy))
+		s.warnLegacyPolicy(r)
 		if !authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass,
-			r.Header.Get("X-Auth-Require-Domains"), r.Header.Get("X-Auth-Require-Groups")) {
+			reqDomains, reqGroups) {
 			s.redirectToDenied(w, r)
 			return
 		}
@@ -76,25 +78,26 @@ func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	orig := s.reconstructOriginalURL(r)
 	rd := authz.SafeRedirect(orig, s.cfg.Domain, s.cfg.DefaultRedirect)
 	loginURL := s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd)
-	// Carry the app's required domain(s) (set by its Caddy snippet as header_up
-	// on this /verify subrequest) into the login URL, so the login page can hint
-	// the expected domain and /request can decline a non-matching address early.
-	// UX only — see the note in handleRequest; enforcement remains in
-	// handleVerify. A group-only route (admin/collaborator door) declares no
+	// Carry the app's required domain(s) (from the X-Auth-Policy header its Caddy
+	// snippet set on this /verify subrequest) into the login URL, so the login
+	// page can hint the expected domain and /request can decline a non-matching
+	// address early. UX only — see the note in handleRequest; enforcement remains
+	// in handleVerify. A group-only route (admin/collaborator door) declares no
 	// domain, so nothing is carried and it neither hints nor declines.
-	if v := clampHint(r.Header.Get("X-Auth-Require-Domains")); v != "" {
+	reqDomains, _ := parsePolicy(r.Header.Get(headerPolicy))
+	if v := clampHint(reqDomains); v != "" {
 		loginURL += "&rqd=" + url.QueryEscape(v)
 		// Optional friendly label to display instead of enumerating domains.
-		if lbl := clampHint(r.Header.Get("X-Auth-Domain-Label")); lbl != "" {
+		if lbl := clampHint(r.Header.Get(headerDomainLabel)); lbl != "" {
 			loginURL += "&dlabel=" + url.QueryEscape(lbl)
 		}
 	}
 	// Optional alternate-entrance link (set by the app's snippet). Validated to
 	// be within the server domain before it is carried, so it can't become an
 	// off-domain link on the login page.
-	if alt, ok := authz.ValidateRedirect(clampHint(r.Header.Get("X-Auth-Alt-Login")), s.cfg.Domain); ok {
+	if alt, ok := authz.ValidateRedirect(clampHint(r.Header.Get(headerAltLogin)), s.cfg.Domain); ok {
 		loginURL += "&alt=" + url.QueryEscape(alt)
-		if label := clampHint(r.Header.Get("X-Auth-Alt-Label")); label != "" {
+		if label := clampHint(r.Header.Get(headerAltLabel)); label != "" {
 			loginURL += "&altlabel=" + url.QueryEscape(label)
 		}
 	}
@@ -622,6 +625,60 @@ func (s *Server) reconstructOriginalURL(r *http.Request) string {
 		return s.cfg.DefaultRedirect
 	}
 	return proto + "://" + host + uri
+}
+
+// Headers Caddy's guard snippets set on the /verify subrequest. The per-app
+// authorization requirement rides in a SINGLE header, X-Auth-Policy, which every
+// guard sets via `header_up` (replace semantics) so a client can neither inject
+// nor widen it. Carrying it in one always-set header — rather than a set of
+// headers each guard must remember to delete — removes the fail-open risk of a
+// forgotten strip, and lets new policy fields be added without touching every
+// guard. The UX hints below are not a privilege boundary (the alt link is
+// re-validated server-side to be within the domain; the label is cosmetic), so
+// they stay as separate plain headers.
+const (
+	headerPolicy      = "X-Auth-Policy"
+	headerDomainLabel = "X-Auth-Domain-Label"
+	headerAltLogin    = "X-Auth-Alt-Login"
+	headerAltLabel    = "X-Auth-Alt-Label"
+)
+
+// parsePolicy extracts the per-app requirement from the X-Auth-Policy header. The
+// value is a ";"-separated set of key=value fields; "domains" and "groups" each
+// hold a space/comma-separated allow-list (both safe charsets, so no escaping is
+// needed). Unknown fields (a future flag, or the "any" sentinel a plain
+// `protected` guard sets) are ignored. An absent header yields empty
+// requirements — i.e. bare `protected` semantics (any signed-in user, break-glass
+// denied).
+func parsePolicy(h string) (domains, groups string) {
+	for _, field := range strings.Split(h, ";") {
+		k, v, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case "domains":
+			domains = strings.TrimSpace(v)
+		case "groups":
+			groups = strings.TrimSpace(v)
+		}
+	}
+	return
+}
+
+// warnLegacyPolicy flags a guard that still sends the old X-Auth-Require-*
+// headers but no X-Auth-Policy: its per-app narrowing is now ignored (the app
+// falls back to "any signed-in user"), so the Caddy snippet must be migrated.
+// Logged so an unmigrated custom guard is caught loudly rather than silently
+// failing open.
+func (s *Server) warnLegacyPolicy(r *http.Request) {
+	if r.Header.Get(headerPolicy) != "" {
+		return
+	}
+	if r.Header.Get("X-Auth-Require-Domains") != "" || r.Header.Get("X-Auth-Require-Groups") != "" {
+		log.Printf("warning: legacy X-Auth-Require-* ignored for %q; migrate its Caddy guard to set X-Auth-Policy",
+			r.Header.Get("X-Forwarded-Host"))
+	}
 }
 
 // clientIP returns the connecting client's IP, used as a rate-limit key. Caddy

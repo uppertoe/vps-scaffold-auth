@@ -43,23 +43,26 @@ auth.{$DOMAIN} {
 # group list names the card's target group, so an emergency card is scoped to
 # its location. `import protected` deliberately excludes them.
 #
-# Each guard SETS the requirement headers it needs and DELETES the others, so a
-# client can never inject its own X-Auth-Require-* to widen access. Always use
-# these snippets rather than hand-rolling forward_auth.
-
-# Every guard fully controls the X-Auth-* namespace -- it sets the headers it
-# needs and deletes the rest -- so a client can never inject its own
-# requirement or alternate-login link.
+# Each guard declares its requirement in ONE header, X-Auth-Policy, set with
+# header_up. Because header_up REPLACES the header, a client can't inject or
+# widen it -- whatever it sends is overwritten. There is no per-guard "delete the
+# rest" list to keep in sync: new policy fields go inside X-Auth-Policy, so a
+# forgotten strip can't silently widen access. Always use these snippets rather
+# than hand-rolling forward_auth; a custom guard that omits X-Auth-Policy is
+# treated as a plain `protected` (any signed-in user), and the auth service logs
+# a warning if it still sends the old X-Auth-Require-* headers.
+#
+# X-Auth-Policy grammar: ";"-separated key=value fields. "domains" and "groups"
+# each hold a space/comma-separated allow-list; a bare "any" (no fields) is the
+# plain-protected sentinel. The hint label and alt-login link are UX only (the
+# alt URL is re-validated server-side to be within the domain), so they ride in
+# their own plain headers.
 
 (protected) {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up -X-Auth-Require-Domains
-		header_up -X-Auth-Require-Groups
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
-		header_up -X-Auth-Domain-Label
+		header_up X-Auth-Policy "any"
 	}
 }
 
@@ -67,11 +70,7 @@ auth.{$DOMAIN} {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Require-Domains "{args[0]}"
-		header_up -X-Auth-Require-Groups
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
-		header_up -X-Auth-Domain-Label
+		header_up X-Auth-Policy "domains={args[0]}"
 	}
 }
 
@@ -85,10 +84,7 @@ auth.{$DOMAIN} {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Require-Domains "{args[0]}"
-		header_up -X-Auth-Require-Groups
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
+		header_up X-Auth-Policy "domains={args[0]}"
 		header_up X-Auth-Domain-Label "{args[1]}"
 	}
 }
@@ -102,11 +98,9 @@ auth.{$DOMAIN} {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Require-Domains "{args[0]}"
-		header_up -X-Auth-Require-Groups
+		header_up X-Auth-Policy "domains={args[0]}"
 		header_up X-Auth-Alt-Login "{args[1]}"
 		header_up X-Auth-Alt-Label "{args[2]}"
-		header_up -X-Auth-Domain-Label
 	}
 }
 
@@ -114,11 +108,7 @@ auth.{$DOMAIN} {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up -X-Auth-Require-Domains
-		header_up X-Auth-Require-Groups "{args[0]}"
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
-		header_up -X-Auth-Domain-Label
+		header_up X-Auth-Policy "groups={args[0]}"
 	}
 }
 
@@ -128,11 +118,7 @@ auth.{$DOMAIN} {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up -X-Auth-Require-Domains
-		header_up X-Auth-Require-Groups "admin"
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
-		header_up -X-Auth-Domain-Label
+		header_up X-Auth-Policy "groups=admin"
 	}
 }
 
@@ -140,10 +126,6 @@ auth.{$DOMAIN} {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Require-Domains "{args[0]}"
-		header_up X-Auth-Require-Groups "{args[1]}"
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
-		header_up -X-Auth-Domain-Label
+		header_up X-Auth-Policy "domains={args[0]};groups={args[1]}"
 	}
 }

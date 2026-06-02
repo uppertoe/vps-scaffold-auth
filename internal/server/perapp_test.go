@@ -10,12 +10,14 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 )
 
-// requireGroups/requireDomains simulate the headers Caddy's per-app snippets
-// set on the /verify subrequest via header_up.
+// requireGroups/requireDomains simulate the single X-Auth-Policy header Caddy's
+// per-app snippets set on the /verify subrequest via header_up.
 func requireDomains(d string) map[string]string {
-	return map[string]string{"X-Auth-Require-Domains": d}
+	return map[string]string{"X-Auth-Policy": "domains=" + d}
 }
-func requireGroups(g string) map[string]string { return map[string]string{"X-Auth-Require-Groups": g} }
+func requireGroups(g string) map[string]string {
+	return map[string]string{"X-Auth-Policy": "groups=" + g}
+}
 
 func TestPerAppDomainGate(t *testing.T) {
 	srv, sender := testServer(t)

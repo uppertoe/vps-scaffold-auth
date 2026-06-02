@@ -13,9 +13,9 @@ func TestVerifyCarriesRequirementIntoLoginURL(t *testing.T) {
 	srv, _ := testServer(t)
 	c := newClient(t, srv.Handler())
 	rec := c.get("/verify", map[string]string{
-		"X-Forwarded-Host":       "app.example.com",
-		"X-Forwarded-Uri":        "/x",
-		"X-Auth-Require-Domains": "rch.org.au",
+		"X-Forwarded-Host": "app.example.com",
+		"X-Forwarded-Uri":  "/x",
+		"X-Auth-Policy":    "domains=rch.org.au",
 	})
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302", rec.Code)
@@ -106,18 +106,18 @@ func TestVerifyCarriesAltLogin(t *testing.T) {
 	c := newClient(t, srv.Handler())
 
 	rec := c.get("/verify", map[string]string{
-		"X-Forwarded-Host":       "app.example.com",
-		"X-Auth-Require-Domains": "rch.org.au",
-		"X-Auth-Alt-Login":       "https://app.example.com/admin",
+		"X-Forwarded-Host": "app.example.com",
+		"X-Auth-Policy":    "domains=rch.org.au",
+		"X-Auth-Alt-Login": "https://app.example.com/admin",
 	})
 	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "alt=") {
 		t.Errorf("alt-login not carried into login URL: %q", loc)
 	}
 
 	rec = c.get("/verify", map[string]string{
-		"X-Forwarded-Host":       "app.example.com",
-		"X-Auth-Require-Domains": "rch.org.au",
-		"X-Auth-Alt-Login":       "https://evil.com/x",
+		"X-Forwarded-Host": "app.example.com",
+		"X-Auth-Policy":    "domains=rch.org.au",
+		"X-Auth-Alt-Login": "https://evil.com/x",
 	})
 	if loc := rec.Header().Get("Location"); strings.Contains(loc, "evil.com") {
 		t.Errorf("external alt-login was carried into login URL: %q", loc)

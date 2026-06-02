@@ -139,9 +139,9 @@ func splitList(s string) []string {
 
 // CanAccessApp decides whether a principal may reach a specific app, given that
 // app's declared requirements (the comma/space-separated allow-lists a Caddy
-// snippet passes via the X-Auth-Require-Domains / X-Auth-Require-Groups
-// headers). email and groups come from the validated session; breakGlass marks
-// an emergency QR session.
+// snippet passes in the single X-Auth-Policy header, parsed by the server into
+// reqDomains/reqGroups). email and groups come from the validated session;
+// breakGlass marks an emergency QR session.
 //
 //   - No requirement declared: a normal session is allowed (status quo), but a
 //     break-glass session is DENIED — emergency access must be explicitly opted

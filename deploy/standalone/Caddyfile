@@ -42,17 +42,19 @@
 #           reverse_proxy clinical:3000
 #       }
 #   }
-# Every guard fully controls the X-Auth-* namespace (sets what it needs, deletes
-# the rest), so a client can't inject its own requirement or alt-login link.
+# Each guard declares its requirement in ONE header, X-Auth-Policy, set with
+# header_up -- which REPLACES any client-sent value, so a client can't inject or
+# widen it. No per-guard "delete the rest" list to keep in sync: new policy
+# fields go inside X-Auth-Policy. Grammar: ";"-separated key=value fields;
+# "domains"/"groups" hold space/comma-separated lists; a bare "any" is the
+# plain-protected sentinel. Label + alt-login are UX only (alt is re-validated
+# server-side to be within the domain) and ride in their own plain headers. A
+# custom guard that omits X-Auth-Policy is treated as plain `protected`.
 (protected) {
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up -X-Auth-Require-Domains
-		header_up -X-Auth-Require-Groups
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
-		header_up -X-Auth-Domain-Label
+		header_up X-Auth-Policy "any"
 	}
 }
 
@@ -60,11 +62,7 @@
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Require-Domains "{args[0]}"
-		header_up -X-Auth-Require-Groups
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
-		header_up -X-Auth-Domain-Label
+		header_up X-Auth-Policy "domains={args[0]}"
 	}
 }
 
@@ -76,10 +74,7 @@
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Require-Domains "{args[0]}"
-		header_up -X-Auth-Require-Groups
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
+		header_up X-Auth-Policy "domains={args[0]}"
 		header_up X-Auth-Domain-Label "{args[1]}"
 	}
 }
@@ -91,11 +86,9 @@
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Require-Domains "{args[0]}"
-		header_up -X-Auth-Require-Groups
+		header_up X-Auth-Policy "domains={args[0]}"
 		header_up X-Auth-Alt-Login "{args[1]}"
 		header_up X-Auth-Alt-Label "{args[2]}"
-		header_up -X-Auth-Domain-Label
 	}
 }
 
@@ -103,11 +96,7 @@
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up -X-Auth-Require-Domains
-		header_up X-Auth-Require-Groups "{args[0]}"
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
-		header_up -X-Auth-Domain-Label
+		header_up X-Auth-Policy "groups={args[0]}"
 	}
 }
 
@@ -117,11 +106,7 @@
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up -X-Auth-Require-Domains
-		header_up X-Auth-Require-Groups "admin"
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
-		header_up -X-Auth-Domain-Label
+		header_up X-Auth-Policy "groups=admin"
 	}
 }
 
@@ -129,11 +114,7 @@
 	forward_auth auth:8080 {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Require-Domains "{args[0]}"
-		header_up X-Auth-Require-Groups "{args[1]}"
-		header_up -X-Auth-Alt-Login
-		header_up -X-Auth-Alt-Label
-		header_up -X-Auth-Domain-Label
+		header_up X-Auth-Policy "domains={args[0]};groups={args[1]}"
 	}
 }
 
