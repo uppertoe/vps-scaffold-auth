@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	texttemplate "text/template"
 )
 
 //go:embed templates/*.html
@@ -58,6 +59,16 @@ func loadTemplates() (pages, error) {
 		out[name] = t
 	}
 	return out, nil
+}
+
+// loadEmailTemplate parses the OTP email body. It uses text/template (not
+// html/template) on purpose: html/template strips HTML comments, which would
+// delete the `<!--[if mso]>` conditional "ghost tables" that constrain the card
+// width in desktop Outlook. The template's only free-form value (the brand name)
+// is HTML-escaped by the caller before rendering; every other field is numeric
+// or a validated hex colour, so emitting them verbatim is safe.
+func loadEmailTemplate() (*texttemplate.Template, error) {
+	return texttemplate.ParseFS(templatesFS, "templates/email_code.html")
 }
 
 // render writes a page using the base layout. On error it falls back to a plain

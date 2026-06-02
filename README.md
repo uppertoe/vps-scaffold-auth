@@ -72,13 +72,14 @@ The `server-instance-template` ships the wiring under `apps/auth/`
 
 ### Protecting an app
 
-Add `import protected` to the app's Caddy snippet:
+Add one `import` line to the app's Caddy snippet — the last argument is the
+app's upstream address. The guard runs `forward_auth` **and** proxies to the
+upstream, so there's no separate `reverse_proxy` line:
 
 ```caddyfile
 # apps/dashboard/dashboard.caddy
 dashboard.{$DOMAIN} {
-    import protected
-    reverse_proxy dashboard:3000
+    import protected dashboard:3000
 }
 ```
 
@@ -89,6 +90,17 @@ them.
 > **Trust model:** apps trust these headers because **only Caddy can reach
 > them** — they publish no host ports, and Caddy strips any client-supplied
 > `Remote-*` before injecting its own. Never expose a protected app directly.
+>
+> **The session cookie never reaches the app.** It's scoped to `.<domain>`, so
+> the browser sends it to every app subdomain, and `forward_auth` would otherwise
+> pass it through to the backend. Since the cookie is a stateless, estate-wide
+> bearer credential with no per-session revocation, an app that received it could
+> replay it against every other app. Each guard therefore strips
+> `vps_auth_session` from the upstream request automatically (via the
+> `strip_auth_cookie` snippet folded into it), leaving the app's own cookies
+> intact. Apps take identity from the `Remote-*` headers, never the cookie. If you
+> hand-roll a `reverse_proxy` instead of using a guard, `import strip_auth_cookie`
+> inside it.
 
 #### Per-app access
 
@@ -96,30 +108,31 @@ them.
 particular people, the access rule lives in **that app's own `.caddy` snippet**
 (the scaffold's per-app folder), and the gateway enforces it. Authentication
 stays global (`ALLOWED_EMAIL_DOMAINS` is the superset of who can sign in *at
-all*); each app then narrows to its own subset:
+all*); each app then narrows to its own subset (the upstream is the last arg):
 
 ```caddyfile
 # only @rch.org.au may open this one
-clinical.{$DOMAIN}  { import protected_domains "rch.org.au";          reverse_proxy clinical:3000 }
+clinical.{$DOMAIN}  { import protected_domains "rch.org.au" clinical:3000 }
 # two domains may open this one
-shared.{$DOMAIN}    { import protected_domains "rch.org.au partner.com"; reverse_proxy shared:3000 }
+shared.{$DOMAIN}    { import protected_domains "rch.org.au partner.com" shared:3000 }
 # members of a group (manage membership in /admin/groups)
-reports.{$DOMAIN}   { import protected_groups  "reports_team";        reverse_proxy reports:3000 }
+reports.{$DOMAIN}   { import protected_groups  "reports_team" reports:3000 }
 # in a domain OR a group (here: all RCH staff, plus named external guests)
-dash.{$DOMAIN}      { import protected_access   "rch.org.au" "dash_guests"; reverse_proxy dash:3000 }
+dash.{$DOMAIN}      { import protected_access   "rch.org.au" "dash_guests" dash:3000 }
 ```
 
-Guard summary (domains/groups are space- or comma-separated):
+Guard summary (domains/groups are space- or comma-separated; `<up>` is the app's
+upstream `host:port`, always the **last** argument):
 
 | Snippet | Grants access to | Login hint + early decline? |
 |---|---|---|
-| `import protected` | any signed-in user (**not** break-glass) | no |
-| `import protected_domains "<domains>"` | signed-in users at a listed email domain | **yes** |
-| `import protected_domains_labeled "<domains>" "<label>"` | same, but the hint/decline shows `<label>` instead of listing the domains | **yes** |
-| `import protected_domains_alt "<domains>" "<url>" "<label>"` | same, plus a "sign in another way" link to `<url>` for non-domain users | **yes** |
-| `import protected_groups "<groups>"` | members of a listed group, or a break-glass card whose target group is listed | no |
-| `import protected_admin` | admins only (= `protected_groups "admin"`); for a separate admin entrance | no |
-| `import protected_access "<domains>" "<groups>"` | in a listed domain **OR** a listed group | yes (by domain) |
+| `import protected <up>` | any signed-in user (**not** break-glass) | no |
+| `import protected_domains "<domains>" <up>` | signed-in users at a listed email domain | **yes** |
+| `import protected_domains_labeled "<domains>" "<label>" <up>` | same, but the hint/decline shows `<label>` instead of listing the domains | **yes** |
+| `import protected_domains_alt "<domains>" "<url>" "<label>" <up>` | same, plus a "sign in another way" link to `<url>` for non-domain users | **yes** |
+| `import protected_groups "<groups>" <up>` | members of a listed group, or a break-glass card whose target group is listed | no |
+| `import protected_admin <up>` | admins only (= `protected_groups "admin"`); for a separate admin entrance | no |
+| `import protected_access "<domains>" "<groups>" <up>` | in a listed domain **OR** a listed group | yes (by domain) |
 
 A signed-in user who isn't allowed on an app is **not** bounced to login (they
 *are* authenticated); they get a "no access to this page" page with a sign-in
@@ -131,7 +144,11 @@ and there's no per-guard "delete the rest" list to keep in sync as features are
 added. A custom guard that omits `X-Auth-Policy` is treated as a plain
 `protected` (any signed-in user), and the gateway logs a warning if it still
 sends the old `X-Auth-Require-*` headers, so an unmigrated guard is caught loudly
-rather than silently failing open.
+rather than silently failing open. Each guard also owns the `reverse_proxy` to
+the upstream and strips the session cookie there (see the trust-model note
+above), so neither is something an app author can forget; an app that genuinely
+needs custom proxy options hand-rolls `forward_auth` + `reverse_proxy` and adds
+`import strip_auth_cookie` itself.
 
 **Early hint + decline (any route with a domain).** Whenever a route declares a
 required domain (`protected_domains`, or the domain side of `protected_access`),
@@ -164,12 +181,10 @@ pointed at the admin door instead of being stranded:
 app.{$DOMAIN} {
     @admin path /admin*
     handle @admin {
-        import protected_admin              # admins only; no hint, no early decline
-        reverse_proxy app:3000
+        import protected_admin app:3000     # admins only; no hint, no early decline
     }
     handle {
-        import protected_domains_alt "rch.org.au" "https://app.{$DOMAIN}/admin" "Administrators sign in here"
-        reverse_proxy app:3000
+        import protected_domains_alt "rch.org.au" "https://app.{$DOMAIN}/admin" "Administrators sign in here" app:3000
     }
 }
 ```
@@ -179,11 +194,46 @@ decline pages. Its URL is **re-validated server-side to be within your domain**
 before it's ever rendered, so a tampered login URL can't turn it into an
 off-site (phishing) link. If an off-domain admin needs the *whole* app (not just
 `/admin`), point a second host at the same backend instead:
-`admin.app.{$DOMAIN} { import protected_admin; reverse_proxy app:3000 }`.
+`admin.app.{$DOMAIN} { import protected_admin app:3000 }`.
 
 Per-route is just per-route Caddy: put a guard inside a `handle @path { … }`
 block so one app can have, say, a staff entrance and a separate emergency one
 (see the worked example in [`deploy/standalone/Caddyfile`](deploy/standalone/Caddyfile)).
+
+#### Mixing public and protected routes
+
+Not every route needs a login. A webhook receiver, a health check, or a public
+landing page can sit on the same host as a protected app — give the public paths
+a plain `reverse_proxy` (no guard) and let a fallback `handle` protect the rest:
+
+```caddyfile
+app.{$DOMAIN} {
+    # Public — no login, no session (e.g. a webhook receiver + health check).
+    @public path /webhooks/* /healthz
+    handle @public {
+        reverse_proxy app:3000 {
+            import strip_auth_cookie   # still strip — see the note below
+        }
+    }
+    # Everything else requires a signed-in user at the domain.
+    handle {
+        import protected_domains "rch.org.au" app:3000
+    }
+}
+```
+
+A fully public app is just a host with no guard at all:
+`public.{$DOMAIN} { reverse_proxy public:3000 { import strip_auth_cookie } }`.
+
+> **Strip the cookie on public routes too.** The session cookie is scoped to
+> `.<domain>`, so the browser sends it to **every** subdomain and every path —
+> public ones included. A guard strips it automatically, but a plain
+> `reverse_proxy` does not, so a public backend would receive the estate-wide
+> bearer token that protected routes carefully withhold. `import
+> strip_auth_cookie` inside any public (or otherwise untrusted) backend's
+> `reverse_proxy` closes that. It only scrubs the cookie from the request Caddy
+> forwards upstream — it sends nothing to the browser, so it does **not** log the
+> user out; their session is untouched and still works on protected routes.
 
 ## Configuration
 

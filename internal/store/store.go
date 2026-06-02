@@ -118,10 +118,22 @@ type Store interface {
 	// freshly issued OTP code with its expiry, resetting the attempt counter.
 	SaveCode(ctx context.Context, email, codeHash string, expiresAt time.Time) error
 
+	// EnsureCode stores codeHash for email only if no code currently exists for
+	// it (insert-if-absent), so a live code is never clobbered. Used to persist
+	// an unguessable, never-emailed decoy for addresses that are not sent a code,
+	// so the /verify-code step is indistinguishable for permitted vs
+	// non-permitted addresses (closing an allow-list enumeration oracle).
+	EnsureCode(ctx context.Context, email, codeHash string, expiresAt time.Time) error
+
 	// ConsumeCode atomically checks candidateHash against the stored code for
 	// email, enforcing expiry and the attempt cap, and consumes the code on a
 	// successful match.
 	ConsumeCode(ctx context.Context, email, candidateHash string, maxAttempts int, now time.Time) (ConsumeResult, error)
+
+	// DeleteExpiredCodes removes code rows whose expiry has passed. Called
+	// opportunistically so decoys for never-verified addresses cannot accumulate
+	// without bound.
+	DeleteExpiredCodes(ctx context.Context, now time.Time) error
 
 	// GetTOTPSecret returns the stored TOTP secret for an admin email. The value
 	// is opaque to the store (encrypted by the caller).

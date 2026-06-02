@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
@@ -244,6 +245,102 @@ func TestDisallowedEmailNoCodeButSameResponse(t *testing.T) {
 	}
 	if sender.code() != "" {
 		t.Error("a code was sent to a disallowed address")
+	}
+}
+
+// TestVerifyCodeDoesNotEnumerate confirms that submitting a wrong code yields an
+// identical outcome for a permitted address and a non-permitted one. Without the
+// decoy code stored in handleRequest, a non-permitted address has no stored code
+// and lands on the login page with "expired", while a permitted address gets the
+// code page with "Incorrect code" — a difference that would reveal allow-list
+// (e.g. admin) membership.
+func TestVerifyCodeDoesNotEnumerate(t *testing.T) {
+	srv, _ := testServer(t)
+
+	attempt := func(emailAddr string) (int, string) {
+		c := newClient(t, srv.Handler())
+		c.postForm("/request", url.Values{"email": {emailAddr}})
+		rec := c.postForm("/verify-code", url.Values{"code": {"000000"}})
+		return rec.Code, rec.Body.String()
+	}
+
+	permStatus, permBody := attempt("user@example.com")  // permitted (allowed domain)
+	offStatus, offBody := attempt("nobody@outsider.com") // not permitted at all
+
+	if permStatus != offStatus {
+		t.Errorf("status differs: permitted=%d non-permitted=%d", permStatus, offStatus)
+	}
+	for _, b := range []string{permBody, offBody} {
+		if !strings.Contains(b, "Incorrect code") {
+			t.Errorf("wrong-code response missing the neutral \"Incorrect code\" message: %q", b)
+		}
+		if strings.Contains(b, "expired") {
+			t.Errorf("wrong-code response leaks a distinguishing \"expired\" message: %q", b)
+		}
+	}
+}
+
+// TestDecoyAddressHitsAttemptCap confirms a non-permitted address walks the same
+// attempt-cap state machine as a permitted one (rather than reporting ConsumeNoCode
+// forever), so the cap can't be used as a second enumeration signal.
+func TestDecoyAddressHitsAttemptCap(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"nobody@outsider.com"}})
+
+	var last *httptest.ResponseRecorder
+	for i := 0; i < 5; i++ {
+		last = c.postForm("/verify-code", url.Values{"code": {"000000"}})
+	}
+	if !strings.Contains(last.Body.String(), "Too many incorrect attempts") {
+		t.Errorf("non-permitted address did not reach the attempt cap like a permitted one: %q", last.Body.String())
+	}
+}
+
+func TestBuildCodeEmail(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.cfg.BrandName = "Acme <Health>" // includes chars that must be HTML-escaped
+
+	msg := srv.buildCodeEmail(context.Background(), "user@example.com", "123456")
+
+	if msg.To != "user@example.com" || msg.Subject == "" {
+		t.Fatalf("unexpected envelope: %+v", msg)
+	}
+	// HTML part: code present, brand name escaped, MSO comments preserved, accent applied.
+	if !strings.Contains(msg.HTML, "123456") {
+		t.Error("HTML missing the code")
+	}
+	if !strings.Contains(msg.HTML, "Acme &lt;Health&gt;") {
+		t.Error("brand name was not HTML-escaped in the email body")
+	}
+	if strings.Contains(msg.HTML, "Acme <Health>") {
+		t.Error("unescaped brand name leaked into the HTML body")
+	}
+	if !strings.Contains(msg.HTML, "[if mso]") {
+		t.Error("MSO conditional comment was stripped — Outlook width would break (use text/template, not html/template)")
+	}
+	if !strings.Contains(msg.HTML, breakglass.DefaultPalette.Accent) {
+		t.Error("accent colour not applied to the email")
+	}
+	if !strings.Contains(msg.HTML, "10 minutes") {
+		t.Error("expiry line missing/incorrect in HTML (OTPTTL is 10m)")
+	}
+	// Text part: code + raw brand name (no escaping in plaintext).
+	if !strings.Contains(msg.Text, "123456") || !strings.Contains(msg.Text, "Acme <Health>") {
+		t.Errorf("text part wrong: %q", msg.Text)
+	}
+}
+
+func TestEmailTextOnContrast(t *testing.T) {
+	cases := map[string]string{
+		"#003a5c": "#ffffff", // dark navy → white text
+		"#fdb913": "#1e2328", // light yellow → dark text
+		"bogus":   "#ffffff", // invalid → safe default
+	}
+	for bg, want := range cases {
+		if got := emailTextOn(bg); got != want {
+			t.Errorf("emailTextOn(%q) = %q, want %q", bg, got, want)
+		}
 	}
 }
 

@@ -194,6 +194,23 @@ ON CONFLICT(email) DO UPDATE SET
 	return err
 }
 
+// EnsureCode inserts a code for an email only if none already exists, never
+// clobbering a live code. See the Store interface.
+func (s *SQLite) EnsureCode(ctx context.Context, email, codeHash string, expiresAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO codes (email, code_hash, expires_at, attempts)
+VALUES (?, ?, ?, 0)
+ON CONFLICT(email) DO NOTHING`,
+		email, codeHash, expiresAt.Unix())
+	return err
+}
+
+// DeleteExpiredCodes prunes code rows past their expiry.
+func (s *SQLite) DeleteExpiredCodes(ctx context.Context, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM codes WHERE expires_at < ?`, now.Unix())
+	return err
+}
+
 // ConsumeCode performs the verify-and-consume in a single transaction.
 func (s *SQLite) ConsumeCode(ctx context.Context, email, candidateHash string, maxAttempts int, now time.Time) (ConsumeResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)

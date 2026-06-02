@@ -2,6 +2,8 @@ package email
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/smtp"
 	"strings"
@@ -32,9 +34,14 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 }
 
 // buildMIME assembles a minimal multipart/alternative message with text and
-// HTML parts.
+// HTML parts. The boundary is random per message so a body that contains
+// attacker-controlled text -- e.g. the scanner User-Agent carried into a
+// break-glass notification -- cannot embed a matching delimiter to inject an
+// extra MIME part. (Header injection is separately prevented by sanitizeHeader;
+// the body parts are written verbatim, so the unguessable boundary is what keeps
+// body content from breaking the MIME structure.)
 func buildMIME(from string, msg Message) []byte {
-	const boundary = "vps-scaffold-auth-boundary"
+	boundary := randomBoundary()
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", sanitizeHeader(from))
 	fmt.Fprintf(&b, "To: %s\r\n", sanitizeHeader(msg.To))
@@ -61,6 +68,20 @@ func buildMIME(from string, msg Message) []byte {
 // additional headers or a body. Newlines are replaced with a single space.
 func sanitizeHeader(v string) string {
 	return strings.NewReplacer("\r", " ", "\n", " ").Replace(v)
+}
+
+// randomBoundary returns an unguessable multipart boundary (hex, valid in the
+// boundary charset). A random boundary is what makes body injection infeasible:
+// an attacker can't embed a delimiter that matches a value they can't predict.
+func randomBoundary() string {
+	var raw [18]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		// crypto/rand failing is catastrophic and effectively never happens; the
+		// fixed fallback still blocks header injection (see sanitizeHeader) and
+		// only re-exposes the guessable-boundary case.
+		return "vps-scaffold-auth-boundary"
+	}
+	return "vps-auth-" + hex.EncodeToString(raw[:])
 }
 
 // extractAddr returns the bare address from a "Name <addr>" header value.

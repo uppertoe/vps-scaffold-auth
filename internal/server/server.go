@@ -5,6 +5,7 @@ package server
 
 import (
 	"net/http"
+	texttemplate "text/template"
 	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
@@ -28,6 +29,7 @@ type Server struct {
 	ipLimiter    *ratelimit.Limiter
 	pages        pages
 	adminPages   pages
+	emailTmpl    *texttemplate.Template
 	handler      http.Handler
 	now          func() time.Time
 }
@@ -39,6 +41,10 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		return nil, err
 	}
 	adminTmpls, err := loadAdminTemplates()
+	if err != nil {
+		return nil, err
+	}
+	emailTmpl, err := loadEmailTemplate()
 	if err != nil {
 		return nil, err
 	}
@@ -57,6 +63,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
 		pages:        tmpls,
 		adminPages:   adminTmpls,
+		emailTmpl:    emailTmpl,
 		now:          time.Now,
 	}
 	s.handler = s.routes()

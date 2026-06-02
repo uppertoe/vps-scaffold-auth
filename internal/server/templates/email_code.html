@@ -1,0 +1,52 @@
+{{define "email_code"}}<!DOCTYPE html>
+<html lang="en" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+<meta name="x-apple-disable-message-reformatting">
+<title>Your sign-in code</title>
+<!--[if mso]>
+<style>table,td,div,p,span,h1{font-family:Arial,Helvetica,sans-serif !important;}</style>
+<![endif]-->
+</head>
+<body style="margin:0;padding:0;width:100%;background:#f4f5f7;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;opacity:0;">Your sign-in code expires in {{.Minutes}} minute{{if ne .Minutes 1}}s{{end}}.&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f5f7;">
+  <tr>
+    <td align="center" style="padding:32px 16px;">
+      <!--[if mso]><table role="presentation" width="480" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;width:100%;background:#ffffff;border:1px solid #e6e8eb;border-radius:14px;overflow:hidden;">
+        <tr>
+          <td bgcolor="{{.HeaderColor}}" style="background:{{.HeaderColor}};padding:22px 32px;">
+            <span style="font-family:Helvetica,Arial,sans-serif;font-size:17px;font-weight:700;letter-spacing:.4px;color:{{.HeaderText}};">{{.BrandName}}</span>
+          </td>
+        </tr>
+        <tr><td style="height:4px;line-height:4px;font-size:0;background:{{.AccentColor}};">&nbsp;</td></tr>
+        <tr>
+          <td style="padding:36px 32px 8px;font-family:Helvetica,Arial,sans-serif;color:#1e2328;">
+            <h1 style="margin:0 0 6px;font-size:20px;line-height:26px;font-weight:700;color:#1e2328;">Your sign-in code</h1>
+            <p style="margin:0 0 24px;font-size:14px;line-height:20px;color:#6b7280;">Enter this code in your browser to finish signing in.</p>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="center" bgcolor="#f6f8fa" style="background:#f6f8fa;border:2px solid {{.AccentColor}};border-radius:10px;padding:20px 0;">
+                  <span style="font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:36px;line-height:40px;font-weight:700;letter-spacing:8px;color:#1e2328;">{{.Code}}</span>
+                </td>
+              </tr>
+            </table>
+            <p style="margin:24px 0 0;font-size:13px;line-height:19px;color:#6b7280;">This code expires in {{.Minutes}} minute{{if ne .Minutes 1}}s{{end}}. If you didn&#39;t request it, you can safely ignore this email&#8202;&mdash;&#8202;no one can sign in without it.</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px 32px 28px;font-family:Helvetica,Arial,sans-serif;">
+            <hr style="border:none;border-top:1px solid #eef0f2;margin:0 0 14px;height:1px;">
+            <span style="font-size:12px;line-height:16px;color:#9aa0a6;">{{.BrandName}}</span>
+          </td>
+        </tr>
+      </table>
+      <!--[if mso]></td></tr></table><![endif]-->
+    </td>
+  </tr>
+</table>
+</body>
+</html>{{end}}

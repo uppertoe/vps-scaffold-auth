@@ -13,7 +13,6 @@ import (
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
-	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
 	"github.com/uppertoe/vps-scaffold-auth/internal/secretbox"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
@@ -266,12 +265,28 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only generate + send for permitted addresses that are under their
-	// per-email rate limit. Either way we fall through to the same response.
+	// Opportunistically prune expired codes so decoys (below) stored for
+	// addresses that are never verified cannot accumulate without bound.
+	if err := s.store.DeleteExpiredCodes(r.Context(), now); err != nil {
+		log.Printf("prune expired codes: %v", err)
+	}
+
+	// Generate + email a code only for permitted addresses under their per-email
+	// send limit. For everyone else, persist an unguessable, never-emailed decoy
+	// instead, so the subsequent /verify-code step is indistinguishable between
+	// permitted and non-permitted addresses. Without the decoy, a non-permitted
+	// address has no stored code and so reports "expired" (ConsumeNoCode) while a
+	// permitted one reports "incorrect" (ConsumeMismatch) and can reach the
+	// attempt cap — a difference that leaks allow-list membership, and thus which
+	// off-domain addresses are admins. Either branch falls through to the same
+	// response. EnsureCode is insert-if-absent, so a rate-limited permitted user's
+	// live code is never overwritten.
 	if s.policy.Allowed(emailAddr) && s.emailLimiter.Allow(emailAddr) {
 		if err := s.sendCode(r, emailAddr, now); err != nil {
 			log.Printf("send code to %s: %v", emailAddr, err)
 		}
+	} else if err := s.storeDecoyCode(r.Context(), emailAddr, now); err != nil {
+		log.Printf("store decoy code for %s: %v", emailAddr, err)
 	}
 
 	if err := s.sessions.SetState(w, session.State{Email: emailAddr, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
@@ -295,7 +310,7 @@ func (s *Server) sendCode(r *http.Request, emailAddr string, now time.Time) erro
 	if err := s.store.SaveCode(r.Context(), emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL)); err != nil {
 		return err
 	}
-	msg := s.buildCodeEmail(emailAddr, code)
+	msg := s.buildCodeEmail(r.Context(), emailAddr, code)
 	go func() {
 		// Detached context: the originating request is already answered.
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -305,6 +320,19 @@ func (s *Server) sendCode(r *http.Request, emailAddr string, now time.Time) erro
 		}
 	}()
 	return nil
+}
+
+// storeDecoyCode persists an unguessable, never-emailed code for an address we
+// are deliberately not mailing (not permitted, or over its send limit). It uses
+// insert-if-absent so a live code is never overwritten. This keeps /verify-code
+// behaviourally identical for permitted and non-permitted addresses — see the
+// rationale in handleRequest — so the verify step can't enumerate the allow-list.
+func (s *Server) storeDecoyCode(ctx context.Context, emailAddr string, now time.Time) error {
+	code, err := otp.Generate(s.cfg.OTPLength)
+	if err != nil {
+		return err
+	}
+	return s.store.EnsureCode(ctx, emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL))
 }
 
 // hashCode hashes an OTP code for storage. It is keyed (HMAC) with the session
@@ -494,6 +522,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	ip := clientIP(r)
+	ua := clampUserAgent(r.UserAgent())
 	if !s.ipLimiter.Allow(ip) {
 		s.render(w, http.StatusTooManyRequests, "message", pageData{
 			Title:   "Too many requests",
@@ -517,7 +546,7 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 			// Audit a stale-card scan against the known code.
 			_ = s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
 				CodeID: code.ID, Label: code.Label, ClientIP: ip,
-				UserAgent: r.UserAgent(), Outcome: outcome,
+				UserAgent: ua, Outcome: outcome,
 			})
 		}
 		log.Printf("break-glass denied (%s) from %s", outcome, ip)
@@ -531,7 +560,7 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	// Source-of-truth audit, written before granting.
 	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
 		CodeID: code.ID, Label: code.Label, ClientIP: ip,
-		UserAgent: r.UserAgent(), Outcome: store.OutcomeGranted,
+		UserAgent: ua, Outcome: store.OutcomeGranted,
 	}); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
@@ -545,7 +574,7 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	breakglass.NewNotifier(s.sender, notifyEmails, webhookURL, s.cfg.BreakGlassWebhookTimeout).
 		Notify(breakglass.UseEvent{
 			Label: code.Label, TargetGroup: code.TargetGroup, Outcome: store.OutcomeGranted,
-			ClientIP: ip, UserAgent: r.UserAgent(), Time: now,
+			ClientIP: ip, UserAgent: ua, Time: now,
 		})
 
 	groups := authz.BuildGroups(code.TargetGroup, nil)
@@ -594,22 +623,6 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintln(w, "ok")
-}
-
-// buildCodeEmail composes the OTP email for an address.
-func (s *Server) buildCodeEmail(to, code string) email.Message {
-	mins := int(s.cfg.OTPTTL.Minutes())
-	if mins < 1 {
-		mins = 1
-	}
-	text := fmt.Sprintf("Your sign-in code is %s\n\nIt expires in %d minutes. If you didn't request this, you can ignore this email.", code, mins)
-	html := fmt.Sprintf(
-		`<div style="font-family:sans-serif;max-width:420px;margin:auto">`+
-			`<p>Your sign-in code is:</p>`+
-			`<p style="font-size:28px;font-weight:700;letter-spacing:.2em">%s</p>`+
-			`<p style="color:#666">It expires in %d minutes. If you didn't request this, you can ignore this email.</p>`+
-			`</div>`, code, mins)
-	return email.Message{To: to, Subject: "Your sign-in code", Text: text, HTML: html}
 }
 
 // reconstructOriginalURL rebuilds the URL the user was trying to reach from the
@@ -704,6 +717,19 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// maxUserAgentLen bounds the User-Agent we store in the audit log and carry into
+// a break-glass notification, so an oversized header can't bloat either. The
+// notification email is also protected from MIME injection by a random boundary
+// (see email.buildMIME); this is defense-in-depth and storage hygiene.
+const maxUserAgentLen = 512
+
+func clampUserAgent(ua string) string {
+	if len(ua) > maxUserAgentLen {
+		return ua[:maxUserAgentLen]
+	}
+	return ua
 }
 
 func normalizeEmail(s string) string {

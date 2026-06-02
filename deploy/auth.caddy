@@ -9,8 +9,10 @@ auth.{$DOMAIN} {
 	}
 }
 
-# Reusable access guards. A protected app adds ONE of the import lines below to
-# its own .caddy snippet, then reverse_proxies its backend. On an
+# Reusable access guards. A protected app adds ONE import line -- the LAST
+# argument is the app's upstream address. The guard runs forward_auth and then
+# reverse_proxies to that upstream with the shared session cookie stripped (see
+# strip_auth_cookie), so an app needs no separate reverse_proxy line. On an
 # unauthenticated request /verify returns a 302 to the login page; on a valid
 # session it returns 200 and Caddy forwards Remote-User / Remote-Email /
 # Remote-Groups upstream (stripping any client-supplied copies first). A user
@@ -20,16 +22,21 @@ auth.{$DOMAIN} {
 # NOTE: keep comments in .caddy files free of braces -- the scaffold's
 # run-caddy.sh counts braces when assembling the Caddyfile.
 #
-# Usage (domains and groups are space/comma-separated):
-#   import protected                         -- any signed-in user; NOT break-glass
-#   import protected_domains "rch.org.au"    -- signed-in user at a listed email domain.
-#                                               The login page hints the domain and a
-#                                               wrong-domain address is declined early.
-#   import protected_groups  "bg_stroke"     -- members of a listed group, OR a
-#                                               break-glass card targeting that group
-#   import protected_admin                   -- admins only; for a separate admin door
-#   import protected_access  "rch.org.au" "dash_guests"
-#                                            -- in a listed domain OR a listed group
+# Usage (domains and groups are space/comma-separated; UPSTREAM is host:port):
+#   import protected UPSTREAM                       -- any signed-in user; NOT break-glass
+#   import protected_domains "rch.org.au" UPSTREAM  -- signed-in user at a listed email domain.
+#                                                      The login page hints the domain and a
+#                                                      wrong-domain address is declined early.
+#   import protected_groups  "bg_stroke" UPSTREAM   -- members of a listed group, OR a
+#                                                      break-glass card targeting that group
+#   import protected_admin UPSTREAM                 -- admins only; for a separate admin door
+#   import protected_access  "rch.org.au" "dash_guests" UPSTREAM
+#                                                   -- in a listed domain OR a listed group
+# e.g.  import protected dashboard:3000
+#
+# For a per-route entrance, put the import inside a handle block (the upstream
+# argument still rides on the import), e.g. an /admin door plus a domain gate on
+# the same host -- see the worked example in deploy/standalone/Caddyfile.
 #
 # Any route that declares a domain (protected_domains, or the domain side of
 # protected_access) gives the login hint + early decline by that domain. A
@@ -64,6 +71,9 @@ auth.{$DOMAIN} {
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up X-Auth-Policy "any"
 	}
+	reverse_proxy {args[0]} {
+		import strip_auth_cookie
+	}
 }
 
 (protected_domains) {
@@ -72,12 +82,15 @@ auth.{$DOMAIN} {
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up X-Auth-Policy "domains={args[0]}"
 	}
+	reverse_proxy {args[1]} {
+		import strip_auth_cookie
+	}
 }
 
 # Like protected_domains, but shows a friendly label instead of enumerating the
-# domains (handy when the list is long). Args: domains, label. The label slots
-# into "This page is for <label> email addresses", e.g.
-#   import protected_domains_labeled "rch.org.au monashhealth.org svha.org.au" "an approved Victorian health service"
+# domains (handy when the list is long). Args: domains, label, upstream. The
+# label slots into "This page is for <label> email addresses", e.g.
+#   import protected_domains_labeled "rch.org.au monashhealth.org svha.org.au" "an approved Victorian health service" clinical:3000
 # The full domain list still governs the actual hint/decline; the label is
 # display only.
 (protected_domains_labeled) {
@@ -87,13 +100,16 @@ auth.{$DOMAIN} {
 		header_up X-Auth-Policy "domains={args[0]}"
 		header_up X-Auth-Domain-Label "{args[1]}"
 	}
+	reverse_proxy {args[2]} {
+		import strip_auth_cookie
+	}
 }
 
 # Like protected_domains, but also offers a small "sign in another way" link on
 # the login/decline page for users who can't match the domain (e.g. admins sent
 # to a separate door). Args: domains, alt-login URL (absolute https within the
-# server domain), link label. The URL is re-validated server-side before it is
-# shown.
+# server domain), link label, upstream. The URL is re-validated server-side
+# before it is shown.
 (protected_domains_alt) {
 	forward_auth auth:8080 {
 		uri /verify
@@ -102,6 +118,9 @@ auth.{$DOMAIN} {
 		header_up X-Auth-Alt-Login "{args[1]}"
 		header_up X-Auth-Alt-Label "{args[2]}"
 	}
+	reverse_proxy {args[3]} {
+		import strip_auth_cookie
+	}
 }
 
 (protected_groups) {
@@ -109,6 +128,9 @@ auth.{$DOMAIN} {
 		uri /verify
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up X-Auth-Policy "groups={args[0]}"
+	}
+	reverse_proxy {args[1]} {
+		import strip_auth_cookie
 	}
 }
 
@@ -120,6 +142,9 @@ auth.{$DOMAIN} {
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up X-Auth-Policy "groups=admin"
 	}
+	reverse_proxy {args[0]} {
+		import strip_auth_cookie
+	}
 }
 
 (protected_access) {
@@ -128,4 +153,22 @@ auth.{$DOMAIN} {
 		copy_headers Remote-User Remote-Email Remote-Groups
 		header_up X-Auth-Policy "domains={args[0]};groups={args[1]}"
 	}
+	reverse_proxy {args[2]} {
+		import strip_auth_cookie
+	}
+}
+
+# Strip the shared session cookie before the request reaches an app backend. The
+# session cookie is scoped to .<domain>, so the browser sends it to every
+# subdomain, and forward_auth proxies the original request (cookies included)
+# upstream. Without this strip, every protected app backend would receive a live,
+# estate-wide bearer credential it doesn't need, and a single compromised or
+# malicious app could replay it against every other app as that user (there is no
+# per-session revocation to stop it). Apps must take identity ONLY from the
+# Remote-* headers -- which forward_auth sets and Caddy strips from client input
+# -- never from the cookie. The guards above import this automatically; it is
+# also exposed for a hand-rolled reverse_proxy. It removes only vps_auth_session,
+# leaving the app's own cookies intact.
+(strip_auth_cookie) {
+	header_up Cookie "(^|;\s*)vps_auth_session=[^;]*" ""
 }
