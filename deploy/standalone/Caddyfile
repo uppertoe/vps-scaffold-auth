@@ -137,9 +137,14 @@
 	}
 }
 
-# The login site. No auth in front of this — it IS the login.
+# The login site. No auth in front of this — it IS the login. Overwrite
+# X-Forwarded-For with the true peer so a client can't spoof the rate-limit key
+# (Caddy otherwise preserves inbound X-Forwarded-For). Caddy faces clients
+# directly here, so {remote_host} is the real client.
 auth.{$DOMAIN} {
-	reverse_proxy auth:8080
+	reverse_proxy auth:8080 {
+		header_up X-Forwarded-For {http.request.remote.host}
+	}
 }
 
 # A protected demo app. Visit https://app.{$DOMAIN}: you'll be redirected to the

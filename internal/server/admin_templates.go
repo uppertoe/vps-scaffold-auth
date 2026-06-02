@@ -21,6 +21,23 @@ type adminData struct {
 	Branding     brandingView
 	Settings     settingsView
 	CodeBranding codeBrandingView
+	// Admin two-factor page.
+	TOTPEnabled bool
+	TOTPAdmins  []totpAdminView
+	NewTOTP     *newTOTPView // freshly minted secret, shown once
+}
+
+// totpAdminView is one configured admin's enrolment status on the 2FA page.
+type totpAdminView struct {
+	Email    string
+	Enrolled bool
+}
+
+// newTOTPView carries a just-provisioned secret for one-time display.
+type newTOTPView struct {
+	Email string
+	URL   string
+	Key   string
 }
 
 type codeBrandingView struct {
@@ -99,7 +116,7 @@ func loadAdminTemplates() (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_message", "admin_groups", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings"} {
+	for _, name := range []string{"admin_message", "admin_groups", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err

@@ -22,6 +22,9 @@ func loginAs(t *testing.T, c *client, sender *captureSender, email string, form 
 		form = url.Values{}
 	}
 	form.Set("email", email)
+	// Drop any code captured by a previous login so code() waits for this login's
+	// fresh message rather than racing on a stale last (sends are detached).
+	sender.reset()
 	c.postForm("/request", form)
 	code := sender.code()
 	if code == "" {

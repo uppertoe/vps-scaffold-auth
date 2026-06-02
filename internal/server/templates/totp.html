@@ -1,12 +1,7 @@
 {{define "title"}}Two-factor authentication{{end}}
 {{define "content"}}
 <h1>Admin verification</h1>
-{{if .Enrolling}}
-<p class="sub">Add this account to your authenticator app, then enter the 6-digit code it shows.</p>
-<div class="qr">{{.TOTPURL}}</div>
-{{else}}
 <p class="sub">Enter the 6-digit code from your authenticator app.</p>
-{{end}}
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 <form method="post" action="/totp" autocomplete="off">
   <label for="code">Authenticator code</label>

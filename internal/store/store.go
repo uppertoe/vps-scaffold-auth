@@ -130,6 +130,10 @@ type Store interface {
 	// SetTOTPSecret stores (or replaces) the TOTP secret for an admin email.
 	SetTOTPSecret(ctx context.Context, email, secret string) error
 
+	// DeleteTOTPSecret removes the TOTP secret for an admin email (no-op if
+	// absent). Used for admin-mediated 2FA reset/removal.
+	DeleteTOTPSecret(ctx context.Context, email string) error
+
 	// --- DB-managed groups ---
 
 	// ListGroups returns all groups, ordered by name.

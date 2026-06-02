@@ -14,16 +14,13 @@ var templatesFS embed.FS
 // pageData carries everything any page template might need. Unused fields stay
 // zero.
 type pageData struct {
-	Title      string
-	Error      string
-	Email      string
-	Redirect   string
-	Enrolling  bool
-	TOTPSecret string
-	TOTPURL    string
-	Message    string
-	Remember   bool
-	LogoURL    string
+	Title    string
+	Error    string
+	Email    string
+	Redirect string
+	Message  string
+	Remember bool
+	LogoURL  string
 	// Identity / LoginURL / BreakGlass drive the access-denied page.
 	Identity   string
 	LoginURL   string

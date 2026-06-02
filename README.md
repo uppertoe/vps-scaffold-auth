@@ -199,9 +199,31 @@ for the annotated list. Key ones:
 ### Admin two-factor (optional)
 
 Magic codes inherit the security of the user's inbox. For the higher-trust
-admin tier you can require TOTP: set `TOTP_ENABLED=true`. Admins are enrolled on
-first login (shown an `otpauth://` URL for their authenticator app) and
-challenged for a code thereafter. Regular users stay code-only.
+admin tier you can require TOTP: set `TOTP_ENABLED=true`. Once enabled, an admin
+must enter a 6-digit authenticator code after the email step; regular users stay
+code-only.
+
+**Secrets are admin-provisioned, never self-enrolled.** A login only proves
+control of the inbox — so letting a login *bootstrap* its own TOTP secret would
+hand the second factor to whoever controls the inbox, defeating the point. So
+secrets are issued out of band:
+
+- **First admin / bootstrap.** Run the one-off CLI in the same container and
+  environment as the server (so it shares the at-rest encryption key):
+  ```bash
+  docker compose exec auth auth -totp-enroll you@example.com
+  ```
+  It prints the setup key + `otpauth://` URL once (treat as a secret); add it to
+  your authenticator app. `auth -totp-remove you@example.com` deletes a secret.
+- **Subsequent admins.** A signed-in admin provisions others from
+  **`/admin/totp`**: it lists the configured admins and their enrolment status,
+  mints (or resets) a secret — shown once, to be conveyed over a trusted channel
+  — and can remove one. An admin with no provisioned secret is **denied at
+  login** (with a "contact an administrator" page), not enrolled.
+
+> Admins are mutually trusted: whoever provisions a secret sees it once, so they
+> could in principle act as that admin (the same model that lets any admin mint
+> break-glass credentials). Convey secrets in person, not by email.
 
 **Strongly recommended when using the admin UI** (below): the admin UI can mint
 instant-grant break-glass credentials, so the admin tier should carry a second
@@ -220,6 +242,8 @@ Admins (anyone in the `admin` group) get a web UI on the `auth.<domain>` host:
 - **`/admin/groups`** — define named groups (e.g. `whitelisted`) and manage their
   member emails. Memberships surface in `Remote-Groups` at next login/renewal.
 - **`/admin/break`** — manage break-the-glass codes (below).
+- **`/admin/totp`** — when `TOTP_ENABLED=true`, provision/reset/remove admins'
+  two-factor secrets (see [Admin two-factor](#admin-two-factor-optional)).
 - **`/admin/branding`** — the global PDF card content (title/body/instructions),
   a logo, an optional glyph, and the five palette colours (default to the RCH
   palette). The logo also appears on the login page. Each break-glass code can

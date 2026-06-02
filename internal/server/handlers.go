@@ -364,35 +364,33 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// startTOTP enrolls (first time) or challenges an admin for their TOTP code.
+// startTOTP challenges an admin for their authenticator code. Secrets are
+// provisioned out-of-band by an administrator (the admin UI or the -totp-enroll
+// CLI), never self-enrolled here: letting a login bootstrap its own second
+// factor would let someone who controls only the email inbox set up the factor
+// that is supposed to backstop a compromised inbox. An admin with no provisioned
+// secret is therefore denied, not enrolled.
 func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember bool, now time.Time) {
-	secret, ok, err := s.getTOTPSecret(r.Context(), emailAddr)
+	_, ok, err := s.getTOTPSecret(r.Context(), emailAddr)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
-	data := pageData{Redirect: rd}
 	if !ok {
-		en, err := totp.Enroll(s.cfg.TOTPIssuer, emailAddr)
-		if err != nil {
-			s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
-			return
-		}
-		if err := s.setTOTPSecret(r.Context(), emailAddr, en.Secret); err != nil {
-			s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
-			return
-		}
-		secret = en.Secret
-		data.Enrolling = true
-		data.TOTPURL = en.URL
+		s.sessions.ClearState(w)
+		s.render(w, http.StatusForbidden, "message", pageData{
+			Title:    "Two-factor setup required",
+			Message:  "Admin accounts require two-factor authentication, which has not been set up for this account yet. Please ask an administrator to enrol your account, then sign in again.",
+			Redirect: rd,
+		})
+		return
 	}
-	_ = secret
 	if err := s.sessions.SetPending(w, session.Pending{Email: emailAddr, Role: role, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
 	s.sessions.ClearState(w)
-	s.render(w, http.StatusOK, "totp", data)
+	s.render(w, http.StatusOK, "totp", pageData{Redirect: rd})
 }
 
 // handleTOTP verifies an admin's authenticator code and completes login.
@@ -626,12 +624,21 @@ func (s *Server) reconstructOriginalURL(r *http.Request) string {
 	return proto + "://" + host + uri
 }
 
-// clientIP returns the best-effort client IP. Only Caddy can reach this
-// service, so its X-Forwarded-For is trusted.
+// clientIP returns the connecting client's IP, used as a rate-limit key. Caddy
+// is the only host that can reach this service and it APPENDS the real peer
+// address as the last X-Forwarded-For element, so the trustworthy value is the
+// RIGHTMOST entry. Taking the leftmost would trust a client-supplied value
+// (Caddy preserves any inbound X-Forwarded-For), letting an attacker rotate the
+// header to mint a fresh "IP" per request and defeat every per-IP limit.
+//
+// This assumes a single trusted proxy — the scaffold's edge Caddy facing
+// clients directly. The auth host's Caddy block also overwrites X-Forwarded-For
+// with the true peer as defense-in-depth (see deploy/auth.caddy); if another
+// proxy is ever placed in front of Caddy, configure trusted_proxies there.
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+		if i := strings.LastIndexByte(xff, ','); i >= 0 {
+			return strings.TrimSpace(xff[i+1:])
 		}
 		return strings.TrimSpace(xff)
 	}

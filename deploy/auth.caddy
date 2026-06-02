@@ -1,6 +1,12 @@
 # Public login endpoints. No auth in front of these -- this IS the login.
+# Overwrite X-Forwarded-For with the true peer address so a client cannot spoof
+# it: the auth service rate-limits per client IP, and Caddy otherwise preserves
+# any inbound X-Forwarded-For (appending the real peer), which a leftmost reader
+# would trust. Caddy faces clients directly here, so {remote_host} is the client.
 auth.{$DOMAIN} {
-	reverse_proxy auth:8080
+	reverse_proxy auth:8080 {
+		header_up X-Forwarded-For {http.request.remote.host}
+	}
 }
 
 # Reusable access guards. A protected app adds ONE of the import lines below to

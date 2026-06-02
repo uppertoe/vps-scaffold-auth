@@ -121,4 +121,15 @@ func TestTOTPSecretRoundTrip(t *testing.T) {
 	if secret != "SECRET456" {
 		t.Errorf("secret = %q, want replaced", secret)
 	}
+
+	// Delete removes it; deleting again is a no-op.
+	if err := s.DeleteTOTPSecret(ctx, "admin@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.GetTOTPSecret(ctx, "admin@example.com"); ok {
+		t.Error("secret still present after delete")
+	}
+	if err := s.DeleteTOTPSecret(ctx, "admin@example.com"); err != nil {
+		t.Errorf("delete of absent secret should be a no-op, got %v", err)
+	}
 }

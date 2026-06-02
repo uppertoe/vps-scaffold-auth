@@ -275,6 +275,12 @@ ON CONFLICT(email) DO UPDATE SET secret = excluded.secret`, email, secret)
 	return err
 }
 
+// DeleteTOTPSecret removes the secret for an email (no-op if absent).
+func (s *SQLite) DeleteTOTPSecret(ctx context.Context, email string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM totp_secrets WHERE email = ?`, email)
+	return err
+}
+
 // --- DB-managed groups ---
 
 // ListGroups returns all groups ordered by name.

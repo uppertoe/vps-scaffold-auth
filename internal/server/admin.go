@@ -14,6 +14,7 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
+	"github.com/uppertoe/vps-scaffold-auth/internal/totp"
 )
 
 // adminRoutes registers the admin subtree on its own mux. The whole tree is
@@ -39,6 +40,105 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/branding/{which}/img", s.handleAdminBrandingImage)
 	mux.HandleFunc("GET /admin/settings", s.handleAdminSettings)
 	mux.HandleFunc("POST /admin/settings", s.handleAdminSaveSettings)
+	mux.HandleFunc("GET /admin/totp", s.handleAdminTOTP)
+	mux.HandleFunc("POST /admin/totp/generate", s.handleAdminTOTPGenerate)
+	mux.HandleFunc("POST /admin/totp/remove", s.handleAdminTOTPRemove)
+}
+
+// --- Admin two-factor provisioning ---
+//
+// TOTP secrets are provisioned out-of-band, never self-enrolled at login (that
+// would let an inbox-only attacker bootstrap the second factor). An already
+// authenticated admin mints a secret here and conveys it to the target admin
+// over a trusted channel; the first admin is bootstrapped with the -totp-enroll
+// CLI. See startTOTP.
+
+// handleAdminTOTP lists the configured admins and their enrolment status.
+func (s *Server) handleAdminTOTP(w http.ResponseWriter, r *http.Request) {
+	s.renderAdmin(w, r, http.StatusOK, "admin_totp", adminData{
+		Title:       "Admin two-factor",
+		TOTPEnabled: s.cfg.TOTPEnabled,
+		TOTPAdmins:  s.totpAdminViews(r.Context()),
+	})
+}
+
+// handleAdminTOTPGenerate mints (or resets) a TOTP secret for a configured admin
+// and shows it exactly once on the returned page.
+func (s *Server) handleAdminTOTPGenerate(w http.ResponseWriter, r *http.Request) {
+	if !s.checkCSRF(w, r) {
+		return
+	}
+	emailAddr := normalizeEmail(r.PostFormValue("email"))
+	if !s.isAdminEmail(emailAddr) {
+		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
+			Title:   "Unknown admin",
+			Message: "That address is not in the configured admin list (ADMIN_EMAILS), so a secret was not created.",
+		})
+		return
+	}
+	en, err := totp.Enroll(s.totpIssuer(), emailAddr)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	if err := s.setTOTPSecret(r.Context(), emailAddr, en.Secret); err != nil {
+		s.adminError(w, r)
+		return
+	}
+	// Render (not redirect) so the secret appears once and lands in no URL or
+	// history; refreshing the page drops it.
+	s.renderAdmin(w, r, http.StatusOK, "admin_totp", adminData{
+		Title:       "Admin two-factor",
+		TOTPEnabled: s.cfg.TOTPEnabled,
+		TOTPAdmins:  s.totpAdminViews(r.Context()),
+		NewTOTP:     &newTOTPView{Email: emailAddr, URL: en.URL, Key: en.Secret},
+	})
+}
+
+// handleAdminTOTPRemove deletes an admin's TOTP secret. With TOTP enabled, that
+// admin then cannot sign in until re-provisioned.
+func (s *Server) handleAdminTOTPRemove(w http.ResponseWriter, r *http.Request) {
+	if !s.checkCSRF(w, r) {
+		return
+	}
+	emailAddr := normalizeEmail(r.PostFormValue("email"))
+	if err := s.store.DeleteTOTPSecret(r.Context(), emailAddr); err != nil {
+		s.adminError(w, r)
+		return
+	}
+	http.Redirect(w, r, "/admin/totp", http.StatusFound)
+}
+
+// totpAdminViews reports each configured admin and whether a secret is stored.
+func (s *Server) totpAdminViews(ctx context.Context) []totpAdminView {
+	out := make([]totpAdminView, 0, len(s.cfg.AdminEmails))
+	for _, e := range s.cfg.AdminEmails {
+		_, ok, err := s.store.GetTOTPSecret(ctx, e)
+		if err != nil {
+			log.Printf("totp status for %s: %v", e, err)
+		}
+		out = append(out, totpAdminView{Email: e, Enrolled: ok})
+	}
+	return out
+}
+
+// isAdminEmail reports whether email is in the configured admin list. AdminEmails
+// is already normalised (lowercased/trimmed) at config load.
+func (s *Server) isAdminEmail(email string) bool {
+	for _, e := range s.cfg.AdminEmails {
+		if e == email {
+			return true
+		}
+	}
+	return false
+}
+
+// totpIssuer is the issuer label shown in authenticator apps.
+func (s *Server) totpIssuer() string {
+	if s.cfg.TOTPIssuer != "" {
+		return s.cfg.TOTPIssuer
+	}
+	return s.cfg.Domain
 }
 
 // defaultInstructions is shown on the card when no custom instructions are set.

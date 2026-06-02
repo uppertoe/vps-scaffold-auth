@@ -1,0 +1,51 @@
+{{define "title"}}Admin two-factor{{end}}
+{{define "content"}}
+<h1>Admin two-factor</h1>
+<p class="sub">
+  {{if .TOTPEnabled}}Admin sign-in requires a 6-digit authenticator code. Secrets are provisioned here, never self-enrolled at login.{{else}}TOTP is currently <strong>disabled</strong> (set <code class="mono">TOTP_ENABLED=true</code> to require it). You can still provision secrets in advance.{{end}}
+</p>
+
+{{if .NewTOTP}}
+<div class="panel">
+  <h2>New secret for {{.NewTOTP.Email}}</h2>
+  <p class="muted">Shown once. Hand it to this admin over a trusted channel — in person, not email — then they add it to their authenticator app. Refreshing this page hides it.</p>
+  <label>Setup key</label>
+  <p><code class="mono">{{.NewTOTP.Key}}</code></p>
+  <label>otpauth URL</label>
+  <p><code class="mono">{{.NewTOTP.URL}}</code></p>
+</div>
+{{end}}
+
+<div class="panel">
+  <h2>Administrators</h2>
+  <table>
+    <thead><tr><th>Email</th><th>Two-factor</th><th></th></tr></thead>
+    <tbody>
+    {{range .TOTPAdmins}}
+      <tr>
+        <td>{{.Email}}</td>
+        <td>{{if .Enrolled}}<span class="pill ok">Enrolled</span>{{else}}<span class="pill off">Not set up</span>{{end}}</td>
+        <td>
+          <form class="inline" method="post" action="/admin/totp/generate">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="email" value="{{.Email}}">
+            <button type="submit" class="ghost">{{if .Enrolled}}Reset{{else}}Generate{{end}}</button>
+          </form>
+          {{if .Enrolled}}
+          <form class="inline" method="post" action="/admin/totp/remove">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="email" value="{{.Email}}">
+            <button type="submit" class="danger">Remove</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+    {{else}}
+      <tr><td colspan="3" class="muted">No admin emails configured (ADMIN_EMAILS).</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+
+<p class="muted">First admin / bootstrap: run <code class="mono">auth -totp-enroll you@example.com</code> on the server (same container and environment) to provision a secret without being signed in.</p>
+{{end}}
