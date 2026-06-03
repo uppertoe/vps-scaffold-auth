@@ -65,6 +65,26 @@ func TestLoadSMTPRequiresHost(t *testing.T) {
 	}
 }
 
+func TestSessionDefaults(t *testing.T) {
+	setValid(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SessionTTL.Hours() != 2 || c.SessionRememberTTL.Hours() != 24 || c.SessionRenew.Hours() != 1 {
+		t.Errorf("session defaults: TTL=%v Remember=%v Renew=%v", c.SessionTTL, c.SessionRememberTTL, c.SessionRenew)
+	}
+}
+
+func TestRenewMustBeBelowTTL(t *testing.T) {
+	setValid(t)
+	t.Setenv("SESSION_TTL", "1h")
+	t.Setenv("SESSION_RENEW_AFTER", "2h") // >= TTL: a session would expire before it could renew
+	if _, err := Load(); err == nil {
+		t.Error("expected error when SESSION_RENEW_AFTER >= SESSION_TTL")
+	}
+}
+
 func TestRateLimitParsing(t *testing.T) {
 	setValid(t)
 	t.Setenv("RATELIMIT_PER_EMAIL", "3/10m")

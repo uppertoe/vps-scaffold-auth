@@ -287,8 +287,10 @@ factor.
 ### Staying signed in
 
 The login page has a **"Keep me signed in"** checkbox. Unchecked, a session
-lasts `SESSION_TTL` (default 12h); checked, it lasts `SESSION_REMEMBER_TTL`
-(default 30 days). Both are still stateless cookies.
+lasts `SESSION_TTL` (default 2h); checked, it lasts `SESSION_REMEMBER_TTL`
+(default 24h). Both are still stateless cookies, and both slide on activity
+(renewing every `SESSION_RENEW_AFTER`, default 1h, which is also where policy
+revocation and group changes take effect).
 
 ### Groups and the admin UI
 

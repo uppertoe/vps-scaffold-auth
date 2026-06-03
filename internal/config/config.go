@@ -102,13 +102,16 @@ func Load() (*Config, error) {
 	}
 
 	var err error
-	if c.SessionTTL, err = getdur("SESSION_TTL", 12*time.Hour); err != nil {
+	if c.SessionTTL, err = getdur("SESSION_TTL", 2*time.Hour); err != nil {
 		return nil, err
 	}
-	if c.SessionRenew, err = getdur("SESSION_RENEW_AFTER", 6*time.Hour); err != nil {
+	// Must stay below SESSION_TTL, or a session expires before it is ever
+	// eligible for sliding renewal (which is also where policy revocation and
+	// group recomputation happen).
+	if c.SessionRenew, err = getdur("SESSION_RENEW_AFTER", time.Hour); err != nil {
 		return nil, err
 	}
-	if c.SessionRememberTTL, err = getdur("SESSION_REMEMBER_TTL", 720*time.Hour); err != nil {
+	if c.SessionRememberTTL, err = getdur("SESSION_REMEMBER_TTL", 24*time.Hour); err != nil {
 		return nil, err
 	}
 	if c.BreakGlassSessionTTL, err = getdur("BREAKGLASS_SESSION_TTL", 8*time.Hour); err != nil {
@@ -204,6 +207,9 @@ func (c *Config) validate() error {
 	}
 	if c.SessionRememberTTL < c.SessionTTL {
 		return fmt.Errorf("SESSION_REMEMBER_TTL (%s) must be >= SESSION_TTL (%s)", c.SessionRememberTTL, c.SessionTTL)
+	}
+	if c.SessionRenew >= c.SessionTTL {
+		return fmt.Errorf("SESSION_RENEW_AFTER (%s) must be less than SESSION_TTL (%s), or a session expires before it can slide-renew", c.SessionRenew, c.SessionTTL)
 	}
 	if c.BreakGlassWebhookURL != "" {
 		u, err := url.Parse(c.BreakGlassWebhookURL)
