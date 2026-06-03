@@ -21,6 +21,11 @@
   @media (prefers-color-scheme: dark) { .card { background: #1f2228; box-shadow: none; border: 1px solid #2c2f36; } }
   .brand { text-align: center; margin: 0 0 18px; }
   .brand img { max-height: 52px; max-width: 70%; }
+  /* The default logo is a monochrome black-on-transparent mark, which would
+     vanish on the dark card; invert it to white in dark mode. This assumes a
+     monochrome logo — a full-colour logo would instead need a dedicated reversed
+     asset. */
+  @media (prefers-color-scheme: dark) { .brand img { filter: invert(1); } }
   h1 { font-size: 20px; margin: 0 0 4px; }
   p.sub { margin: 0 0 20px; color: #65676b; font-size: 14px; }
   @media (prefers-color-scheme: dark) { p.sub { color: #9aa0a6; } }
