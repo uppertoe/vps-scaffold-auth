@@ -1,6 +1,6 @@
 module github.com/uppertoe/vps-scaffold-auth
 
-go 1.25.10
+go 1.25.11
 
 require (
 	github.com/boombuler/barcode v1.0.1
