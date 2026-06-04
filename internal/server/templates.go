@@ -48,7 +48,7 @@ func loadTemplates() (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"login", "code", "totp", "message", "denied"} {
+	for _, name := range []string{"login", "code", "totp", "message", "denied", "welcome", "logout"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err

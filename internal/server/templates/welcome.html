@@ -1,0 +1,7 @@
+{{define "title"}}Signed in{{end}}
+{{define "content"}}
+<h1>You're signed in</h1>
+<p class="sub">{{if .Identity}}Signed in as <strong>{{.Identity}}</strong>.{{else}}You're signed in.{{end}}</p>
+{{if .Redirect}}<a class="btn" href="{{.Redirect}}">Continue &rarr;</a>{{end}}
+<div class="links"><form method="post" action="/logout" style="display:inline;margin:0"><button type="submit" class="linkbtn">Sign out</button></form></div>
+{{end}}

@@ -80,9 +80,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /request", s.handleRequest)
 	mux.HandleFunc("POST /verify-code", s.handleVerifyCode)
 	mux.HandleFunc("POST /totp", s.handleTOTP)
+	mux.HandleFunc("GET /logout", s.handleLogoutConfirm)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /denied", s.handleDenied)
+	mux.HandleFunc("GET /welcome", s.handleWelcome)
 	mux.HandleFunc("GET /break/{token}", s.handleBreakGlass)
 	mux.HandleFunc("GET /logo.img", s.handleLogo)
 

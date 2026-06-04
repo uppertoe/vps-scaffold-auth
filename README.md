@@ -363,8 +363,11 @@ still reach an app during a time-critical event (e.g. a code stroke).
   email is dispatched off the request path so response timing doesn't reveal
   whether an address is permitted.
 - Per-email and per-IP rate limiting.
-- Open-redirect safe: the post-login target must be `https` and within the
-  server domain.
+- Open-redirect safe: the post-login target must be `https` and on a subdomain
+  of the server domain. A login with no app target (or one resolving to the bare
+  apex) lands on the auth host's own signed-in page instead — that host always
+  has a valid certificate, so a missing/misconfigured `DEFAULT_REDIRECT` can never
+  strand a user on a TLS error.
 - Tight CSP, `Secure`/`HttpOnly`/`SameSite=Lax` cookies, no inline scripts.
   Admin state-changing actions require a signed CSRF token.
 - Reversible secrets (break-glass tokens, admin TOTP seeds) are encrypted at

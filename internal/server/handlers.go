@@ -140,7 +140,10 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 
 // handleLogin renders the email-entry page.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, s.cfg.DefaultRedirect)
+	// Empty fallback (not DEFAULT_REDIRECT): a direct visit with no app rd must
+	// stay empty so completeLogin can land on the auth-host signed-in page rather
+	// than bouncing to a default that may be unservable (see loginRedirect).
+	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, "")
 	data := pageData{Redirect: rd}
 	applyAccessHint(&data, r.URL.Query().Get("rqd"), r.URL.Query().Get("dlabel"))
 	s.applyAltLogin(&data, r.URL.Query().Get("alt"), r.URL.Query().Get("altlabel"))
@@ -231,7 +234,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	emailAddr := normalizeEmail(r.PostFormValue("email"))
-	rd := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, s.cfg.DefaultRedirect)
+	rd := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "") // empty fallback; see handleLogin
 	remember := r.PostFormValue("remember") != ""
 
 	rqd := clampHint(r.PostFormValue("rqd"))
@@ -453,6 +456,64 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	s.completeLogin(w, r, p.Email, p.Role, p.Redirect, p.Remember, now)
 }
 
+// servedTarget validates rawURL as a post-login destination the gateway can
+// actually serve: an absolute https URL on a SUBDOMAIN of the server domain. The
+// bare apex is rejected on purpose — this gateway serves subdomains
+// (auth.<domain>, app.<domain>), and a bare apex commonly has no TLS certificate,
+// so sending a freshly signed-in user there strands them on a browser security
+// error. Returns the normalised URL and true when usable.
+func (s *Server) servedTarget(rawURL string) (string, bool) {
+	target, ok := authz.ValidateRedirect(rawURL, s.cfg.Domain)
+	if !ok {
+		return "", false
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return "", false
+	}
+	if strings.EqualFold(u.Hostname(), strings.TrimPrefix(s.cfg.Domain, ".")) {
+		return "", false // bare apex: not a host this gateway serves
+	}
+	return target, true
+}
+
+// loginRedirect is where to send a user after a successful login or break-glass
+// grant: the requested destination when it is a servable subdomain URL, otherwise
+// the auth host's own signed-in page — which always has a valid certificate,
+// since it just served the login page. This makes a missing or misconfigured
+// destination land safely instead of on a TLS error.
+func (s *Server) loginRedirect(rd string) string {
+	if target, ok := s.servedTarget(rd); ok {
+		return target
+	}
+	return s.cfg.PublicURL + "/welcome"
+}
+
+// handleWelcome is the signed-in landing page on the auth host, shown after a
+// login that has no specific app destination (e.g. a direct visit to the login
+// page). Because it is served on auth.<domain> — which always has a valid
+// certificate — it can never strand the user the way an unservable
+// DEFAULT_REDIRECT could. It offers sign-out and, when configured, a "Continue"
+// link to the operator's default destination.
+func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessions.ReadSession(r, s.now())
+	if !ok {
+		http.Redirect(w, r, s.cfg.PublicURL+"/login", http.StatusFound)
+		return
+	}
+	data := pageData{}
+	if id.Kind == session.KindBreakGlass {
+		data.BreakGlass = true
+		data.Identity = strings.TrimPrefix(id.Email, "breakglass:")
+	} else {
+		data.Identity = id.Email
+	}
+	if target, ok := s.servedTarget(s.cfg.DefaultRedirect); ok {
+		data.Redirect = target // rendered as a "Continue" link
+	}
+	s.render(w, http.StatusOK, "welcome", data)
+}
+
 // completeLogin bakes the group set, issues the session cookie (using the
 // remember-me lifetime when requested), and redirects to the target.
 func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember bool, now time.Time) {
@@ -467,7 +528,7 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	}
 	s.sessions.ClearState(w)
 	s.sessions.ClearPending(w)
-	http.Redirect(w, r, authz.SafeRedirect(rd, s.cfg.Domain, s.cfg.DefaultRedirect), http.StatusFound)
+	http.Redirect(w, r, s.loginRedirect(rd), http.StatusFound)
 }
 
 // computeGroups returns the comma-separated Remote-Groups value for an email:
@@ -509,7 +570,29 @@ func (s *Server) setTOTPSecret(ctx context.Context, emailAddr, secret string) er
 	return s.store.SetTOTPSecret(ctx, emailAddr, enc)
 }
 
-// handleLogout clears the session.
+// handleLogoutConfirm renders a sign-out confirmation for GET /logout (a typed
+// or clicked URL). The logout itself is POST-only (handleLogout), so it can't be
+// triggered by a cross-site GET, link, or redirect; this page just gives that
+// POST a button instead of a 404. A request without a session has nothing to
+// confirm, so it's sent to the login page.
+func (s *Server) handleLogoutConfirm(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessions.ReadSession(r, s.now())
+	if !ok {
+		http.Redirect(w, r, s.cfg.PublicURL+"/login", http.StatusFound)
+		return
+	}
+	data := pageData{}
+	if id.Kind == session.KindBreakGlass {
+		data.BreakGlass = true
+		data.Identity = strings.TrimPrefix(id.Email, "breakglass:")
+	} else {
+		data.Identity = id.Email
+	}
+	s.render(w, http.StatusOK, "logout", data)
+}
+
+// handleLogout clears the session. POST-only (see handleLogoutConfirm) so a
+// cross-site GET cannot force a logout.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.sessions.ClearSession(w)
 	http.Redirect(w, r, s.cfg.PublicURL+"/login", http.StatusFound)
@@ -584,7 +667,7 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rd := authz.SafeRedirect(code.Redirect, s.cfg.Domain, s.cfg.BreakGlassRedirect)
-	http.Redirect(w, r, rd, http.StatusFound)
+	http.Redirect(w, r, s.loginRedirect(rd), http.StatusFound)
 }
 
 // handleLogo serves the global branding logo for the public login pages.

@@ -1,0 +1,7 @@
+{{define "title"}}Sign out{{end}}
+{{define "content"}}
+<h1>Sign out?</h1>
+<p class="sub">{{if .Identity}}You're signed in as <strong>{{.Identity}}</strong>. {{end}}Sign out on this device?</p>
+<form method="post" action="/logout"><button type="submit">Sign out</button></form>
+<div class="links"><a href="/welcome">Cancel</a></div>
+{{end}}

@@ -344,6 +344,83 @@ func TestEmailTextOnContrast(t *testing.T) {
 	}
 }
 
+func TestDirectLoginLandsOnWelcome(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	// Direct login: no app rd carried. Must land on the auth-host signed-in page,
+	// not bounce to DEFAULT_REDIRECT (which may be unservable, e.g. a certless apex).
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("/verify-code status = %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "https://auth.example.com/welcome" {
+		t.Fatalf("direct-login redirect = %q, want the auth-host welcome page", loc)
+	}
+	// The welcome page renders for the now-authenticated session.
+	rec = c.get("/welcome", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "signed in") {
+		t.Errorf("welcome page: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestApexRedirectFallsToWelcome(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	// A redirect to the bare apex (typically no TLS cert on a subdomain gateway)
+	// must be treated as not-a-destination and fall back to the welcome page.
+	c.postForm("/request", url.Values{"email": {"user@example.com"}, "rd": {"https://example.com"}})
+	rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	if loc := rec.Header().Get("Location"); loc != "https://auth.example.com/welcome" {
+		t.Fatalf("apex redirect should fall back to welcome; got %q", loc)
+	}
+}
+
+func TestWelcomeRequiresSession(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	rec := c.get("/welcome", nil)
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+		t.Errorf("unauthenticated /welcome should redirect to login; got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestLogoutGetConfirmsThenPostSignsOut(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+
+	// GET /logout renders a confirmation with a POST form — and does NOT log out.
+	rec := c.get("/logout", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /logout = %d, want 200 confirm page", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `action="/logout"`) || !strings.Contains(rec.Body.String(), "Sign out") {
+		t.Errorf("confirm page missing POST sign-out form: %q", rec.Body.String())
+	}
+	if rec := c.get("/verify", nil); rec.Code != http.StatusOK {
+		t.Errorf("GET /logout must not end the session; /verify = %d", rec.Code)
+	}
+
+	// POST /logout actually clears the session.
+	if rec := c.postForm("/logout", url.Values{}); rec.Code != http.StatusFound {
+		t.Fatalf("POST /logout = %d, want 302", rec.Code)
+	}
+	if rec := c.get("/verify", nil); rec.Code == http.StatusOK {
+		t.Error("POST /logout should have cleared the session")
+	}
+}
+
+func TestLogoutGetWhenSignedOutRedirectsToLogin(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	rec := c.get("/logout", nil)
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+		t.Errorf("GET /logout when signed out should redirect to login; got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	srv, _ := testServer(t)
 	c := newClient(t, srv.Handler())
