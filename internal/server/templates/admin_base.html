@@ -37,7 +37,7 @@
   a { color: #2563eb; text-decoration: none; }
   a:hover { text-decoration: underline; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 6px; }
-  input[type=text], input[type=email], input[type=url], textarea {
+  input[type=text], input[type=email], input[type=url], input[type=number], textarea {
     width: 100%; padding: 10px 12px; font-size: 15px; border: 1px solid #ccd0d5; border-radius: 9px;
     background: #fff; color: inherit; font-family: inherit;
   }
@@ -48,7 +48,11 @@
   .swatch label { margin-top: 0; }
   label.ck { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 6px 0; cursor: pointer; }
   label.ck input { width: auto; }
-  @media (prefers-color-scheme: dark) { input, textarea { background: #14161a; border-color: #3a3d44; } }
+  @media (prefers-color-scheme: dark) {
+    input[type=text], input[type=email], input[type=url], input[type=number], input[type=color], textarea {
+      background: #14161a; border-color: #3a3d44;
+    }
+  }
   .row { display: flex; gap: 12px; flex-wrap: wrap; }
   .row > div { flex: 1 1 200px; }
   button {
