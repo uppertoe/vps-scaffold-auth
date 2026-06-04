@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS pdf_branding (
 	logo_type     TEXT NOT NULL DEFAULT '',
 	glyph         BLOB,
 	glyph_type    TEXT NOT NULL DEFAULT '',
+	pdf_logo      BLOB,
+	pdf_logo_type TEXT NOT NULL DEFAULT '',
 	header_color  TEXT NOT NULL DEFAULT '',
 	accent_color  TEXT NOT NULL DEFAULT '',
 	bar1_color    TEXT NOT NULL DEFAULT '',
@@ -132,6 +134,8 @@ CREATE TABLE IF NOT EXISTS app_settings (
 		{"bar1_color", "TEXT NOT NULL DEFAULT ''"},
 		{"bar2_color", "TEXT NOT NULL DEFAULT ''"},
 		{"bar3_color", "TEXT NOT NULL DEFAULT ''"},
+		{"pdf_logo", "BLOB"},
+		{"pdf_logo_type", "TEXT NOT NULL DEFAULT ''"},
 	}); err != nil {
 		return err
 	}
@@ -598,9 +602,11 @@ func (s *SQLite) GetBranding(ctx context.Context) (Branding, bool, error) {
 	var updated int64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT title, body, instructions, logo, logo_type, glyph, glyph_type,
+		        pdf_logo, pdf_logo_type,
 		        header_color, accent_color, bar1_color, bar2_color, bar3_color, updated_at
 		 FROM pdf_branding WHERE id = 1`).
 		Scan(&b.Title, &b.Body, &b.Instructions, &b.Logo, &b.LogoType, &b.Glyph, &b.GlyphType,
+			&b.PDFLogo, &b.PDFLogoType,
 			&b.HeaderColor, &b.AccentColor, &b.Bar1Color, &b.Bar2Color, &b.Bar3Color, &updated)
 	if err == sql.ErrNoRows {
 		return Branding{}, false, nil
@@ -705,6 +711,8 @@ func brandingImageColumns(which BrandingImage) (blobCol, typeCol string) {
 		return "logo", "logo_type"
 	case BrandingGlyph:
 		return "glyph", "glyph_type"
+	case BrandingPDFLogo:
+		return "pdf_logo", "pdf_logo_type"
 	default:
 		return "", ""
 	}

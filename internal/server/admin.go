@@ -194,8 +194,12 @@ func (s *Server) effectiveCardBranding(ctx context.Context, codeID int64) store.
 		Bar2Color:    pick(c.Bar2Color, g.Bar2Color),
 		Bar3Color:    pick(c.Bar3Color, g.Bar3Color),
 	}
+	// Card logo: per-card override, else the PDF-default logo (typically a white
+	// variant for the dark header), else the global site logo.
 	if len(c.Logo) > 0 {
 		out.Logo, out.LogoType = c.Logo, c.LogoType
+	} else if len(g.PDFLogo) > 0 {
+		out.Logo, out.LogoType = g.PDFLogo, g.PDFLogoType
 	} else {
 		out.Logo, out.LogoType = g.Logo, g.LogoType
 	}
@@ -263,13 +267,14 @@ func (s *Server) handleAdminBranding(w http.ResponseWriter, r *http.Request) {
 	def := s.resolvedBranding(r.Context())
 	pal := breakglass.DefaultPalette
 	s.renderAdmin(w, r, http.StatusOK, "admin_branding", adminData{
-		Title: "PDF branding",
+		Title: "Branding",
 		Branding: brandingView{
 			Title:        b.Title,
 			Body:         b.Body,
 			Instructions: b.Instructions,
 			Placeholder:  def,
 			HasLogo:      len(b.Logo) > 0,
+			HasPDFLogo:   len(b.PDFLogo) > 0,
 			HasGlyph:     len(b.Glyph) > 0,
 			HeaderColor:  orFallback(b.HeaderColor, pal.Header),
 			AccentColor:  orFallback(b.AccentColor, pal.Accent),
@@ -309,6 +314,10 @@ func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.applyImageField(r, store.BrandingLogo, "logo"); err != nil {
+		s.brandingUploadError(w, r)
+		return
+	}
+	if err := s.applyImageField(r, store.BrandingPDFLogo, "pdflogo"); err != nil {
 		s.brandingUploadError(w, r)
 		return
 	}
@@ -456,6 +465,8 @@ func (s *Server) handleAdminBrandingImage(w http.ResponseWriter, r *http.Request
 	switch r.PathValue("which") {
 	case "logo":
 		data, mime = b.Logo, b.LogoType
+	case "pdflogo":
+		data, mime = b.PDFLogo, b.PDFLogoType
 	case "glyph":
 		data, mime = b.Glyph, b.GlyphType
 	default:

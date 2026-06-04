@@ -83,6 +83,11 @@ type Branding struct {
 	LogoType     string
 	Glyph        []byte
 	GlyphType    string
+	// PDFLogo is the default logo for break-glass PDF cards (typically a white
+	// variant for the dark card header). Falls back to Logo when empty. The plain
+	// Logo is the site logo shown on the sign-in pages.
+	PDFLogo     []byte
+	PDFLogoType string
 	// Colours are hex strings like "#003a5c"; empty means use the RCH default.
 	HeaderColor string
 	AccentColor string
@@ -107,8 +112,9 @@ type AppSettings struct {
 type BrandingImage string
 
 const (
-	BrandingLogo  BrandingImage = "logo"
-	BrandingGlyph BrandingImage = "glyph"
+	BrandingLogo    BrandingImage = "logo"
+	BrandingGlyph   BrandingImage = "glyph"
+	BrandingPDFLogo BrandingImage = "pdflogo"
 )
 
 // Store is the persistence interface. Implementations must be safe for

@@ -1,8 +1,8 @@
 {{define "title"}}{{.Title}}{{end}}
 {{define "content"}}
 {{with .Branding}}
-<h1>PDF branding</h1>
-<p class="sub">Customise the printable break-glass cards. Empty text fields fall back to sensible defaults. Each card also shows its own location label and note.</p>
+<h1>Branding</h1>
+<p class="sub">The <strong>site logo</strong> appears on the sign-in pages; everything else customises the printable break-glass cards. Empty text fields fall back to sensible defaults.</p>
 
 <form method="post" action="/admin/branding" enctype="multipart/form-data">
   <input type="hidden" name="csrf" value="{{$.CSRF}}">
@@ -33,20 +33,31 @@
   </div>
 
   <div class="row">
-    <div class="panel" style="flex:1 1 280px">
-      <h2 style="margin-top:0">Logo</h2>
-      <p class="muted">Shown in the header band. PNG, JPEG, or SVG, under 2 MB.</p>
+    <div class="panel" style="flex:1 1 240px">
+      <h2 style="margin-top:0">Site logo</h2>
+      <p class="muted">Shown on the sign-in pages. A colour logo works — it inverts to white automatically in dark mode. PNG, JPEG, or SVG, under 2 MB.</p>
       {{if .HasLogo}}
-        <p><img src="/admin/branding/logo/img" alt="Current logo" style="max-height:64px;max-width:100%;background:#003a5c;padding:8px;border-radius:8px"></p>
-        <label class="ck"><input type="checkbox" name="remove_logo" value="1"> Remove logo</label>
+        <p><img src="/admin/branding/logo/img" alt="Current site logo" style="max-height:64px;max-width:100%;padding:8px;border:1px solid #ccd0d5;border-radius:8px"></p>
+        <label class="ck"><input type="checkbox" name="remove_logo" value="1"> Remove site logo</label>
       {{end}}
-      <label for="logo">Upload logo</label>
+      <label for="logo">Upload site logo</label>
       <input id="logo" name="logo" type="file" accept="image/png,image/jpeg,image/svg+xml">
     </div>
 
-    <div class="panel" style="flex:1 1 280px">
+    <div class="panel" style="flex:1 1 240px">
+      <h2 style="margin-top:0">PDF card logo</h2>
+      <p class="muted">Default logo on break-glass cards, which have a dark header — use a white/light version. Leave blank to reuse the site logo.</p>
+      {{if .HasPDFLogo}}
+        <p><img src="/admin/branding/pdflogo/img" alt="Current PDF card logo" style="max-height:64px;max-width:100%;background:#003a5c;padding:8px;border-radius:8px"></p>
+        <label class="ck"><input type="checkbox" name="remove_pdflogo" value="1"> Remove PDF card logo</label>
+      {{end}}
+      <label for="pdflogo">Upload PDF card logo</label>
+      <input id="pdflogo" name="pdflogo" type="file" accept="image/png,image/jpeg,image/svg+xml">
+    </div>
+
+    <div class="panel" style="flex:1 1 240px">
       <h2 style="margin-top:0">Glyph</h2>
-      <p class="muted">Optional accent icon shown above the label. PNG, JPEG, or SVG.</p>
+      <p class="muted">Optional accent icon shown above the label on cards. PNG, JPEG, or SVG.</p>
       {{if .HasGlyph}}
         <p><img src="/admin/branding/glyph/img" alt="Current glyph" style="max-height:64px;max-width:100%;padding:8px;border:1px solid #ccd0d5;border-radius:8px"></p>
         <label class="ck"><input type="checkbox" name="remove_glyph" value="1"> Remove glyph</label>

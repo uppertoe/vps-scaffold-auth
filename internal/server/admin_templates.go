@@ -63,6 +63,7 @@ type brandingView struct {
 	Instructions string
 	Placeholder  store.Branding // resolved defaults, shown as input placeholders
 	HasLogo      bool
+	HasPDFLogo   bool
 	HasGlyph     bool
 	HeaderColor  string
 	AccentColor  string

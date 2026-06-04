@@ -301,11 +301,14 @@ Admins (anyone in the `admin` group) get a web UI on the `auth.<domain>` host:
 - **`/admin/break`** — manage break-the-glass codes (below).
 - **`/admin/totp`** — when `TOTP_ENABLED=true`, provision/reset/remove admins'
   two-factor secrets (see [Admin two-factor](#admin-two-factor-optional)).
-- **`/admin/branding`** — the global PDF card content (title/body/instructions),
-  a logo, an optional glyph, and the five palette colours (default to the RCH
-  palette). The logo also appears on the login page. Each break-glass code can
-  **override any of these per card** on its detail page (blank fields inherit the
-  global branding), so cards for different services can look distinct.
+- **`/admin/branding`** — two logos plus the break-glass card content. The
+  **site logo** is shown on the sign-in pages (a colour logo inverts to white in
+  dark mode). The **PDF card logo** is the default on break-glass cards, which
+  have a dark header, so use a white/light version (blank reuses the site logo).
+  The card content (title/body/instructions), an optional glyph, and the five
+  palette colours (default to the RCH palette) drive the printed cards. Each
+  break-glass code can **override any of these per card** on its detail page
+  (blank fields inherit the global branding).
 - **`/admin/settings`** — runtime operational settings that override the env
   defaults: the break-glass session duration, and the notification email list +
   webhook URL.
@@ -340,11 +343,11 @@ still reach an app during a time-critical event (e.g. a code stroke).
 - Codes can be **revoked** (blocks future scans immediately; sessions already
   granted lapse on their own short timeout) and **re-minted** (issues a fresh
   token, invalidating every already-printed card for that location).
-- Each code has a printable **PDF** (RCH-branded, with the QR), downloadable from
-  its detail page, for lamination and placement. The card's title, body,
-  instructions, logo, and an optional accent glyph are editable in the admin
-  **PDF branding** page (`/admin/branding`); logos with text should be PNG/JPEG
-  (the SVG rasteriser draws shapes, not fonts).
+- Each code has a printable **PDF** (with the QR), downloadable from its detail
+  page, for lamination and placement. The card's title, body, instructions, card
+  logo, and an optional accent glyph are editable on the admin **Branding** page
+  (`/admin/branding`); logos with text should be PNG/JPEG (the SVG rasteriser
+  draws shapes, not fonts).
 
 > **Accepted risk:** a break-glass QR is a bearer secret left in the open. Anyone
 > who photographs a card gets temporary, group-scoped access with no second

@@ -161,3 +161,32 @@ func TestBrandingRoundTrip(t *testing.T) {
 		t.Errorf("clear image affected text or left logo: %+v", b)
 	}
 }
+
+// TestBrandingSiteAndPDFLogosAreIndependent verifies the site logo and the
+// PDF-card logo are separate slots that don't clobber each other.
+func TestBrandingSiteAndPDFLogosAreIndependent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SetBrandingImage(ctx, BrandingLogo, []byte("site"), "image/png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetBrandingImage(ctx, BrandingPDFLogo, []byte("pdfwhite"), "image/png"); err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := s.GetBranding(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b.Logo) != "site" || string(b.PDFLogo) != "pdfwhite" {
+		t.Fatalf("logos crossed: site=%q pdf=%q", b.Logo, b.PDFLogo)
+	}
+
+	// Clearing the PDF logo must leave the site logo intact.
+	if err := s.ClearBrandingImage(ctx, BrandingPDFLogo); err != nil {
+		t.Fatal(err)
+	}
+	if b, _, _ := s.GetBranding(ctx); string(b.Logo) != "site" || len(b.PDFLogo) != 0 {
+		t.Errorf("clearing PDF logo affected the site logo: site=%q pdf=%q", b.Logo, b.PDFLogo)
+	}
+}
