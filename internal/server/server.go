@@ -27,6 +27,7 @@ type Server struct {
 	secrets      *secretbox.Box
 	emailLimiter *ratelimit.Limiter
 	ipLimiter    *ratelimit.Limiter
+	totpReplay   *totpReplay
 	pages        pages
 	adminPages   pages
 	emailTmpl    *texttemplate.Template
@@ -66,6 +67,9 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		emailTmpl:    emailTmpl,
 		now:          time.Now,
 	}
+	// Anti-replay reads the clock through s.now so tests sharing a fake clock stay
+	// consistent with the rest of the server.
+	s.totpReplay = newTOTPReplay(func() time.Time { return s.now() })
 	s.handler = s.routes()
 	return s, nil
 }
@@ -101,7 +105,7 @@ func (s *Server) routes() http.Handler {
 	// Catch-all (all methods) so it doesn't conflict with the /admin/ subtree
 	// pattern under the Go 1.22 mux precedence rules.
 	mux.HandleFunc("/", s.handleRoot)
-	return securityHeaders(mux)
+	return s.securityHeaders(mux)
 }
 
 // cspPolicy is the single Content-Security-Policy applied to every HTML
@@ -113,7 +117,7 @@ const cspPolicy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'
 
 // securityHeaders applies conservative defaults to every response. The pages
 // use only inline styles and no scripts, so the CSP can be very tight.
-func securityHeaders(next http.Handler) http.Handler {
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -121,6 +125,12 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
 		h.Set("Content-Security-Policy", cspPolicy)
+		// Pin HTTPS for the auth host and the whole subdomain estate it sits over.
+		// Skipped in dev (CookieInsecure: plain HTTP), where an HSTS pin would make
+		// the host unreachable without TLS.
+		if !s.cfg.CookieInsecure {
+			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

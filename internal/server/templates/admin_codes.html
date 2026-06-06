@@ -4,6 +4,27 @@
 <p class="sub">Physical QR cards that grant temporary, group-scoped emergency access. Every scan is logged.</p>
 
 <div class="panel">
+  <h2 style="margin-top:0">How break-glass access works</h2>
+  <p class="muted">
+    Scanning a card opens its link and immediately starts a short-lived session &mdash; no
+    email, login, or two-factor step. The scan itself is the credential, so cards must stay
+    physically controlled. Every scan is logged and admins are notified.
+  </p>
+  <p class="muted">
+    A card carries exactly one group &mdash; its <strong>target group</strong> &mdash; and nothing
+    else. It does <strong>not</strong> grant admin access, it can't satisfy an app that allows by
+    email domain, and it can't open a plain <code class="mono">protected</code> route. Emergency
+    access has to be opted into explicitly, per app.
+  </p>
+  <p class="muted">
+    <strong>To scope a card to a particular app:</strong> set its target group to a group that
+    app's Caddy snippet requires (<code class="mono">groups=&hellip;</code>). The card then opens
+    only the apps whose policy lists that group. Give each emergency entry point its own group so
+    one card can't open more than you intend.
+  </p>
+</div>
+
+<div class="panel">
   <h2 style="margin-top:0">Codes</h2>
   {{if .Codes}}
   <table>

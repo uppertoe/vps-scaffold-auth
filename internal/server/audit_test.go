@@ -96,6 +96,28 @@ func TestReservedGroupNameRejected(t *testing.T) {
 	}
 }
 
+// F2: IsReservedGroup only matches whole names, so a separator-bearing name like
+// "x,admin" sails past it — but when baked into Remote-Groups (comma-joined) it
+// would inject a standalone "admin" token. ValidGroupName must reject it at both
+// the group-create and break-glass-create entry points.
+func TestGroupNameWithSeparatorRejected(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+
+	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	c.postForm("/admin/groups", url.Values{"csrf": {tok}, "name": {"x,admin"}, "label": {"x"}})
+	if groups, _ := srv.store.ListGroups(context.Background()); len(groups) != 0 {
+		t.Fatalf("a group with a comma in its name was created: %+v (would smuggle 'admin' into Remote-Groups)", groups)
+	}
+
+	tok = extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Evil"}, "group": {"lab,admin"}})
+	if codes, _ := srv.store.ListBreakGlassCodes(context.Background()); len(codes) != 0 {
+		t.Fatalf("a break-glass code targeting 'lab,admin' was created: %+v", codes)
+	}
+}
+
 // F2 (defense in depth): even a pre-existing code whose target group is "admin"
 // (e.g. created before the guard, or written directly to the DB) must not let a
 // break-glass session reach the admin UI.
@@ -108,5 +130,30 @@ func TestBreakGlassSessionRejectedFromAdminUI(t *testing.T) {
 	}
 	if rec := c.get("/admin/break", nil); rec.Code == http.StatusOK {
 		t.Fatal("break-glass session granted admin UI access (second-factor bypass)")
+	}
+}
+
+// HSTS is pinned under TLS but omitted in dev (CookieInsecure, plain HTTP), where
+// an HSTS pin would make the host unreachable without a certificate.
+func TestHSTSHeaderOnlyUnderTLS(t *testing.T) {
+	srv, _ := testServer(t) // testServer sets CookieInsecure: true
+	c := newClient(t, srv.Handler())
+	if h := c.get("/login", nil).Header().Get("Strict-Transport-Security"); h != "" {
+		t.Errorf("HSTS set in insecure/dev mode: %q", h)
+	}
+	srv.cfg.CookieInsecure = false // production: TLS
+	if h := c.get("/login", nil).Header().Get("Strict-Transport-Security"); h == "" {
+		t.Error("HSTS missing under TLS")
+	}
+}
+
+// A misconfigured (or admin-set) break-glass TTL above the cap is clamped, so no
+// configuration can mint an emergency session longer-lived than the model allows.
+// These sessions are never renewed and cannot be revoked once issued.
+func TestBreakGlassTTLCapped(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.cfg.BreakGlassSessionTTL = 100 * time.Hour // above the cap
+	if ttl, _, _ := srv.effectiveSettings(context.Background()); ttl != maxBreakGlassTTL {
+		t.Errorf("effective break-glass TTL = %s, want clamped to %s", ttl, maxBreakGlassTTL)
 	}
 }

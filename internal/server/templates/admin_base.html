@@ -6,73 +6,113 @@
 <meta name="robots" content="noindex,nofollow">
 <title>{{template "title" .}} · Admin</title>
 <style>
-  :root { color-scheme: light dark; }
+  /* Palette. Every colour is a custom property here; the dark-mode block
+     re-points the same names, so individual rules never hardcode a hex value
+     or carry their own @media override. Grouped by role. */
+  :root {
+    color-scheme: light dark;
+    --accent: #2563eb;        /* links / primary action */
+    --accent-hover: #1d4ed8;
+    --bg: #f6f7f9;            /* page background */
+    --surface: #fff;         /* panels */
+    --card-border: transparent;
+    --text: #1c1e21;
+    --muted: #65676b;        /* secondary text */
+    --line: #e7e9ec;         /* table rules */
+    --input-bg: #fff;
+    --input-border: #ccd0d5;
+    /* Top bar */
+    --bar-bg: #1f2937;
+    --bar-fg: #fff;
+    --bar-link: #cbd5e1;
+    /* Secondary buttons */
+    --danger: #b91c1c;
+    --danger-hover: #991b1b;
+    --ghost-bg: #e5e7eb;
+    --ghost-fg: #1f2937;
+    --ghost-hover: #d1d5db;
+    /* Status pills */
+    --ok-bg: #dcfce7;
+    --ok-fg: #166534;
+    --off-bg: #fee2e2;
+    --off-fg: #991b1b;
+    /* Errors */
+    --err-bg: #fde8e8;
+    --err-text: #9b1c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --surface: #1f2228;
+      --card-border: #2c2f36;
+      --text: #e7e9ea;
+      --muted: #9aa0a6;
+      --line: #2c2f36;
+      --input-bg: #14161a;
+      --input-border: #3a3d44;
+    }
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100vh;
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background: #f6f7f9; color: #1c1e21;
+    background: var(--bg); color: var(--text);
   }
-  @media (prefers-color-scheme: dark) { body { background: #16181c; color: #e7e9ea; } }
   header.bar {
-    background: #1f2937; color: #fff; padding: 14px 24px; display: flex; align-items: center; gap: 20px;
+    background: var(--bar-bg); color: var(--bar-fg); padding: 14px 24px; display: flex; align-items: center; gap: 20px;
   }
   header.bar strong { font-size: 16px; }
-  header.bar nav a { color: #cbd5e1; text-decoration: none; font-size: 14px; margin-right: 14px; }
-  header.bar nav a:hover { color: #fff; }
+  header.bar nav a { color: var(--bar-link); text-decoration: none; font-size: 14px; margin-right: 14px; }
+  header.bar nav a:hover { color: var(--bar-fg); }
   main { max-width: 920px; margin: 0 auto; padding: 28px 24px 60px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
   h2 { font-size: 17px; margin: 28px 0 10px; }
-  p.sub { color: #65676b; margin: 0 0 20px; }
-  @media (prefers-color-scheme: dark) { p.sub { color: #9aa0a6; } }
+  p.sub { color: var(--muted); margin: 0 0 20px; }
   .panel {
-    background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 20px;
+    background: var(--surface); border-radius: 12px; padding: 20px; margin-bottom: 20px;
+    border: 1px solid var(--card-border);
     box-shadow: 0 1px 3px rgba(0,0,0,.07), 0 6px 18px rgba(0,0,0,.05);
   }
-  @media (prefers-color-scheme: dark) { .panel { background: #1f2228; box-shadow: none; border: 1px solid #2c2f36; } }
+  /* On the dark page the drop shadow disappears; the border (transparent in
+     light mode) separates the panel instead. */
+  @media (prefers-color-scheme: dark) { .panel { box-shadow: none; } }
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid #e7e9ec; font-size: 14px; vertical-align: top; }
-  @media (prefers-color-scheme: dark) { th, td { border-color: #2c2f36; } }
-  th { color: #65676b; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
-  a { color: #2563eb; text-decoration: none; }
+  th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); font-size: 14px; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 6px; }
   input[type=text], input[type=email], input[type=url], input[type=number], textarea {
-    width: 100%; padding: 10px 12px; font-size: 15px; border: 1px solid #ccd0d5; border-radius: 9px;
-    background: #fff; color: inherit; font-family: inherit;
+    width: 100%; padding: 10px 12px; font-size: 15px; border: 1px solid var(--input-border); border-radius: 9px;
+    background: var(--input-bg); color: inherit; font-family: inherit;
   }
   textarea { resize: vertical; line-height: 1.5; }
   input[type=file] { font-size: 14px; }
-  input[type=color] { width: 56px; height: 40px; padding: 2px; border: 1px solid #ccd0d5; border-radius: 9px; background: #fff; cursor: pointer; }
+  input[type=color] { width: 56px; height: 40px; padding: 2px; border: 1px solid var(--input-border); border-radius: 9px; background: var(--input-bg); cursor: pointer; }
   .swatch { flex: 0 0 auto; }
   .swatch label { margin-top: 0; }
   label.ck { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 6px 0; cursor: pointer; }
   label.ck input { width: auto; }
-  @media (prefers-color-scheme: dark) {
-    input[type=text], input[type=email], input[type=url], input[type=number], input[type=color], textarea {
-      background: #14161a; border-color: #3a3d44;
-    }
-  }
   .row { display: flex; gap: 12px; flex-wrap: wrap; }
   .row > div { flex: 1 1 200px; }
   button {
     margin-top: 14px; padding: 10px 16px; font-size: 14px; font-weight: 600; border: 0; border-radius: 9px;
-    background: #2563eb; color: #fff; cursor: pointer;
+    background: var(--accent); color: #fff; cursor: pointer;
   }
-  button:hover { background: #1d4ed8; }
-  button.danger { background: #b91c1c; }
-  button.danger:hover { background: #991b1b; }
-  button.ghost { background: #e5e7eb; color: #1f2937; }
-  button.ghost:hover { background: #d1d5db; }
+  button:hover { background: var(--accent-hover); }
+  button.danger { background: var(--danger); }
+  button.danger:hover { background: var(--danger-hover); }
+  button.ghost { background: var(--ghost-bg); color: var(--ghost-fg); }
+  button.ghost:hover { background: var(--ghost-hover); }
   .inline { display: inline; }
   .inline button { margin-top: 0; padding: 6px 12px; font-size: 13px; }
   .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-  .pill.ok { background: #dcfce7; color: #166534; }
-  .pill.off { background: #fee2e2; color: #991b1b; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .pill.off { background: var(--off-bg); color: var(--off-fg); }
   .qrbox { text-align: center; }
   .qrbox img { width: 240px; height: 240px; image-rendering: pixelated; background: #fff; padding: 12px; border-radius: 10px; }
-  .muted { color: #65676b; font-size: 13px; }
-  .err { background: #fde8e8; color: #9b1c1c; border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .err { background: var(--err-bg); color: var(--err-text); border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; }
   code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 </style>
 </head>

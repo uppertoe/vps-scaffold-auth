@@ -21,6 +21,11 @@ func TestClientIP_TrustsRightmostXFF(t *testing.T) {
 		{"spoofed leftmost, real rightmost", "1.2.3.4, 198.51.100.4", "10.0.0.1:9", "198.51.100.4"},
 		{"multiple spoofed entries", "9.9.9.9, 8.8.8.8, 198.51.100.4", "10.0.0.1:9", "198.51.100.4"},
 		{"whitespace trimmed", "1.1.1.1,  198.51.100.4 ", "10.0.0.1:9", "198.51.100.4"},
+		// A malformed rightmost value means the trusted-proxy contract was broken;
+		// fall back to RemoteAddr rather than let an attacker-shaped string become
+		// its own rate-limit key (rotating it would defeat per-IP limits).
+		{"malformed rightmost falls back to remote addr", "1.2.3.4, not-an-ip", "10.0.0.1:9", "10.0.0.1"},
+		{"garbage single xff falls back", "%%garbage%%", "10.0.0.1:9", "10.0.0.1"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

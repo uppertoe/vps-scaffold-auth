@@ -102,6 +102,31 @@ func IsReservedGroup(name string) bool {
 	return false
 }
 
+// ValidGroupName reports whether name is a safe group identifier: a non-empty
+// run of lowercase letters, digits, hyphen, and underscore. The constraint is a
+// security boundary, not cosmetics: group names are joined with "," into the
+// Remote-Groups set (see BuildGroups) and split back out on "," (and, in app
+// matchers, on whitespace/";" too). A name carrying a separator would smuggle an
+// extra token into that set — e.g. a group "x,admin" injects the "admin" role —
+// slipping past IsReservedGroup, which only matches whole names. Callers must
+// reject names that fail this before persisting them. Human-friendly display
+// text belongs in a group's separate label field, which has no such constraint.
+func ValidGroupName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // HasGroup reports whether the comma-separated groups string contains target.
 func HasGroup(groups, target string) bool {
 	for _, g := range strings.Split(groups, ",") {
@@ -152,7 +177,13 @@ func CanAccessApp(email, groups string, breakGlass bool, reqDomains, reqGroups s
 	if strings.TrimSpace(reqDomains) == "" && strings.TrimSpace(reqGroups) == "" {
 		return !breakGlass
 	}
-	if d := DomainOf(email); d != "" {
+	// A break-glass session must NEVER satisfy a domain requirement — emergency
+	// access is opt-in by group only. The principal is "breakglass:<label>" with
+	// an admin-supplied label, and DomainOf would otherwise parse a domain out of
+	// a label that happens to contain an "@" (e.g. "ops@rch.org.au"), letting a
+	// card reach domain-restricted apps it was never scoped to. Gating on
+	// !breakGlass enforces the invariant regardless of the label's content.
+	if d := DomainOf(email); d != "" && !breakGlass {
 		for _, want := range splitList(reqDomains) {
 			if d == want {
 				return true

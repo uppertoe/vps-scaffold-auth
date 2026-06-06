@@ -211,10 +211,18 @@ func formatDomains(s string) string {
 	return strings.ToLower(strings.Join(fields, ", "))
 }
 
-// handleRoot sends bare hits to the login page; everything else is 404.
+// handleRoot handles a bare hit to the auth host. An already-signed-in visitor
+// (no app destination — they just typed the host) is sent to the signed-in
+// /welcome landing rather than the login form, which would be confusing to show
+// to someone already authenticated; everyone else goes to /login. Anything other
+// than "/" is a 404.
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
+		return
+	}
+	if _, ok := s.sessions.ReadSession(r, s.now()); ok {
+		http.Redirect(w, r, "/welcome", http.StatusFound)
 		return
 	}
 	http.Redirect(w, r, "/login", http.StatusFound)
@@ -453,6 +461,14 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// A TOTP code stays valid for its whole ~30s step; reject a second use of the
+	// same code so a sniffed/phished code can't be replayed within that window.
+	if !s.totpReplay.use(p.Email, code) {
+		s.render(w, http.StatusUnauthorized, "totp", pageData{
+			Error: "That code has already been used. Wait for your authenticator to show a new one.", Redirect: p.Redirect,
+		})
+		return
+	}
 	s.completeLogin(w, r, p.Email, p.Role, p.Redirect, p.Remember, now)
 }
 
@@ -507,6 +523,9 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 		data.Identity = strings.TrimPrefix(id.Email, "breakglass:")
 	} else {
 		data.Identity = id.Email
+		// A real admin session gets an Admin link here; a break-glass session
+		// never does (it can't reach the admin UI anyway — see requireAdmin).
+		data.IsAdmin = authz.HasGroup(id.Groups, authz.RoleAdmin)
 	}
 	if target, ok := s.servedTarget(s.cfg.DefaultRedirect); ok {
 		data.Redirect = target // rendered as a "Continue" link
@@ -790,10 +809,18 @@ func (s *Server) warnLegacyPolicy(r *http.Request) {
 // proxy is ever placed in front of Caddy, configure trusted_proxies there.
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		candidate := xff
 		if i := strings.LastIndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[i+1:])
+			candidate = xff[i+1:]
 		}
-		return strings.TrimSpace(xff)
+		// Honor the forwarded value only when it is a well-formed IP. Caddy always
+		// writes a bare peer address here; a malformed value means the trusted-proxy
+		// contract was broken, so fall back to RemoteAddr rather than letting an
+		// attacker-shaped string become its own rate-limit key (defeating per-IP
+		// limits by rotating the header).
+		if ip := net.ParseIP(strings.TrimSpace(candidate)); ip != nil {
+			return ip.String()
+		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

@@ -218,10 +218,25 @@ func orFallback(v, def string) string {
 	return v
 }
 
+// maxBreakGlassTTL caps how long an emergency session may last, regardless of
+// the source (admin-saved setting or BREAKGLASS_SESSION_TTL env default). It is
+// the only real bound on a leaked or misused card: break-glass sessions are
+// never renewed AND cannot be revoked once issued — the stateless model has no
+// per-session kill switch, so revoking a code only blocks *new* grants. Keep it
+// short so an abused card self-expires quickly.
+const maxBreakGlassTTL = 12 * time.Hour
+
 // effectiveSettings resolves the break-glass session TTL, notification email
 // recipients, and webhook URL from the admin-saved settings, falling back to the
-// environment defaults when nothing has been saved.
+// environment defaults when nothing has been saved. The resolved TTL is clamped
+// to maxBreakGlassTTL on every path (env or DB), so no configuration can mint a
+// longer-lived emergency session than the model allows.
 func (s *Server) effectiveSettings(ctx context.Context) (ttl time.Duration, notifyEmails []string, webhookURL string) {
+	defer func() {
+		if ttl > maxBreakGlassTTL {
+			ttl = maxBreakGlassTTL
+		}
+	}()
 	ttl = s.cfg.BreakGlassSessionTTL
 	notifyEmails = s.cfg.BreakGlassNotifyEmails
 	webhookURL = s.cfg.BreakGlassWebhookURL
@@ -421,8 +436,8 @@ func (s *Server) handleAdminSaveSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	hours, err := strconv.ParseFloat(trimField(r.PostFormValue("hours")), 64)
-	if err != nil || hours <= 0 || hours > 168 {
-		s.settingsError(w, r, "Session duration must be a number of hours between 0 and 168 (one week).")
+	if err != nil || hours <= 0 || hours > maxBreakGlassTTL.Hours() {
+		s.settingsError(w, r, "Session duration must be a number of hours between 0 and 12.")
 		return
 	}
 	emails := splitEmails(r.PostFormValue("emails"))
@@ -551,11 +566,16 @@ func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
-	if name != "" {
-		if err := s.store.CreateGroup(r.Context(), name, r.PostFormValue("label")); err != nil {
-			s.adminError(w, r)
-			return
-		}
+	if !authz.ValidGroupName(name) {
+		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
+			Title:   "Invalid group name",
+			Message: "Group names may use only lowercase letters, numbers, hyphens, and underscores — no spaces, commas, or other punctuation. Use the label field for a friendly display name.",
+		})
+		return
+	}
+	if err := s.store.CreateGroup(r.Context(), name, r.PostFormValue("label")); err != nil {
+		s.adminError(w, r)
+		return
 	}
 	http.Redirect(w, r, "/admin/groups", http.StatusFound)
 }
@@ -628,6 +648,13 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title:   "Reserved target group",
 			Message: "A break-glass code cannot target the reserved roles \"admin\" or \"user\". Use a dedicated group instead.",
+		})
+		return
+	}
+	if !authz.ValidGroupName(group) {
+		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
+			Title:   "Invalid target group",
+			Message: "A target group may use only lowercase letters, numbers, hyphens, and underscores — no spaces, commas, or other punctuation.",
 		})
 		return
 	}

@@ -376,6 +376,47 @@ func TestApexRedirectFallsToWelcome(t *testing.T) {
 	}
 }
 
+func TestRootRedirectsBySession(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+
+	// Unauthenticated: the auth-host root sends you to the login page.
+	rec := c.get("/", nil)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("unauthenticated / = %d %q; want 302 /login", rec.Code, rec.Header().Get("Location"))
+	}
+
+	// Signed in: the root lands on the signed-in welcome page instead of
+	// re-showing the login form.
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	rec = c.get("/", nil)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/welcome" {
+		t.Fatalf("signed-in / = %d %q; want 302 /welcome", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestWelcomeAdminLink(t *testing.T) {
+	srv, sender := testServer(t)
+
+	// A normal user sees no Admin link.
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	if body := c.get("/welcome", nil).Body.String(); strings.Contains(body, `href="/admin/"`) {
+		t.Errorf("non-admin /welcome should not offer an Admin link")
+	}
+
+	// An admin does (TOTP is off in the test config, so login completes directly).
+	sender.reset()
+	ca := newClient(t, srv.Handler())
+	ca.postForm("/request", url.Values{"email": {"admin@example.com"}})
+	ca.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	if body := ca.get("/welcome", nil).Body.String(); !strings.Contains(body, `href="/admin/"`) {
+		t.Errorf("admin /welcome should offer an Admin link; body:\n%s", body)
+	}
+}
+
 func TestWelcomeRequiresSession(t *testing.T) {
 	srv, _ := testServer(t)
 	c := newClient(t, srv.Handler())

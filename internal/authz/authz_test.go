@@ -69,6 +69,10 @@ func TestCanAccessApp(t *testing.T) {
 		{"break-glass via group", "breakglass:Lab 1", "bg_stroke", true, "", "bg_stroke", true},
 		{"break-glass wrong group", "breakglass:Lab 1", "bg_stroke", true, "", "bg_other", false},
 		{"break-glass can't satisfy a domain", "breakglass:Lab 1", "bg_stroke", true, "rch.org.au", "", false},
+		// A break-glass label containing an "@domain" must NOT forge a domain
+		// match: emergency access is group-only regardless of label content.
+		{"break-glass label with @domain can't forge domain", "breakglass:ops@rch.org.au", "bg_stroke", true, "rch.org.au", "", false},
+		{"break-glass label with @domain still group-scoped", "breakglass:ops@rch.org.au", "bg_stroke", true, "rch.org.au", "bg_stroke", true},
 
 		// Admins are not auto-allowed: they get in via domain or by the app
 		// listing the admin group explicitly.
@@ -80,6 +84,35 @@ func TestCanAccessApp(t *testing.T) {
 			t.Errorf("%s: CanAccessApp(%q,%q,bg=%v,d=%q,g=%q) = %v, want %v",
 				c.name, c.email, c.groups, c.breakGlass, c.reqDomains, c.reqGroups, got, c.want)
 		}
+	}
+}
+
+func TestValidGroupName(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"reports_team", true},
+		{"bg-stroke", true},
+		{"abc123", true},
+		{"", false},
+		{"x,admin", false}, // comma would inject a role token into Remote-Groups
+		{"x admin", false}, // space splits in app matchers
+		{"x;admin", false}, // semicolon splits in the policy/app parsers
+		{"UPPER", false},   // names are stored lowercased
+		{"emoji😀", false},  // only [a-z0-9_-]
+		{"a.b", false},     // dot is not allowed
+	}
+	for _, c := range cases {
+		if got := ValidGroupName(c.name); got != c.want {
+			t.Errorf("ValidGroupName(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// The separator-bearing names that would smuggle a role are not caught by
+	// IsReservedGroup (which only matches whole names) — ValidGroupName is the
+	// guard that stops them.
+	if IsReservedGroup("x,admin") {
+		t.Error("IsReservedGroup unexpectedly matched a comma-bearing name")
 	}
 }
 

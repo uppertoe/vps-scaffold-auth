@@ -106,6 +106,35 @@ func TestTOTPLoginWithProvisionedSecret(t *testing.T) {
 	}
 }
 
+// A TOTP code stays valid for its whole ~30s step. A second use of the SAME code
+// (e.g. replayed by an attacker who sniffed it) must be rejected, even though the
+// raw code still validates against the secret. The clock is pinned so both login
+// attempts generate the identical code, making the second a genuine replay.
+func TestTOTPCodeCannotBeReplayed(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	secret := provisionTOTP(t, srv, "admin@example.com")
+
+	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Submit the SAME code through two independent login flows.
+	login := func() int {
+		c := newClient(t, srv.Handler())
+		c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+		c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+		return c.postForm("/totp", url.Values{"code": {totpCode}}).Code
+	}
+
+	if got := login(); got != http.StatusFound {
+		t.Fatalf("first TOTP use = %d, want 302", got)
+	}
+	if got := login(); got != http.StatusUnauthorized {
+		t.Fatalf("replayed TOTP code = %d, want 401 (rejected)", got)
+	}
+}
+
 // The admin UI provisions, reports status for, and removes admin TOTP secrets.
 func TestAdminTOTPProvisioning(t *testing.T) {
 	srv, sender := testServer(t) // TOTP disabled, so admin can log in via email only

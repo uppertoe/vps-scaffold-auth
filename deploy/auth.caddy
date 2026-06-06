@@ -15,9 +15,11 @@ auth.{$DOMAIN} {
 # strip_auth_cookie), so an app needs no separate reverse_proxy line. On an
 # unauthenticated request /verify returns a 302 to the login page; on a valid
 # session it returns 200 and Caddy forwards Remote-User / Remote-Email /
-# Remote-Groups upstream (stripping any client-supplied copies first). A user
-# who is signed in but not allowed on THIS app is sent to a friendly
-# "no access" page with a sign-in link -- never bounced back to login.
+# Remote-Groups upstream. Each guard deletes any client-supplied Remote-* up front
+# (import strip_client_identity) and forward_auth's copy_headers re-adds the
+# authoritative values from the auth response, so the app can never see a spoofed
+# identity header. A user who is signed in but not allowed on THIS app is sent to
+# a friendly "no access" page with a sign-in link -- never bounced back to login.
 #
 # NOTE: keep comments in .caddy files free of braces -- the scaffold's
 # run-caddy.sh counts braces when assembling the Caddyfile.
@@ -66,24 +68,30 @@ auth.{$DOMAIN} {
 # their own plain headers.
 
 (protected) {
-	forward_auth auth:8080 {
-		uri /verify
-		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Policy "any"
-	}
-	reverse_proxy {args[0]} {
-		import strip_auth_cookie
+	route {
+		import strip_client_identity
+		forward_auth auth:8080 {
+			uri /verify
+			copy_headers Remote-User Remote-Email Remote-Groups
+			header_up X-Auth-Policy "any"
+		}
+		reverse_proxy {args[0]} {
+			import strip_auth_cookie
+		}
 	}
 }
 
 (protected_domains) {
-	forward_auth auth:8080 {
-		uri /verify
-		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Policy "domains={args[0]}"
-	}
-	reverse_proxy {args[1]} {
-		import strip_auth_cookie
+	route {
+		import strip_client_identity
+		forward_auth auth:8080 {
+			uri /verify
+			copy_headers Remote-User Remote-Email Remote-Groups
+			header_up X-Auth-Policy "domains={args[0]}"
+		}
+		reverse_proxy {args[1]} {
+			import strip_auth_cookie
+		}
 	}
 }
 
@@ -94,14 +102,17 @@ auth.{$DOMAIN} {
 # The full domain list still governs the actual hint/decline; the label is
 # display only.
 (protected_domains_labeled) {
-	forward_auth auth:8080 {
-		uri /verify
-		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Policy "domains={args[0]}"
-		header_up X-Auth-Domain-Label "{args[1]}"
-	}
-	reverse_proxy {args[2]} {
-		import strip_auth_cookie
+	route {
+		import strip_client_identity
+		forward_auth auth:8080 {
+			uri /verify
+			copy_headers Remote-User Remote-Email Remote-Groups
+			header_up X-Auth-Policy "domains={args[0]}"
+			header_up X-Auth-Domain-Label "{args[1]}"
+		}
+		reverse_proxy {args[2]} {
+			import strip_auth_cookie
+		}
 	}
 }
 
@@ -111,50 +122,62 @@ auth.{$DOMAIN} {
 # server domain), link label, upstream. The URL is re-validated server-side
 # before it is shown.
 (protected_domains_alt) {
-	forward_auth auth:8080 {
-		uri /verify
-		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Policy "domains={args[0]}"
-		header_up X-Auth-Alt-Login "{args[1]}"
-		header_up X-Auth-Alt-Label "{args[2]}"
-	}
-	reverse_proxy {args[3]} {
-		import strip_auth_cookie
+	route {
+		import strip_client_identity
+		forward_auth auth:8080 {
+			uri /verify
+			copy_headers Remote-User Remote-Email Remote-Groups
+			header_up X-Auth-Policy "domains={args[0]}"
+			header_up X-Auth-Alt-Login "{args[1]}"
+			header_up X-Auth-Alt-Label "{args[2]}"
+		}
+		reverse_proxy {args[3]} {
+			import strip_auth_cookie
+		}
 	}
 }
 
 (protected_groups) {
-	forward_auth auth:8080 {
-		uri /verify
-		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Policy "groups={args[0]}"
-	}
-	reverse_proxy {args[1]} {
-		import strip_auth_cookie
+	route {
+		import strip_client_identity
+		forward_auth auth:8080 {
+			uri /verify
+			copy_headers Remote-User Remote-Email Remote-Groups
+			header_up X-Auth-Policy "groups={args[0]}"
+		}
+		reverse_proxy {args[1]} {
+			import strip_auth_cookie
+		}
 	}
 }
 
 # Admin door: admins only, no login hint or early decline. Use on a separate
 # route/host so the app's main door can stay a pure domain gate.
 (protected_admin) {
-	forward_auth auth:8080 {
-		uri /verify
-		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Policy "groups=admin"
-	}
-	reverse_proxy {args[0]} {
-		import strip_auth_cookie
+	route {
+		import strip_client_identity
+		forward_auth auth:8080 {
+			uri /verify
+			copy_headers Remote-User Remote-Email Remote-Groups
+			header_up X-Auth-Policy "groups=admin"
+		}
+		reverse_proxy {args[0]} {
+			import strip_auth_cookie
+		}
 	}
 }
 
 (protected_access) {
-	forward_auth auth:8080 {
-		uri /verify
-		copy_headers Remote-User Remote-Email Remote-Groups
-		header_up X-Auth-Policy "domains={args[0]};groups={args[1]}"
-	}
-	reverse_proxy {args[2]} {
-		import strip_auth_cookie
+	route {
+		import strip_client_identity
+		forward_auth auth:8080 {
+			uri /verify
+			copy_headers Remote-User Remote-Email Remote-Groups
+			header_up X-Auth-Policy "domains={args[0]};groups={args[1]}"
+		}
+		reverse_proxy {args[2]} {
+			import strip_auth_cookie
+		}
 	}
 }
 
@@ -171,4 +194,19 @@ auth.{$DOMAIN} {
 # leaving the app's own cookies intact.
 (strip_auth_cookie) {
 	header_up Cookie "(^|;\s*)vps_auth_session=[^;]*" ""
+}
+
+# Delete any client-supplied identity headers from the request BEFORE forward_auth
+# runs, so its copy_headers can re-add the authoritative values on a 2xx. The apps
+# trust Remote-* because only Caddy sets them; this makes that guarantee explicit
+# rather than relying solely on copy_headers' overwrite-on-2xx (which leaves a
+# theoretical gap on non-2xx and is easy to misread). It MUST be imported inside a
+# route {} (as the guards above do) so it runs before forward_auth: Caddy's default
+# directive order otherwise places a bare request_header AFTER forward_auth, which
+# would delete the authoritative value instead. Verified against Caddy 2 with a
+# live forward_auth + whoami harness.
+(strip_client_identity) {
+	request_header -Remote-User
+	request_header -Remote-Email
+	request_header -Remote-Groups
 }

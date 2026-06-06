@@ -26,6 +26,9 @@ type pageData struct {
 	Identity   string
 	LoginURL   string
 	BreakGlass bool
+	// IsAdmin surfaces an Admin link on the signed-in /welcome landing for a
+	// real (non-break-glass) admin session.
+	IsAdmin bool
 	// HintDomains is the display string for the domain requirement (an app-set
 	// label, else the enumerated domains). RequireDomains/RequireDomainLabel
 	// carry the raw requirement + optional label through to /request.
