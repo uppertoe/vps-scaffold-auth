@@ -4,6 +4,7 @@
 <p class="sub">Enter the 6-digit code from your authenticator app.</p>
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 <form method="post" action="/totp" autocomplete="off">
+  <input type="hidden" name="rd" value="{{.Redirect}}">
   <label for="code">Authenticator code</label>
   <input id="code" name="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*"
          autocomplete="off" autofocus required placeholder="000000">

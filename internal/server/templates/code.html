@@ -4,6 +4,7 @@
 <p class="sub">If {{if .Email}}<strong>{{.Email}}</strong>{{else}}that address{{end}} can sign in, we've sent it a code. Enter it below.</p>
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 <form method="post" action="/verify-code" autocomplete="one-time-code">
+  <input type="hidden" name="rd" value="{{.Redirect}}">
   <label for="code">Sign-in code</label>
   <input id="code" name="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*"
          autocomplete="one-time-code" autofocus required placeholder="000000">

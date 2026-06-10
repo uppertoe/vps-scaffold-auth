@@ -15,6 +15,7 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
+	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
@@ -459,6 +460,100 @@ func TestLogoutGetWhenSignedOutRedirectsToLogin(t *testing.T) {
 	rec := c.get("/logout", nil)
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
 		t.Errorf("GET /logout when signed out should redirect to login; got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// The code form must re-carry the destination as a hidden field: the state
+// cookie alone is fragile (it expires with OTP_TTL and a parallel /request
+// overwrites it), and the form is the only other place rd can survive.
+func TestCodeFormCarriesRedirect(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	rec := c.postForm("/request", url.Values{
+		"email": {"user@example.com"},
+		"rd":    {"https://app.example.com/secret"},
+	})
+	if !strings.Contains(rec.Body.String(), `name="rd" value="https://app.example.com/secret"`) {
+		t.Errorf("code form missing hidden rd field; body:\n%s", rec.Body.String())
+	}
+}
+
+// A missing/expired state cookie (it only lives OTP_TTL) must not strand the
+// destination: the bounce back to /login carries the posted rd, so the user
+// restarts the flow but still lands on the app they were headed to.
+func TestVerifyCodeLostStateCarriesRedirect(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{
+		"email": {"user@example.com"},
+		"rd":    {"https://app.example.com/secret"},
+	})
+	code := sender.code()
+	// Simulate state-cookie expiry (or a different browser context).
+	delete(c.cookies, session.StateCookie)
+
+	rec := c.postForm("/verify-code", url.Values{
+		"code": {code},
+		"rd":   {"https://app.example.com/secret"},
+	})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("/verify-code without state = %d, want 302", rec.Code)
+	}
+	want := "/login?rd=" + url.QueryEscape("https://app.example.com/secret")
+	if loc := rec.Header().Get("Location"); loc != want {
+		t.Fatalf("lost-state bounce = %q, want %q (rd dropped)", loc, want)
+	}
+}
+
+// Two tabs share the single host-only state cookie, so the /request submitted
+// last overwrites the first tab's destination. The final redirect must follow
+// the form the user actually completes (the posted rd), not whichever tab last
+// wrote the cookie.
+func TestVerifyCodePostedRedirectBeatsClobberedState(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+
+	// Tab A: arrives from the app, rd intact.
+	c.postForm("/request", url.Values{
+		"email": {"user@example.com"},
+		"rd":    {"https://app.example.com/secret"},
+	})
+	_ = sender.code() // wait for the first email so reset() can't race it
+	sender.reset()
+
+	// Tab B: a bare login page — overwrites the state cookie with an empty rd
+	// and invalidates tab A's code (SaveCode overwrites).
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	code := sender.code()
+
+	// The user completes tab A's form: latest code + tab A's hidden rd.
+	rec := c.postForm("/verify-code", url.Values{
+		"code": {code},
+		"rd":   {"https://app.example.com/secret"},
+	})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("/verify-code = %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "https://app.example.com/secret" {
+		t.Fatalf("post-login redirect = %q, want tab A's destination (cookie clobber won)", loc)
+	}
+}
+
+// A tampered posted rd must not become an open redirect: it is validated and,
+// when invalid, the state cookie's destination still governs.
+func TestVerifyCodeRejectsForeignPostedRedirect(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{
+		"email": {"user@example.com"},
+		"rd":    {"https://app.example.com/secret"},
+	})
+	rec := c.postForm("/verify-code", url.Values{
+		"code": {sender.code()},
+		"rd":   {"https://evil.com/phish"},
+	})
+	if loc := rec.Header().Get("Location"); loc != "https://app.example.com/secret" {
+		t.Fatalf("post-login redirect = %q, want the cookie rd (foreign posted rd must be ignored)", loc)
 	}
 }
 

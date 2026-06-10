@@ -353,18 +353,43 @@ func (s *Server) hashCode(code string) string {
 	return otp.HashKeyed(code, s.cfg.SessionSecret)
 }
 
+// restartLogin sends the user back to the login page to start over, carrying
+// an already-validated destination when one is known so it survives the
+// restart instead of degrading the eventual login to the bare welcome page.
+func (s *Server) restartLogin(w http.ResponseWriter, r *http.Request, rd string) {
+	loginURL := "/login"
+	if rd != "" {
+		loginURL += "?rd=" + url.QueryEscape(rd)
+	}
+	http.Redirect(w, r, loginURL, http.StatusFound)
+}
+
 // handleVerifyCode checks the submitted OTP code and, on success, issues a
 // session (or starts the admin TOTP step).
 func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
+	// The destination rides in two places: the state cookie (set by /request)
+	// and a hidden field in the code form. Prefer the validated posted copy —
+	// the state cookie is a single host-only cookie, so a second /request in
+	// another tab silently overwrites it, while the hidden field follows the
+	// tab the user actually completes. The cookie is the fallback and still
+	// carries the email and remember flag, which the code form does not post.
+	postedRD := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
 	st, ok := s.sessions.ReadState(r, now)
 	if !ok {
-		http.Redirect(w, r, "/login", http.StatusFound)
+		// No usable state — the cookie only lives for OTP_TTL, so a slow email
+		// or a long pause lands here. The user must restart, but the posted rd
+		// keeps the destination alive across the restart.
+		s.restartLogin(w, r, postedRD)
 		return
+	}
+	rd := postedRD
+	if rd == "" {
+		rd = st.Redirect
 	}
 	if !s.ipLimiter.Allow(clientIP(r)) {
 		s.render(w, http.StatusTooManyRequests, "code", pageData{
-			Error: "Too many attempts. Please wait and try again.", Email: st.Email, Redirect: st.Redirect,
+			Error: "Too many attempts. Please wait and try again.", Email: st.Email, Redirect: rd,
 		})
 		return
 	}
@@ -372,7 +397,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.PostFormValue("code"))
 	res, err := s.store.ConsumeCode(r.Context(), st.Email, s.hashCode(code), s.cfg.OTPMaxAttempts, now)
 	if err != nil {
-		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: st.Redirect})
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
 
@@ -381,27 +406,27 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		role := s.policy.Role(st.Email)
 		if role == authz.RoleDeny {
 			s.sessions.ClearState(w)
-			s.render(w, http.StatusForbidden, "login", pageData{Error: "This account is not permitted.", Redirect: st.Redirect})
+			s.render(w, http.StatusForbidden, "login", pageData{Error: "This account is not permitted.", Redirect: rd})
 			return
 		}
 		if role == authz.RoleAdmin && s.cfg.TOTPEnabled {
-			s.startTOTP(w, r, st.Email, role, st.Redirect, st.Remember, now)
+			s.startTOTP(w, r, st.Email, role, rd, st.Remember, now)
 			return
 		}
-		s.completeLogin(w, r, st.Email, role, st.Redirect, st.Remember, now)
+		s.completeLogin(w, r, st.Email, role, rd, st.Remember, now)
 	case store.ConsumeMismatch:
 		s.render(w, http.StatusUnauthorized, "code", pageData{
-			Error: "Incorrect code. Please try again.", Email: st.Email, Redirect: st.Redirect,
+			Error: "Incorrect code. Please try again.", Email: st.Email, Redirect: rd,
 		})
 	case store.ConsumeTooManyAttempts:
 		s.sessions.ClearState(w)
 		s.render(w, http.StatusUnauthorized, "login", pageData{
-			Error: "Too many incorrect attempts. Please request a new code.", Redirect: st.Redirect,
+			Error: "Too many incorrect attempts. Please request a new code.", Redirect: rd,
 		})
 	default: // ConsumeExpired, ConsumeNoCode
 		s.sessions.ClearState(w)
 		s.render(w, http.StatusUnauthorized, "login", pageData{
-			Error: "Your code has expired. Please request a new one.", Redirect: st.Redirect,
+			Error: "Your code has expired. Please request a new one.", Redirect: rd,
 		})
 	}
 }
@@ -438,26 +463,34 @@ func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, ro
 // handleTOTP verifies an admin's authenticator code and completes login.
 func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
+	// Same dual-carrier scheme as handleVerifyCode: prefer the validated rd
+	// posted by the TOTP form over the (clobberable, OTP_TTL-lived) pending
+	// cookie, and keep the destination alive when the cookie is gone.
+	postedRD := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
 	p, ok := s.sessions.ReadPending(r, now)
 	if !ok {
-		http.Redirect(w, r, "/login", http.StatusFound)
+		s.restartLogin(w, r, postedRD)
 		return
+	}
+	rd := postedRD
+	if rd == "" {
+		rd = p.Redirect
 	}
 	if !s.ipLimiter.Allow(clientIP(r)) {
 		s.render(w, http.StatusTooManyRequests, "totp", pageData{
-			Error: "Too many attempts. Please wait and try again.", Redirect: p.Redirect,
+			Error: "Too many attempts. Please wait and try again.", Redirect: rd,
 		})
 		return
 	}
 	secret, ok, err := s.getTOTPSecret(r.Context(), p.Email)
 	if err != nil || !ok {
-		http.Redirect(w, r, "/login", http.StatusFound)
+		s.restartLogin(w, r, rd)
 		return
 	}
 	code := strings.TrimSpace(r.PostFormValue("code"))
 	if !totp.Validate(code, secret) {
 		s.render(w, http.StatusUnauthorized, "totp", pageData{
-			Error: "Incorrect code. Please try again.", Redirect: p.Redirect,
+			Error: "Incorrect code. Please try again.", Redirect: rd,
 		})
 		return
 	}
@@ -465,11 +498,11 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	// same code so a sniffed/phished code can't be replayed within that window.
 	if !s.totpReplay.use(p.Email, code) {
 		s.render(w, http.StatusUnauthorized, "totp", pageData{
-			Error: "That code has already been used. Wait for your authenticator to show a new one.", Redirect: p.Redirect,
+			Error: "That code has already been used. Wait for your authenticator to show a new one.", Redirect: rd,
 		})
 		return
 	}
-	s.completeLogin(w, r, p.Email, p.Role, p.Redirect, p.Remember, now)
+	s.completeLogin(w, r, p.Email, p.Role, rd, p.Remember, now)
 }
 
 // servedTarget validates rawURL as a post-login destination the gateway can

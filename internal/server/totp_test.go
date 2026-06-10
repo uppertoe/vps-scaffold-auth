@@ -121,6 +121,11 @@ func TestTOTPCodeCannotBeReplayed(t *testing.T) {
 	}
 	// Submit the SAME code through two independent login flows.
 	login := func() int {
+		// Sends are async (detached goroutine in sendCode): without a reset,
+		// sender.code() can return the PREVIOUS login's cached email, whose OTP
+		// was overwritten by this login's /request — a stale code that derails
+		// the flow before the replay check this test is about.
+		sender.reset()
 		c := newClient(t, srv.Handler())
 		c.postForm("/request", url.Values{"email": {"admin@example.com"}})
 		c.postForm("/verify-code", url.Values{"code": {sender.code()}})
@@ -132,6 +137,44 @@ func TestTOTPCodeCannotBeReplayed(t *testing.T) {
 	}
 	if got := login(); got != http.StatusUnauthorized {
 		t.Fatalf("replayed TOTP code = %d, want 401 (rejected)", got)
+	}
+}
+
+// The TOTP flow has the same dual-carrier redirect scheme as the code flow:
+// the challenge form re-carries rd as a hidden field, and a missing/expired
+// pending cookie bounces to /login with the posted rd preserved.
+func TestTOTPRedirectSurvivesLostPending(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+
+	c.postForm("/request", url.Values{
+		"email": {"admin@example.com"},
+		"rd":    {"https://app.example.com/secret"},
+	})
+	rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	if !strings.Contains(rec.Body.String(), `name="rd" value="https://app.example.com/secret"`) {
+		t.Errorf("TOTP form missing hidden rd field; body:\n%s", rec.Body.String())
+	}
+
+	// Pending cookie gone (expired / other browser context): the bounce must
+	// keep the destination.
+	delete(c.cookies, session.PendingCookie)
+	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = c.postForm("/totp", url.Values{
+		"code": {totpCode},
+		"rd":   {"https://app.example.com/secret"},
+	})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("/totp without pending = %d, want 302", rec.Code)
+	}
+	want := "/login?rd=" + url.QueryEscape("https://app.example.com/secret")
+	if loc := rec.Header().Get("Location"); loc != want {
+		t.Fatalf("lost-pending bounce = %q, want %q (rd dropped)", loc, want)
 	}
 }
 
