@@ -505,6 +505,49 @@ func TestVerifyCodeLostStateCarriesRedirect(t *testing.T) {
 	}
 }
 
+// A double-submit of the code form must not strand a user who has already
+// logged in. The first POST consumes the OTP, sets the session, and 302s to the
+// app; a re-tap (un-disabled button on a slow app load, or an iOS autofill race)
+// fires a second POST whose state is gone but whose session is now valid. That
+// second request must forward to the app, NOT bounce back to /login — otherwise
+// an already-authenticated user lands on the login page (the "stuck on auth"
+// reports). The page CSP forbids JS, so this can only be fixed server-side.
+func TestVerifyCodeDoubleSubmitForwardsToApp(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{
+		"email": {"user@example.com"},
+		"rd":    {"https://app.example.com/secret"},
+	})
+	code := sender.code()
+
+	// First submission succeeds: session set, redirect to the app. The client
+	// threads the new session cookie and the cleared state cookie forward.
+	rec := c.postForm("/verify-code", url.Values{
+		"code": {code},
+		"rd":   {"https://app.example.com/secret"},
+	})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("first /verify-code = %d, want 302", rec.Code)
+	}
+	if c.cookies[session.SessionCookie] == nil {
+		t.Fatal("first /verify-code issued no session cookie")
+	}
+
+	// Second submission of the same form: OTP already consumed and state cleared,
+	// but the session cookie now rides along. Must land on the app, not /login.
+	rec = c.postForm("/verify-code", url.Values{
+		"code": {code},
+		"rd":   {"https://app.example.com/secret"},
+	})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("double-submit /verify-code = %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "https://app.example.com/secret" {
+		t.Fatalf("double-submit redirect = %q, want the app (not a /login bounce)", loc)
+	}
+}
+
 // Two tabs share the single host-only state cookie, so the /request submitted
 // last overwrites the first tab's destination. The final redirect must follow
 // the form the user actually completes (the posted rd), not whichever tab last

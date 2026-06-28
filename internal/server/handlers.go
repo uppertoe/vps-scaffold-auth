@@ -377,6 +377,14 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	postedRD := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
 	st, ok := s.sessions.ReadState(r, now)
 	if !ok {
+		// Second submission after the first already succeeded (double-tap, autofill
+		// race, retry on a slow app load): the code is consumed and the state
+		// cleared, but the request now carries the freshly issued session. Don't
+		// bounce an already-authenticated user back to /login — send them onward.
+		if _, ok := s.sessions.ReadSession(r, now); ok {
+			http.Redirect(w, r, s.loginRedirect(postedRD), http.StatusFound)
+			return
+		}
 		// No usable state — the cookie only lives for OTP_TTL, so a slow email
 		// or a long pause lands here. The user must restart, but the posted rd
 		// keeps the destination alive across the restart.
@@ -469,6 +477,14 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	postedRD := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
 	p, ok := s.sessions.ReadPending(r, now)
 	if !ok {
+		// Same double-submit race as handleVerifyCode: the first /totp already
+		// consumed the pending state and issued the session, so a re-tap (or
+		// autofill retry) finds no pending but a valid session. Forward the
+		// already-authenticated user on instead of bouncing them to /login.
+		if _, ok := s.sessions.ReadSession(r, now); ok {
+			http.Redirect(w, r, s.loginRedirect(postedRD), http.StatusFound)
+			return
+		}
 		s.restartLogin(w, r, postedRD)
 		return
 	}

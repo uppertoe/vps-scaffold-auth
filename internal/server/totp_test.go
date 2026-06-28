@@ -178,6 +178,55 @@ func TestTOTPRedirectSurvivesLostPending(t *testing.T) {
 	}
 }
 
+// The TOTP step has the same double-submit hazard as the code step: the first
+// /totp consumes the pending state and issues the session, so a re-tap finds no
+// pending but a valid session. It must forward to the app, not bounce to /login.
+// The TOTP code itself is single-use (replay guard), so the second submit can't
+// re-validate — making the session-forward path the only way the re-tap lands
+// safely rather than stranding an already-signed-in admin.
+func TestTOTPDoubleSubmitForwardsToApp(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+
+	c.postForm("/request", url.Values{
+		"email": {"admin@example.com"},
+		"rd":    {"https://app.example.com/secret"},
+	})
+	c.postForm("/verify-code", url.Values{
+		"code": {sender.code()},
+		"rd":   {"https://app.example.com/secret"},
+	})
+
+	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := c.postForm("/totp", url.Values{
+		"code": {totpCode},
+		"rd":   {"https://app.example.com/secret"},
+	})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("first /totp = %d, want 302", rec.Code)
+	}
+	if c.cookies[session.SessionCookie] == nil {
+		t.Fatal("first /totp issued no session cookie")
+	}
+
+	// Re-tap: pending gone, session present. Must land on the app.
+	rec = c.postForm("/totp", url.Values{
+		"code": {totpCode},
+		"rd":   {"https://app.example.com/secret"},
+	})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("double-submit /totp = %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "https://app.example.com/secret" {
+		t.Fatalf("double-submit redirect = %q, want the app (not a /login bounce)", loc)
+	}
+}
+
 // The admin UI provisions, reports status for, and removes admin TOTP secrets.
 func TestAdminTOTPProvisioning(t *testing.T) {
 	srv, sender := testServer(t) // TOTP disabled, so admin can log in via email only
