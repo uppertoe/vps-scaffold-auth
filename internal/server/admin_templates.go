@@ -199,7 +199,7 @@ func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, status int,
 	if tok, err := s.sessions.EnsureCSRF(w, r, csrfTTL); err == nil {
 		data.CSRF = tok
 	}
-	w.Header().Set("Content-Security-Policy", cspPolicy)
+	w.Header().Set("Content-Security-Policy", s.csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := t.ExecuteTemplate(w, "base", data); err != nil {

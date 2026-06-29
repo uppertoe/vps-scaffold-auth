@@ -600,6 +600,21 @@ func TestVerifyCodeRejectsForeignPostedRedirect(t *testing.T) {
 	}
 }
 
+// The login pages' CSP must permit form-submission redirects to the deployment's
+// own app subdomains. With a bare form-action 'self', Chrome/Safari (and newer
+// Firefox) silently refuse to follow the cross-subdomain 302 a successful login
+// returns, stranding the user on the auth host. The permitted set mirrors the
+// post-login destinations servedTarget allows (subdomains of cfg.Domain).
+func TestLoginCSPAllowsAppSubdomainRedirects(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	rec := c.get("/login", nil)
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "form-action 'self' https://*.example.com") {
+		t.Fatalf("CSP form-action does not allow app subdomains; got %q", csp)
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	srv, _ := testServer(t)
 	c := newClient(t, srv.Handler())

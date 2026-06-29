@@ -5,6 +5,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 	texttemplate "text/template"
 	"time"
 
@@ -29,6 +30,7 @@ type Server struct {
 	ipLimiter    *ratelimit.Limiter
 	totpReplay   *totpReplay
 	access       *accessAudit
+	csp          string // precomputed Content-Security-Policy (see cspPolicy)
 	pages        pages
 	adminPages   pages
 	emailTmpl    *texttemplate.Template
@@ -64,6 +66,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		emailLimiter: ratelimit.New(cfg.RateLimitPerEmail.Count, cfg.RateLimitPerEmail.Window),
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
 		access:       newAccessAudit(st, cfg.AuditRetention),
+		csp:          cspPolicy(cfg.Domain),
 		pages:        tmpls,
 		adminPages:   adminTmpls,
 		emailTmpl:    emailTmpl,
@@ -110,12 +113,27 @@ func (s *Server) routes() http.Handler {
 	return s.securityHeaders(mux)
 }
 
-// cspPolicy is the single Content-Security-Policy applied to every HTML
+// cspPolicy builds the single Content-Security-Policy applied to every HTML
 // response (login and admin alike). It allows same-origin images (the optional
 // branding logo and admin QR previews) and inline styles, but forbids scripts
 // and all other resource types. Served images override this with an even
 // stricter sandbox policy (see writeImage).
-const cspPolicy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+//
+// form-action permits 'self' plus the deployment's own app subdomains
+// (https://*.<domain>). A successful login POST 302-redirects to the destination
+// app, which is always a *different* subdomain than the auth host — and Chrome,
+// Safari, and newer Firefox silently refuse to follow a form-submission redirect
+// whose target isn't listed in form-action, stranding a freshly-authenticated
+// user on the auth host. The permitted set mirrors exactly what servedTarget
+// already allows as a post-login destination (subdomains of cfg.Domain); an
+// off-domain form post stays blocked.
+func cspPolicy(domain string) string {
+	formAction := "'self'"
+	if d := strings.TrimPrefix(domain, "."); d != "" {
+		formAction += " https://*." + d
+	}
+	return "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action " + formAction + "; base-uri 'none'; frame-ancestors 'none'"
+}
 
 // securityHeaders applies conservative defaults to every response. The pages
 // use only inline styles and no scripts, so the CSP can be very tight.
@@ -126,7 +144,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
-		h.Set("Content-Security-Policy", cspPolicy)
+		h.Set("Content-Security-Policy", s.csp)
 		// Pin HTTPS for the auth host and the whole subdomain estate it sits over.
 		// Skipped in dev (CookieInsecure: plain HTTP), where an HSTS pin would make
 		// the host unreachable without TLS.
