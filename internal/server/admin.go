@@ -26,6 +26,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/groups/{name}/delete", s.handleAdminDeleteGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/members", s.handleAdminAddMember)
 	mux.HandleFunc("POST /admin/groups/{name}/members/delete", s.handleAdminRemoveMember)
+	mux.HandleFunc("GET /admin/access", s.handleAdminAccess)
 	mux.HandleFunc("GET /admin/break", s.handleAdminBreakList)
 	mux.HandleFunc("POST /admin/break", s.handleAdminBreakCreate)
 	mux.HandleFunc("GET /admin/break/{id}", s.handleAdminBreakDetail)
@@ -532,6 +533,32 @@ func (s *Server) checkCSRF(w http.ResponseWriter, r *http.Request) bool {
 
 func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/break", http.StatusFound)
+}
+
+// --- Login & access audit ---
+
+// handleAdminAccess shows the login-attempt log and the deduplicated app-access
+// log, optionally filtered to one email. It answers "did X get in, and which
+// apps has X reached, when" — without exposing per-request paths.
+func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
+	email := normalizeEmail(r.URL.Query().Get("email"))
+	const limit = 250
+	logins, err := s.store.ListAuthEvents(r.Context(), email, limit, 0)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	access, err := s.store.ListAppAccess(r.Context(), email, limit, 0)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	s.renderAdmin(w, r, http.StatusOK, "admin_access", adminData{
+		Title:       "Access log",
+		FilterEmail: email,
+		AuthEvents:  toAuthEventViews(logins),
+		AppAccess:   toAppAccessViews(access),
+	})
 }
 
 // --- Groups ---

@@ -59,6 +59,9 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			s.redirectToDenied(w, r)
 			return
 		}
+		// Audit that this principal reached this app, deduplicated to one row per
+		// hour so the per-request hot path stays a memory lookup (see accessAudit).
+		s.access.record(r.Context(), id.Email, r.Header.Get("X-Forwarded-Host"), id.Kind, now)
 		// These headers are the identity passed to the upstream app. Caddy
 		// strips any client-supplied copies before re-adding ours.
 		w.Header().Set("Remote-User", id.Email)
@@ -364,6 +367,22 @@ func (s *Server) restartLogin(w http.ResponseWriter, r *http.Request, rd string)
 	http.Redirect(w, r, loginURL, http.StatusFound)
 }
 
+// recordAuth appends a login-flow audit row (best-effort; a failed write is
+// logged, never surfaced to the user). The clock comes from s.now so tests on a
+// fake clock stay consistent.
+func (s *Server) recordAuth(r *http.Request, email, eventType, outcome string) {
+	if err := s.store.RecordAuthEvent(r.Context(), store.AuthEvent{
+		Email:     email,
+		EventType: eventType,
+		Outcome:   outcome,
+		ClientIP:  clientIP(r),
+		UserAgent: clampUserAgent(r.UserAgent()),
+		CreatedAt: s.now(),
+	}); err != nil {
+		log.Printf("record auth event %s/%s for %s: %v", eventType, outcome, email, err)
+	}
+}
+
 // handleVerifyCode checks the submitted OTP code and, on success, issues a
 // session (or starts the admin TOTP step).
 func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
@@ -413,25 +432,33 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	case store.ConsumeOK:
 		role := s.policy.Role(st.Email)
 		if role == authz.RoleDeny {
+			s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeDenied)
 			s.sessions.ClearState(w)
 			s.render(w, http.StatusForbidden, "login", pageData{Error: "This account is not permitted.", Redirect: rd})
 			return
 		}
 		if role == authz.RoleAdmin && s.cfg.TOTPEnabled {
+			// First factor passed; the login itself is recorded once TOTP completes
+			// (in completeLogin). Record the email step so a never-finished second
+			// factor still shows the first one succeeded.
+			s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeOK)
 			s.startTOTP(w, r, st.Email, role, rd, st.Remember, now)
 			return
 		}
 		s.completeLogin(w, r, st.Email, role, rd, st.Remember, now)
 	case store.ConsumeMismatch:
+		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeWrongCode)
 		s.render(w, http.StatusUnauthorized, "code", pageData{
 			Error: "Incorrect code. Please try again.", Email: st.Email, Redirect: rd,
 		})
 	case store.ConsumeTooManyAttempts:
+		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeLockedOut)
 		s.sessions.ClearState(w)
 		s.render(w, http.StatusUnauthorized, "login", pageData{
 			Error: "Too many incorrect attempts. Please request a new code.", Redirect: rd,
 		})
 	default: // ConsumeExpired, ConsumeNoCode
+		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeExpired)
 		s.sessions.ClearState(w)
 		s.render(w, http.StatusUnauthorized, "login", pageData{
 			Error: "Your code has expired. Please request a new one.", Redirect: rd,
@@ -500,11 +527,15 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	secret, ok, err := s.getTOTPSecret(r.Context(), p.Email)
 	if err != nil || !ok {
+		if err == nil {
+			s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeNoSecret)
+		}
 		s.restartLogin(w, r, rd)
 		return
 	}
 	code := strings.TrimSpace(r.PostFormValue("code"))
 	if !totp.Validate(code, secret) {
+		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeWrongCode)
 		s.render(w, http.StatusUnauthorized, "totp", pageData{
 			Error: "Incorrect code. Please try again.", Redirect: rd,
 		})
@@ -513,6 +544,7 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	// A TOTP code stays valid for its whole ~30s step; reject a second use of the
 	// same code so a sniffed/phished code can't be replayed within that window.
 	if !s.totpReplay.use(p.Email, code) {
+		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeReplayed)
 		s.render(w, http.StatusUnauthorized, "totp", pageData{
 			Error: "That code has already been used. Wait for your authenticator to show a new one.", Redirect: rd,
 		})
@@ -594,6 +626,10 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
+	// The single success funnel for human logins (both code-only and
+	// TOTP-completed); break-glass grants issue their session separately and are
+	// audited in break_glass_events instead.
+	s.recordAuth(r, emailAddr, store.AuthEventLogin, store.AuthOutcomeOK)
 	s.sessions.ClearState(w)
 	s.sessions.ClearPending(w)
 	http.Redirect(w, r, s.loginRedirect(rd), http.StatusFound)

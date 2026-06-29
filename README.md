@@ -299,6 +299,10 @@ Admins (anyone in the `admin` group) get a web UI on the `auth.<domain>` host:
 - **`/admin/groups`** — define named groups (e.g. `whitelisted`) and manage their
   member emails. Memberships surface in `Remote-Groups` at next login/renewal.
 - **`/admin/break`** — manage break-the-glass codes (below).
+- **`/admin/access`** — the access log: login attempts and outcomes, plus which
+  apps each person has reached (deduplicated to one row per user/app/hour, not
+  per request). Filter by email. Rows are pruned after `AUDIT_RETENTION`
+  (default one year; `0` keeps them forever).
 - **`/admin/totp`** — when `TOTP_ENABLED=true`, provision/reset/remove admins'
   two-factor secrets (see [Admin two-factor](#admin-two-factor-optional)).
 - **`/admin/branding`** — two logos plus the break-glass card content. The

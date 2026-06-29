@@ -123,7 +123,29 @@ CREATE TABLE IF NOT EXISTS app_settings (
 	notify_emails       TEXT NOT NULL DEFAULT '',
 	webhook_url         TEXT NOT NULL DEFAULT '',
 	updated_at          INTEGER NOT NULL DEFAULT 0
-);`
+);
+CREATE TABLE IF NOT EXISTS auth_events (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	email      TEXT NOT NULL,
+	event_type TEXT NOT NULL,
+	outcome    TEXT NOT NULL,
+	client_ip  TEXT NOT NULL DEFAULT '',
+	user_agent TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_auth_events_email ON auth_events(email, created_at);
+CREATE INDEX IF NOT EXISTS idx_auth_events_created ON auth_events(created_at);
+CREATE TABLE IF NOT EXISTS app_access (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	email      TEXT NOT NULL,
+	host       TEXT NOT NULL,
+	kind       TEXT NOT NULL DEFAULT '',
+	bucket     INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	UNIQUE (email, host, kind, bucket)
+);
+CREATE INDEX IF NOT EXISTS idx_app_access_email ON app_access(email, created_at);
+CREATE INDEX IF NOT EXISTS idx_app_access_created ON app_access(created_at);`
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
@@ -494,6 +516,100 @@ func (s *SQLite) RecordBreakGlassEvent(ctx context.Context, e BreakGlassEvent) e
 		`INSERT INTO break_glass_events (code_id, label, client_ip, user_agent, outcome, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		e.CodeID, e.Label, e.ClientIP, e.UserAgent, e.Outcome, time.Now().Unix())
+	return err
+}
+
+// RecordAuthEvent appends a login-flow audit row.
+func (s *SQLite) RecordAuthEvent(ctx context.Context, e AuthEvent) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO auth_events (email, event_type, outcome, client_ip, user_agent, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		e.Email, e.EventType, e.Outcome, e.ClientIP, e.UserAgent, e.CreatedAt.Unix())
+	return err
+}
+
+// ListAuthEvents returns login-flow events, newest first. Empty email = all.
+func (s *SQLite) ListAuthEvents(ctx context.Context, email string, limit, offset int) ([]AuthEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	query := `SELECT id, email, event_type, outcome, client_ip, user_agent, created_at FROM auth_events`
+	args := []any{}
+	if email != "" {
+		query += ` WHERE email = ?`
+		args = append(args, email)
+	}
+	query += ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuthEvent
+	for rows.Next() {
+		var e AuthEvent
+		var created int64
+		if err := rows.Scan(&e.ID, &e.Email, &e.EventType, &e.Outcome, &e.ClientIP, &e.UserAgent, &created); err != nil {
+			return nil, err
+		}
+		e.CreatedAt = time.Unix(created, 0)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// RecordAppAccess records one app access, ignoring a repeat within the same hour
+// bucket (the UNIQUE constraint makes this idempotent).
+func (s *SQLite) RecordAppAccess(ctx context.Context, a AppAccess) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO app_access (email, host, kind, bucket, created_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(email, host, kind, bucket) DO NOTHING`,
+		a.Email, a.Host, a.Kind, a.Bucket, a.CreatedAt.Unix())
+	return err
+}
+
+// ListAppAccess returns app-access rows, newest first. Empty email = all.
+func (s *SQLite) ListAppAccess(ctx context.Context, email string, limit, offset int) ([]AppAccess, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	query := `SELECT id, email, host, kind, bucket, created_at FROM app_access`
+	args := []any{}
+	if email != "" {
+		query += ` WHERE email = ?`
+		args = append(args, email)
+	}
+	query += ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AppAccess
+	for rows.Next() {
+		var a AppAccess
+		var created int64
+		if err := rows.Scan(&a.ID, &a.Email, &a.Host, &a.Kind, &a.Bucket, &created); err != nil {
+			return nil, err
+		}
+		a.CreatedAt = time.Unix(created, 0)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// PruneAuditBefore enforces the retention window across both audit tables.
+func (s *SQLite) PruneAuditBefore(ctx context.Context, cutoff time.Time) error {
+	cut := cutoff.Unix()
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM auth_events WHERE created_at < ?`, cut); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM app_access WHERE created_at < ?`, cut)
 	return err
 }
 

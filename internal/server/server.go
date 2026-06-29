@@ -28,6 +28,7 @@ type Server struct {
 	emailLimiter *ratelimit.Limiter
 	ipLimiter    *ratelimit.Limiter
 	totpReplay   *totpReplay
+	access       *accessAudit
 	pages        pages
 	adminPages   pages
 	emailTmpl    *texttemplate.Template
@@ -62,6 +63,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		secrets:      secrets,
 		emailLimiter: ratelimit.New(cfg.RateLimitPerEmail.Count, cfg.RateLimitPerEmail.Window),
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
+		access:       newAccessAudit(st, cfg.AuditRetention),
 		pages:        tmpls,
 		adminPages:   adminTmpls,
 		emailTmpl:    emailTmpl,

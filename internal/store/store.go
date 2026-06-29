@@ -37,6 +37,24 @@ const (
 	OutcomeUnknown = "unknown"
 )
 
+// Human-login audit event types, recorded in auth_events.
+const (
+	AuthEventVerify = "verify" // email OTP code verification attempt
+	AuthEventTOTP   = "totp"   // admin second-factor verification attempt
+	AuthEventLogin  = "login"  // a session was issued (login succeeded)
+)
+
+// Human-login audit event outcomes.
+const (
+	AuthOutcomeOK        = "ok"
+	AuthOutcomeWrongCode = "wrong_code"
+	AuthOutcomeExpired   = "expired"
+	AuthOutcomeLockedOut = "locked_out"
+	AuthOutcomeDenied    = "denied"
+	AuthOutcomeReplayed  = "replayed"
+	AuthOutcomeNoSecret  = "totp_not_provisioned"
+)
+
 // Group is a named, DB-managed group surfaced via Remote-Groups.
 type Group struct {
 	Name      string
@@ -69,6 +87,35 @@ type BreakGlassEvent struct {
 	ClientIP  string
 	UserAgent string
 	Outcome   string
+	CreatedAt time.Time
+}
+
+// AuthEvent records one step of a human login flow — a code verification, a TOTP
+// check, or a completed login — for the admin access log. It is the human-login
+// analogue of BreakGlassEvent. The email is whatever the user submitted, so a
+// failed attempt may carry an arbitrary address.
+type AuthEvent struct {
+	ID        int64
+	Email     string
+	EventType string // AuthEvent* constant
+	Outcome   string // AuthOutcome* constant
+	ClientIP  string
+	UserAgent string
+	CreatedAt time.Time
+}
+
+// AppAccess records that a principal reached a protected app, deduplicated to one
+// row per (email, host, kind, hour bucket). It answers "who reached which app,
+// when" without persisting every request/path. Bucket is the Unix hour
+// (created_at / 3600) and backs the dedup uniqueness constraint; CreatedAt is the
+// first sighting within that hour. Kind mirrors the session kind ("" for a normal
+// login, KindBreakGlass for emergency access).
+type AppAccess struct {
+	ID        int64
+	Email     string
+	Host      string
+	Kind      string
+	Bucket    int64
 	CreatedAt time.Time
 }
 
@@ -228,6 +275,24 @@ type Store interface {
 	GetAppSettings(ctx context.Context) (AppSettings, error)
 	// SaveAppSettings upserts the runtime settings.
 	SaveAppSettings(ctx context.Context, breakglassSecs int, notifyEmails, webhookURL string) error
+
+	// --- Login & access audit ---
+
+	// RecordAuthEvent appends a login-flow audit row. CreatedAt is taken from the
+	// supplied value (callers pass the server clock).
+	RecordAuthEvent(ctx context.Context, e AuthEvent) error
+	// ListAuthEvents returns login-flow events, newest first, paginated. An empty
+	// email lists across all addresses.
+	ListAuthEvents(ctx context.Context, email string, limit, offset int) ([]AuthEvent, error)
+	// RecordAppAccess records one app access, deduplicated on
+	// (email, host, kind, bucket): a repeat within the same hour is a no-op.
+	RecordAppAccess(ctx context.Context, a AppAccess) error
+	// ListAppAccess returns app-access rows, newest first, paginated. An empty
+	// email lists across all addresses.
+	ListAppAccess(ctx context.Context, email string, limit, offset int) ([]AppAccess, error)
+	// PruneAuditBefore deletes auth_events and app_access rows older than cutoff,
+	// enforcing the retention window.
+	PruneAuditBefore(ctx context.Context, cutoff time.Time) error
 
 	// Close releases underlying resources.
 	Close() error

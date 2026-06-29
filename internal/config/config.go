@@ -67,6 +67,10 @@ type Config struct {
 	RateLimitPerEmail RateLimit
 	RateLimitPerIP    RateLimit
 
+	// AuditRetention bounds how long login-attempt and app-access audit rows are
+	// kept before opportunistic pruning. Zero disables pruning (keep forever).
+	AuditRetention time.Duration
+
 	SQLitePath string
 	ListenAddr string
 }
@@ -139,6 +143,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.RateLimitPerIP, err = getrate("RATELIMIT_PER_IP", RateLimit{20, 15 * time.Minute}); err != nil {
+		return nil, err
+	}
+	// Default audit retention: one year. Set AUDIT_RETENTION=0 to keep forever.
+	if c.AuditRetention, err = getdur("AUDIT_RETENTION", 365*24*time.Hour); err != nil {
 		return nil, err
 	}
 

@@ -1,0 +1,61 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+<h1>Access log</h1>
+<p class="sub">Login attempts and the apps each person has reached. App access is deduplicated to one row per person, app, and hour &mdash; not per request.</p>
+
+<div class="panel">
+  <form method="get" action="/admin/access" class="row">
+    <div style="flex:1 1 280px">
+      <label for="email">Filter by email</label>
+      <input id="email" name="email" type="email" value="{{.FilterEmail}}" placeholder="person@example.com">
+    </div>
+    <div style="flex:0 0 auto; align-self:end">
+      <button type="submit">Filter</button>
+      {{if .FilterEmail}}<a href="/admin/access" style="margin-left:10px">Clear</a>{{end}}
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">App access</h2>
+  {{if .AppAccess}}
+  <table>
+    <thead><tr><th>When</th><th>Email</th><th>App</th><th>Type</th></tr></thead>
+    <tbody>
+    {{range .AppAccess}}
+      <tr>
+        <td class="muted">{{.Time}}</td>
+        <td>{{.Email}}</td>
+        <td><code class="mono">{{.Host}}</code></td>
+        <td>{{if .BreakGlass}}<span class="pill off">break-glass</span>{{else}}<span class="pill ok">login</span>{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No app-access records{{if .FilterEmail}} for this address{{end}} yet.</p>
+  {{end}}
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">Login attempts</h2>
+  {{if .AuthEvents}}
+  <table>
+    <thead><tr><th>When</th><th>Email</th><th>Step</th><th>Outcome</th><th>Client IP</th></tr></thead>
+    <tbody>
+    {{range .AuthEvents}}
+      <tr>
+        <td class="muted">{{.Time}}</td>
+        <td>{{.Email}}</td>
+        <td><code class="mono">{{.Type}}</code></td>
+        <td>{{if .OK}}<span class="pill ok">{{.Outcome}}</span>{{else}}<span class="pill off">{{.Outcome}}</span>{{end}}</td>
+        <td><code class="mono">{{.ClientIP}}</code></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No login attempts{{if .FilterEmail}} for this address{{end}} yet.</p>
+  {{end}}
+</div>
+{{end}}

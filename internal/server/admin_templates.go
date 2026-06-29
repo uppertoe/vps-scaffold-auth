@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
@@ -25,6 +26,63 @@ type adminData struct {
 	TOTPEnabled bool
 	TOTPAdmins  []totpAdminView
 	NewTOTP     *newTOTPView // freshly minted secret, shown once
+	// Access-log page.
+	FilterEmail string
+	AuthEvents  []authEventView
+	AppAccess   []appAccessView
+}
+
+// authEventView is one login-flow attempt row on the access-log page.
+type authEventView struct {
+	Time      string
+	Email     string
+	Type      string
+	Outcome   string
+	OK        bool // outcome was a success (drives the pill colour)
+	ClientIP  string
+	UserAgent string
+}
+
+// appAccessView is one deduplicated app-access row on the access-log page.
+type appAccessView struct {
+	Time       string
+	Email      string
+	Host       string
+	Kind       string // "login" or "break-glass"
+	BreakGlass bool
+}
+
+func toAuthEventViews(es []store.AuthEvent) []authEventView {
+	out := make([]authEventView, 0, len(es))
+	for _, e := range es {
+		out = append(out, authEventView{
+			Time:      e.CreatedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+			Email:     e.Email,
+			Type:      e.EventType,
+			Outcome:   e.Outcome,
+			OK:        e.Outcome == store.AuthOutcomeOK,
+			ClientIP:  e.ClientIP,
+			UserAgent: e.UserAgent,
+		})
+	}
+	return out
+}
+
+func toAppAccessViews(as []store.AppAccess) []appAccessView {
+	out := make([]appAccessView, 0, len(as))
+	for _, a := range as {
+		v := appAccessView{
+			Time:  a.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"),
+			Email: a.Email,
+			Host:  a.Host,
+			Kind:  "login",
+		}
+		if a.Kind == session.KindBreakGlass {
+			v.Kind, v.BreakGlass = "break-glass", true
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // totpAdminView is one configured admin's enrolment status on the 2FA page.
@@ -117,7 +175,7 @@ func loadAdminTemplates() (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_message", "admin_groups", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp"} {
+	for _, name := range []string{"admin_message", "admin_groups", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err
