@@ -231,6 +231,24 @@ ON CONFLICT(email) DO NOTHING`,
 	return err
 }
 
+// HasRecentCode reports whether a code row exists for email with an expiry later
+// than minExpiry. Issue time is derived from expires_at (which equals issue time
+// + OTP_TTL), so a row surviving this filter was minted within the cooldown
+// window. See the Store interface.
+func (s *SQLite) HasRecentCode(ctx context.Context, email string, minExpiry time.Time) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM codes WHERE email = ? AND expires_at > ?`,
+		email, minExpiry.Unix()).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // DeleteExpiredCodes prunes code rows past their expiry.
 func (s *SQLite) DeleteExpiredCodes(ctx context.Context, now time.Time) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM codes WHERE expires_at < ?`, now.Unix())

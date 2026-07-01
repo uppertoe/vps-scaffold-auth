@@ -40,6 +40,35 @@ func TestConsumeCodeHappyPath(t *testing.T) {
 	}
 }
 
+func TestHasRecentCode(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_700_000_000, 0)
+	const ttl = 10 * time.Minute
+	const cooldown = time.Minute
+	// Callers pass minExpiry = now + TTL - cooldown: a code counts as "recent" iff
+	// its expiry is later than this, i.e. it was issued within the last `cooldown`.
+	minExpiry := now.Add(ttl - cooldown)
+
+	// No row at all → not recent.
+	if got, err := s.HasRecentCode(ctx, "a@example.com", minExpiry); err != nil || got {
+		t.Fatalf("no row: got %v err %v, want false", got, err)
+	}
+
+	// Freshly issued (expires now+TTL) → recent.
+	_ = s.SaveCode(ctx, "a@example.com", "hash1", now.Add(ttl))
+	if got, err := s.HasRecentCode(ctx, "a@example.com", minExpiry); err != nil || !got {
+		t.Fatalf("fresh row: got %v err %v, want true", got, err)
+	}
+
+	// Issued just over a cooldown ago (expires now+TTL-cooldown-1s, i.e. not later
+	// than minExpiry) → stale, so a resend should be allowed.
+	_ = s.SaveCode(ctx, "a@example.com", "hash1", now.Add(ttl-cooldown-time.Second))
+	if got, err := s.HasRecentCode(ctx, "a@example.com", minExpiry); err != nil || got {
+		t.Fatalf("stale row: got %v err %v, want false", got, err)
+	}
+}
+
 func TestConsumeCodeExpired(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

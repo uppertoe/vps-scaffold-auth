@@ -15,6 +15,7 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
+	"github.com/uppertoe/vps-scaffold-auth/internal/ratelimit"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
@@ -233,6 +234,149 @@ func TestWrongCodeRejected(t *testing.T) {
 	rec = c.get("/verify", nil)
 	if rec.Code == http.StatusOK {
 		t.Error("/verify should not grant after a wrong code")
+	}
+}
+
+// TestResendWithinCooldownIsNoOp is the regression for the resend-abuse path: a
+// re-request while a live code is still fresh must not mint a new code, must not
+// email, and — critically — must leave the existing code (and its attempt
+// counter) intact, so a back-button / refresh / new-tab re-request can't reset
+// the brute-force cap or spam the inbox. The original code must still verify.
+func TestResendWithinCooldownIsNoOp(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.OTPResendCooldown = time.Minute
+	base := time.Unix(1_700_000_000, 0)
+	clock := base
+	srv.now = func() time.Time { return clock }
+	c := newClient(t, srv.Handler())
+
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	first := sender.code()
+	if first == "" {
+		t.Fatal("no first code captured")
+	}
+	sender.reset()
+
+	// Re-request 30s later, well within the 60s cooldown.
+	clock = base.Add(30 * time.Second)
+	rec := c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("re-request status = %d, want 200", rec.Code)
+	}
+	if got := sender.code(); got != "" {
+		t.Fatalf("a second email was sent within the cooldown (code %q)", got)
+	}
+
+	// The original code is untouched and still verifies.
+	rec = c.postForm("/verify-code", url.Values{"code": {first}})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("verify with original code status = %d, want 302 (still valid)", rec.Code)
+	}
+}
+
+// TestResendWithinCooldownDoesNotResetAttempts is the security core: a
+// within-cooldown resend must not reset the brute-force attempt counter (which is
+// how the resend abuse would otherwise let an attacker retry a code indefinitely).
+// It burns attempts to one below the cap, resends within the cooldown, then
+// confirms the next wrong code locks out rather than starting a fresh budget.
+func TestResendWithinCooldownDoesNotResetAttempts(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.cfg.OTPResendCooldown = time.Minute // OTPMaxAttempts stays at the default 5
+	base := time.Unix(1_700_000_000, 0)
+	clock := base
+	srv.now = func() time.Time { return clock }
+	c := newClient(t, srv.Handler())
+
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+
+	// Four wrong codes: attempts = 4, still one below the cap of 5.
+	for i := 0; i < 4; i++ {
+		rec := c.postForm("/verify-code", url.Values{"code": {"000000"}})
+		if !strings.Contains(rec.Body.String(), "Incorrect code") {
+			t.Fatalf("attempt %d: body = %q, want \"Incorrect code\"", i+1, rec.Body.String())
+		}
+	}
+
+	// Resend within the cooldown. If this reset the counter, the next wrong code
+	// would merely be "Incorrect code" again instead of tripping the cap.
+	clock = base.Add(10 * time.Second)
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+
+	rec := c.postForm("/verify-code", url.Values{"code": {"000000"}}) // 5th wrong overall
+	if !strings.Contains(rec.Body.String(), "Too many incorrect attempts") {
+		t.Fatalf("expected lockout after the cap; the resend reset the counter. body = %q", rec.Body.String())
+	}
+}
+
+// TestResendAfterCooldownMintsFresh confirms that once the cooldown lapses a
+// re-request behaves as normal: a fresh code is minted and emailed, and the
+// stale code is overwritten (SaveCode resets the row), so it no longer verifies.
+func TestResendAfterCooldownMintsFresh(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.OTPResendCooldown = time.Minute
+	base := time.Unix(1_700_000_000, 0)
+	clock := base
+	srv.now = func() time.Time { return clock }
+	c := newClient(t, srv.Handler())
+
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	first := sender.code()
+	if first == "" {
+		t.Fatal("no first code captured")
+	}
+	sender.reset()
+
+	// Re-request after the cooldown has fully lapsed.
+	clock = base.Add(2 * time.Minute)
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	second := sender.code()
+	if second == "" {
+		t.Fatal("no fresh code emailed after the cooldown lapsed")
+	}
+
+	// The stale code is gone (row overwritten); the fresh code verifies.
+	rec := c.postForm("/verify-code", url.Values{"code": {first}})
+	if rec.Code == http.StatusFound {
+		t.Fatal("stale code still verified after a fresh code was minted")
+	}
+	rec = c.postForm("/verify-code", url.Values{"code": {second}})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("verify with fresh code status = %d, want 302", rec.Code)
+	}
+}
+
+// TestResendOverSendLimitDoesNotClobber covers the over-limit branch: when a
+// permitted address is past its per-email send limit and its live code is stale
+// (so the no-op guard doesn't fire), the request must fall back to the decoy
+// path (insert-if-absent) rather than overwriting a code it can no longer
+// re-deliver. The still-live code must keep working.
+func TestResendOverSendLimitDoesNotClobber(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.OTPResendCooldown = time.Minute
+	srv.emailLimiter = ratelimit.New(1, time.Minute) // one send, then over-limit
+	base := time.Unix(1_700_000_000, 0)
+	clock := base
+	srv.now = func() time.Time { return clock }
+	c := newClient(t, srv.Handler())
+
+	c.postForm("/request", url.Values{"email": {"user@example.com"}}) // spends the one token
+	first := sender.code()
+	if first == "" {
+		t.Fatal("no first code captured")
+	}
+	sender.reset()
+
+	// Past the cooldown (so not a no-op) but over the send limit: must not clobber.
+	clock = base.Add(2 * time.Minute)
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	if got := sender.code(); got != "" {
+		t.Fatalf("a code was emailed while over the send limit (code %q)", got)
+	}
+
+	// The original (still within its 10m TTL) code was not overwritten.
+	rec := c.postForm("/verify-code", url.Values{"code": {first}})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("verify with original code status = %d, want 302 (not clobbered)", rec.Code)
 	}
 }
 

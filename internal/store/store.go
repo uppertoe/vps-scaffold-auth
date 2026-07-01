@@ -178,6 +178,14 @@ type Store interface {
 	// non-permitted addresses (closing an allow-list enumeration oracle).
 	EnsureCode(ctx context.Context, email, codeHash string, expiresAt time.Time) error
 
+	// HasRecentCode reports whether an unconsumed code exists for email whose
+	// expiry is later than minExpiry. Callers pass minExpiry = now + OTPTTL -
+	// cooldown, i.e. "issued within the cooldown window", to suppress re-minting a
+	// still-fresh code. Because ConsumeCode deletes a row on lockout/expiry, any
+	// surviving row is by definition still usable, so no separate liveness check is
+	// needed.
+	HasRecentCode(ctx context.Context, email string, minExpiry time.Time) (bool, error)
+
 	// ConsumeCode atomically checks candidateHash against the stored code for
 	// email, enforcing expiry and the attempt cap, and consumes the code on a
 	// successful match.

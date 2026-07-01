@@ -85,6 +85,34 @@ func TestRenewMustBeBelowTTL(t *testing.T) {
 	}
 }
 
+func TestResendCooldownDefault(t *testing.T) {
+	setValid(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OTPResendCooldown.Seconds() != 60 {
+		t.Errorf("OTPResendCooldown default = %v, want 60s", c.OTPResendCooldown)
+	}
+}
+
+func TestResendCooldownMustBeBelowTTL(t *testing.T) {
+	setValid(t)
+	t.Setenv("OTP_TTL", "5m")
+	t.Setenv("OTP_RESEND_COOLDOWN", "5m") // >= TTL: the code expires before the resend unlocks
+	if _, err := Load(); err == nil {
+		t.Error("expected error when OTP_RESEND_COOLDOWN >= OTP_TTL")
+	}
+}
+
+func TestResendCooldownMustBePositive(t *testing.T) {
+	setValid(t)
+	t.Setenv("OTP_RESEND_COOLDOWN", "0s") // disabling the guard is not allowed
+	if _, err := Load(); err == nil {
+		t.Error("expected error when OTP_RESEND_COOLDOWN <= 0")
+	}
+}
+
 func TestRateLimitParsing(t *testing.T) {
 	setValid(t)
 	t.Setenv("RATELIMIT_PER_EMAIL", "3/10m")

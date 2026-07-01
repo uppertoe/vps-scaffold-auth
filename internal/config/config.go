@@ -43,6 +43,10 @@ type Config struct {
 	OTPTTL         time.Duration
 	OTPLength      int
 	OTPMaxAttempts int
+	// OTPResendCooldown suppresses re-minting a code while a live one is still
+	// fresh: a /request within this window of the last send is a no-op (keeps the
+	// existing code, sends no email). Must be 0 < cooldown < OTPTTL.
+	OTPResendCooldown time.Duration
 
 	EmailBackend string // smtp | resend | log
 	EmailFrom    string
@@ -136,6 +140,9 @@ func Load() (*Config, error) {
 	if c.OTPMaxAttempts, err = getint("OTP_MAX_ATTEMPTS", 5); err != nil {
 		return nil, err
 	}
+	if c.OTPResendCooldown, err = getdur("OTP_RESEND_COOLDOWN", 60*time.Second); err != nil {
+		return nil, err
+	}
 	if c.SMTPPort, err = getint("SMTP_PORT", 587); err != nil {
 		return nil, err
 	}
@@ -209,6 +216,12 @@ func (c *Config) validate() error {
 	}
 	if c.OTPMaxAttempts < 1 {
 		return fmt.Errorf("OTP_MAX_ATTEMPTS must be >= 1 (got %d)", c.OTPMaxAttempts)
+	}
+	// A cooldown >= TTL means a code always expires before its resend unlocks, so
+	// the user could never legitimately resend; a non-positive one disables the
+	// no-op guard entirely.
+	if c.OTPResendCooldown <= 0 || c.OTPResendCooldown >= c.OTPTTL {
+		return fmt.Errorf("OTP_RESEND_COOLDOWN (%s) must be > 0 and < OTP_TTL (%s)", c.OTPResendCooldown, c.OTPTTL)
 	}
 	if c.TOTPEnabled && c.TOTPIssuer == "" {
 		c.TOTPIssuer = c.Domain

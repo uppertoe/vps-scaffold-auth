@@ -295,9 +295,32 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// off-domain addresses are admins. Either branch falls through to the same
 	// response. EnsureCode is insert-if-absent, so a rate-limited permitted user's
 	// live code is never overwritten.
-	if s.policy.Allowed(emailAddr) && s.emailLimiter.Allow(emailAddr) {
-		if err := s.sendCode(r, emailAddr, now); err != nil {
-			log.Printf("send code to %s: %v", emailAddr, err)
+	if s.policy.Allowed(emailAddr) {
+		// Suppress a re-request while the last code is still fresh: a code minted
+		// within the cooldown window has expires_at > now + OTPTTL - cooldown.
+		// Deriving issue time from expiry is exact because SaveCode sets
+		// expires_at = issue + OTPTTL.
+		minExpiry := now.Add(s.cfg.OTPTTL - s.cfg.OTPResendCooldown)
+		recent, err := s.store.HasRecentCode(r.Context(), emailAddr, minExpiry)
+		if err != nil {
+			log.Printf("recent-code check for %s: %v", emailAddr, err)
+		}
+		switch {
+		case recent:
+			// No-op: a live code was issued within the cooldown. Don't mint, don't
+			// email, don't spend a send token. The existing code's attempt counter
+			// stays intact, so a re-request can't reset the brute-force cap — which
+			// is the guard that survives back-button / refresh / new-tab.
+		case s.emailLimiter.Allow(emailAddr):
+			if err := s.sendCode(r, emailAddr, now); err != nil { // SaveCode(overwrite) + email
+				log.Printf("send code to %s: %v", emailAddr, err)
+			}
+		default:
+			// Over the send limit: do NOT clobber a possibly-live code we can't
+			// re-deliver. Fall back to the decoy path (EnsureCode is insert-if-absent).
+			if err := s.storeDecoyCode(r.Context(), emailAddr, now); err != nil {
+				log.Printf("store decoy code for %s: %v", emailAddr, err)
+			}
 		}
 	} else if err := s.storeDecoyCode(r.Context(), emailAddr, now); err != nil {
 		log.Printf("store decoy code for %s: %v", emailAddr, err)
