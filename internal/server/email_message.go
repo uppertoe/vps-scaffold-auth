@@ -54,7 +54,12 @@ func (s *Server) buildCodeEmail(ctx context.Context, to, code string) email.Mess
 		"If you didn't request it, you can safely ignore this email — no one can sign in without it.",
 		s.cfg.BrandName, code, mins, plural(mins))
 
-	return email.Message{To: to, Subject: "Your sign-in code", Text: text, HTML: htmlBody}
+	// Lead the subject with the code so it's visible in the inbox list and
+	// notification preview (and offered by one-time-code autofill) without opening
+	// the mail. The code is a server-generated numeric string, so it's safe in the
+	// header; sanitizeHeader strips CRLF as defence-in-depth.
+	subject := fmt.Sprintf("%s is your sign-in code", code)
+	return email.Message{To: to, Subject: subject, Text: text, HTML: htmlBody}
 }
 
 // renderCodeEmailHTML executes the email template, falling back to a minimal

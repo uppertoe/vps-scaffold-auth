@@ -70,6 +70,12 @@ type Config struct {
 
 	RateLimitPerEmail RateLimit
 	RateLimitPerIP    RateLimit
+	// RateLimitBreakGlassPerIP throttles break-glass QR scans per client IP. It is
+	// deliberately separate from (and more generous than) RateLimitPerIP: the
+	// 128-bit token — not this limit — is the brute-force boundary at /break, so
+	// this is only an anti-abuse guard, and emergency access must not be throttled
+	// when many staff scan from behind one shared egress IP (e.g. a hospital NAT).
+	RateLimitBreakGlassPerIP RateLimit
 
 	// AuditRetention bounds how long login-attempt and app-access audit rows are
 	// kept before opportunistic pruning. Zero disables pruning (keep forever).
@@ -149,7 +155,14 @@ func Load() (*Config, error) {
 	if c.RateLimitPerEmail, err = getrate("RATELIMIT_PER_EMAIL", RateLimit{5, 15 * time.Minute}); err != nil {
 		return nil, err
 	}
-	if c.RateLimitPerIP, err = getrate("RATELIMIT_PER_IP", RateLimit{20, 15 * time.Minute}); err != nil {
+	// Per-IP limit for the login flow. This is a secondary guard — the per-email
+	// limit and the per-code attempt cap are the primary brute-force bounds — so
+	// it is set generously enough not to throttle many distinct users behind one
+	// shared egress IP (e.g. a hospital or office NAT).
+	if c.RateLimitPerIP, err = getrate("RATELIMIT_PER_IP", RateLimit{60, 15 * time.Minute}); err != nil {
+		return nil, err
+	}
+	if c.RateLimitBreakGlassPerIP, err = getrate("RATELIMIT_BREAKGLASS_PER_IP", RateLimit{60, 5 * time.Minute}); err != nil {
 		return nil, err
 	}
 	// Default audit retention: one year. Set AUDIT_RETENTION=0 to keep forever.

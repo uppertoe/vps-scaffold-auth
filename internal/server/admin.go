@@ -505,7 +505,12 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 		// A break-glass session must never reach the admin UI, even if its
 		// target group is somehow "admin": the admin tier requires a real login
 		// (and TOTP when enabled), not a bearer QR scan.
-		if !ok || id.Kind == session.KindBreakGlass || !authz.HasGroup(id.Groups, authz.RoleAdmin) {
+		admin := ok && id.Kind != session.KindBreakGlass && authz.HasGroup(id.Groups, authz.RoleAdmin)
+		// A first-factor-only admin session (minted before TOTP was enabled) is
+		// bounced to a fresh login so the TOTP step runs, rather than being
+		// honoured here. needsAdminStepUp is only evaluated once admin is true, so
+		// id is non-nil. See handleVerify for the same enforcement on /verify.
+		if !admin || s.needsAdminStepUp(admin, id.TOTP) {
 			rd := s.cfg.PublicURL + r.URL.RequestURI()
 			http.Redirect(w, r, s.cfg.PublicURL+"/login?rd="+url.QueryEscape(rd), http.StatusFound)
 			return

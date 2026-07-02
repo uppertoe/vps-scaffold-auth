@@ -258,6 +258,14 @@ admin tier you can require TOTP: set `TOTP_ENABLED=true`. Once enabled, an admin
 must enter a 6-digit authenticator code after the email step; regular users stay
 code-only.
 
+**Enabling TOTP re-challenges existing admin sessions.** Admin sessions minted
+before TOTP was turned on carry no second-factor assurance, so the gateway stops
+honouring them for admin access (at `/verify` and the `/admin` UI) and bounces
+them to a fresh login that runs the TOTP step — the switch can't be bypassed by
+riding a pre-existing cookie. **Provision admins' secrets before you flip
+`TOTP_ENABLED`** (bootstrap the first one with the `-totp-enroll` CLI below):
+once it's on, an admin with no secret is locked out until one is issued.
+
 **Secrets are admin-provisioned, never self-enrolled.** A login only proves
 control of the inbox — so letting a login *bootstrap* its own TOTP secret would
 hand the second factor to whoever controls the inbox, defeating the point. So
@@ -366,7 +374,12 @@ still reach an app during a time-critical event (e.g. a code stroke).
 - No user enumeration: `/request` always responds the same way, and the OTP
   email is dispatched off the request path so response timing doesn't reveal
   whether an address is permitted.
-- Per-email and per-IP rate limiting.
+- Per-email and per-IP rate limiting. The per-email limit plus the per-code
+  attempt cap are the primary brute-force bounds; the per-IP limit is a secondary
+  guard, kept generous (default `60/15m`) so a shared egress IP (e.g. a hospital
+  NAT) doesn't throttle many distinct users. Break-glass scans use a separate,
+  more permissive per-IP limit (`RATELIMIT_BREAKGLASS_PER_IP`) since the 128-bit
+  token — not the IP throttle — is the real boundary there.
 - Open-redirect safe: the post-login target must be `https` and on a subdomain
   of the server domain. A login with no app target (or one resolving to the bare
   apex) lands on the auth host's own signed-in page instead — that host always

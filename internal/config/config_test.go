@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // setValid sets a minimal valid environment; individual tests override pieces.
 func setValid(t *testing.T) {
@@ -122,6 +125,26 @@ func TestRateLimitParsing(t *testing.T) {
 	}
 	if c.RateLimitPerEmail.Count != 3 || c.RateLimitPerEmail.Window.Minutes() != 10 {
 		t.Errorf("RateLimitPerEmail = %+v", c.RateLimitPerEmail)
+	}
+}
+
+func TestBreakGlassRateLimitDefaultAndOverride(t *testing.T) {
+	setValid(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Default: its own generous rule, distinct from the login per-IP limit.
+	if c.RateLimitBreakGlassPerIP.Count != 60 || c.RateLimitBreakGlassPerIP.Window != 5*time.Minute {
+		t.Errorf("default RateLimitBreakGlassPerIP = %+v", c.RateLimitBreakGlassPerIP)
+	}
+	t.Setenv("RATELIMIT_BREAKGLASS_PER_IP", "120/10m")
+	c, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RateLimitBreakGlassPerIP.Count != 120 || c.RateLimitBreakGlassPerIP.Window != 10*time.Minute {
+		t.Errorf("override RateLimitBreakGlassPerIP = %+v", c.RateLimitBreakGlassPerIP)
 	}
 }
 

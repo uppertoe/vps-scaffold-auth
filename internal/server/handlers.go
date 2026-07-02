@@ -39,11 +39,30 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				s.redirectToLogin(w, r)
 				return
 			}
+			// Re-challenge for the admin second factor before extending the
+			// session: an admin whose cookie predates TOTP being enabled — or a
+			// principal only just promoted to admin — carries totp=false and must
+			// complete the TOTP step rather than sliding forward on the email code
+			// alone. Clearing + redirecting sends them through the normal login,
+			// which runs startTOTP for an admin when TOTP is enabled.
+			if s.needsAdminStepUp(role == authz.RoleAdmin, id.TOTP) {
+				s.sessions.ClearSession(w)
+				s.redirectToLogin(w, r)
+				return
+			}
 			groups := s.computeGroups(r.Context(), id.Email, role)
-			_ = s.sessions.IssueSessionTTL(w, id.Email, groups, id.Kind, s.sessions.SessionTTL(id), now)
+			_ = s.sessions.IssueSessionTTL(w, id.Email, groups, id.Kind, id.TOTP, s.sessions.SessionTTL(id), now)
 			// Reflect the freshly computed set in this response too, not just
 			// the renewed cookie, so a demotion takes effect immediately.
 			id.Groups = groups
+		} else if s.needsAdminStepUp(id.Kind != session.KindBreakGlass && authz.HasGroup(id.Groups, authz.RoleAdmin), id.TOTP) {
+			// Not yet due for renewal, but an existing admin session that lacks the
+			// second factor (TOTP was enabled after it was minted) must step up now
+			// rather than riding a first-factor-only cookie for up to
+			// SESSION_RENEW_AFTER. Break-glass sessions are excluded (never admin).
+			s.sessions.ClearSession(w)
+			s.redirectToLogin(w, r)
+			return
 		}
 		// Per-app authorization. The app's Caddy snippet declares who may reach it
 		// in a single X-Auth-Policy header set with header_up (replace semantics),
@@ -468,7 +487,9 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 			s.startTOTP(w, r, st.Email, role, rd, st.Remember, now)
 			return
 		}
-		s.completeLogin(w, r, st.Email, role, rd, st.Remember, now)
+		// Code-only completion: either a non-admin, or TOTP is disabled. No second
+		// factor was presented, so the session records totp=false.
+		s.completeLogin(w, r, st.Email, role, rd, st.Remember, false, now)
 	case store.ConsumeMismatch:
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeWrongCode)
 		s.render(w, http.StatusUnauthorized, "code", pageData{
@@ -573,7 +594,8 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.completeLogin(w, r, p.Email, p.Role, rd, p.Remember, now)
+	// TOTP satisfied: the session carries the second-factor assurance.
+	s.completeLogin(w, r, p.Email, p.Role, rd, p.Remember, true, now)
 }
 
 // servedTarget validates rawURL as a post-login destination the gateway can
@@ -638,14 +660,17 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 }
 
 // completeLogin bakes the group set, issues the session cookie (using the
-// remember-me lifetime when requested), and redirects to the target.
-func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember bool, now time.Time) {
+// remember-me lifetime when requested), and redirects to the target. totpVerified
+// records whether the admin second factor was satisfied for this login, so a
+// later /verify can tell a fully-authenticated admin session from a
+// first-factor-only one (see needsAdminStepUp).
+func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember, totpVerified bool, now time.Time) {
 	groups := s.computeGroups(r.Context(), emailAddr, role)
 	ttl := s.cfg.SessionTTL
 	if remember {
 		ttl = s.cfg.SessionRememberTTL
 	}
-	if err := s.sessions.IssueSessionTTL(w, emailAddr, groups, "", ttl, now); err != nil {
+	if err := s.sessions.IssueSessionTTL(w, emailAddr, groups, "", totpVerified, ttl, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
@@ -656,6 +681,17 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	s.sessions.ClearState(w)
 	s.sessions.ClearPending(w)
 	http.Redirect(w, r, s.loginRedirect(rd), http.StatusFound)
+}
+
+// needsAdminStepUp reports whether an admin session must re-authenticate through
+// the TOTP step before it is honoured for admin access. It fires only when TOTP
+// is enabled and the session carries no second-factor assurance (totp=false) —
+// i.e. the session was minted before TOTP was turned on, or the principal has
+// since become an admin. This closes the gap where enabling TOTP would otherwise
+// leave already-issued first-factor-only admin sessions valid until they expire.
+// Break-glass sessions are never admin, so callers pass isAdmin=false for them.
+func (s *Server) needsAdminStepUp(isAdmin, totpVerified bool) bool {
+	return s.cfg.TOTPEnabled && isAdmin && !totpVerified
 }
 
 // computeGroups returns the comma-separated Remote-Groups value for an email:
@@ -733,7 +769,11 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	ip := clientIP(r)
 	ua := clampUserAgent(r.UserAgent())
-	if !s.ipLimiter.Allow(ip) {
+	// Break-glass scans use their own, more permissive per-IP limiter: the token's
+	// 128-bit entropy is the brute-force boundary here, so this only guards against
+	// abuse and must not throttle many staff scanning from behind one shared IP
+	// during an emergency.
+	if !s.breakLimiter.Allow(ip) {
 		s.render(w, http.StatusTooManyRequests, "message", pageData{
 			Title:   "Too many requests",
 			Message: "Please wait a little while and try again.",
@@ -789,7 +829,7 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 
 	groups := authz.BuildGroups(code.TargetGroup, nil)
 	principal := "breakglass:" + code.Label
-	if err := s.sessions.IssueSessionTTL(w, principal, groups, session.KindBreakGlass, ttl, now); err != nil {
+	if err := s.sessions.IssueSessionTTL(w, principal, groups, session.KindBreakGlass, false, ttl, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}
