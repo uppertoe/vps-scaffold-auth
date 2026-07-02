@@ -69,7 +69,14 @@
   /* Explicit text colour: an inherited light colour on the white base
      background was the original white-on-white bug. */
   input::placeholder { color: var(--muted); }
-  input.code { letter-spacing: .4em; text-align: center; font-size: 22px; font-variant-numeric: tabular-nums; }
+  /* The trailing letter-spacing after the last digit makes centred text sit
+     slightly left of centre; text-indent of half the letter-spacing cancels it
+     so the digits are evenly centred. */
+  input.code { letter-spacing: .4em; text-indent: .2em; text-align: center; font-size: 22px; font-variant-numeric: tabular-nums; }
+  /* The field is autofocused, so without this the caret would sit in the middle
+     of the "000000" hint, which reads as uneven. Hide the placeholder once the
+     field has focus, leaving just the caret; it returns if focus is lost. */
+  input.code:focus::placeholder { color: transparent; }
   button {
     width: 100%; padding: 12px 14px; font-size: 16px; font-weight: 600; border: 0; border-radius: 10px;
     background: var(--accent); color: #fff; cursor: pointer;

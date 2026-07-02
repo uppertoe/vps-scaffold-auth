@@ -227,6 +227,53 @@ func TestTOTPDoubleSubmitForwardsToApp(t *testing.T) {
 	}
 }
 
+// Enabling TOTP after an admin already holds a first-factor-only session must
+// force that session to re-authenticate through the TOTP step, rather than
+// letting a pre-TOTP cookie keep admin access until it expires. Covers both the
+// /verify path (downstream group=admin apps) and the auth-host /admin UI.
+func TestEnablingTOTPReChallengesExistingAdminSession(t *testing.T) {
+	srv, sender := testServer(t) // TOTP disabled: admin logs in with the email code only
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+
+	// Baseline: the first-factor-only admin session is honoured while TOTP is off.
+	if rec := c.get("/verify", requireGroups("admin")); rec.Code != http.StatusOK {
+		t.Fatalf("/verify before enabling TOTP = %d, want 200", rec.Code)
+	}
+	if rec := c.get("/admin/break", nil); rec.Code != http.StatusOK {
+		t.Fatalf("/admin before enabling TOTP = %d, want 200", rec.Code)
+	}
+
+	// Operator turns TOTP on. The already-issued cookie carries totp=false.
+	srv.cfg.TOTPEnabled = true
+
+	// /verify for an admin-gated app now clears the session and bounces to login.
+	if rec := c.get("/verify", requireGroups("admin")); rec.Code != http.StatusFound {
+		t.Fatalf("/verify after enabling TOTP = %d, want 302 (re-challenge)", rec.Code)
+	}
+	// The auth-host admin UI likewise refuses the stale first-factor session.
+	rec := c.get("/admin/break", nil)
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+		t.Fatalf("/admin after enabling TOTP = %d loc=%q, want 302 to /login",
+			rec.Code, rec.Header().Get("Location"))
+	}
+
+	// Re-authenticating with the second factor restores admin access.
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := c.postForm("/totp", url.Values{"code": {totpCode}}); rec.Code != http.StatusFound {
+		t.Fatalf("/totp re-auth = %d, want 302", rec.Code)
+	}
+	if rec := c.get("/verify", requireGroups("admin")); rec.Code != http.StatusOK {
+		t.Fatalf("/verify after TOTP re-auth = %d, want 200", rec.Code)
+	}
+}
+
 // The admin UI provisions, reports status for, and removes admin TOTP secrets.
 func TestAdminTOTPProvisioning(t *testing.T) {
 	srv, sender := testServer(t) // TOTP disabled, so admin can log in via email only

@@ -28,6 +28,7 @@ type Server struct {
 	secrets      *secretbox.Box
 	emailLimiter *ratelimit.Limiter
 	ipLimiter    *ratelimit.Limiter
+	breakLimiter *ratelimit.Limiter // per-IP limiter for break-glass scans
 	totpReplay   *totpReplay
 	access       *accessAudit
 	csp          string // precomputed Content-Security-Policy (see cspPolicy)
@@ -65,6 +66,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		secrets:      secrets,
 		emailLimiter: ratelimit.New(cfg.RateLimitPerEmail.Count, cfg.RateLimitPerEmail.Window),
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
+		breakLimiter: newBreakLimiter(cfg),
 		access:       newAccessAudit(st, cfg.AuditRetention),
 		csp:          cspPolicy(cfg.Domain),
 		pages:        tmpls,
@@ -77,6 +79,18 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	s.totpReplay = newTOTPReplay(func() time.Time { return s.now() })
 	s.handler = s.routes()
 	return s, nil
+}
+
+// newBreakLimiter builds the per-IP limiter for break-glass scans. It uses the
+// dedicated RATELIMIT_BREAKGLASS_PER_IP rule, falling back to the login per-IP
+// rule if that is unset (e.g. a hand-built config), so it is never a zero-count
+// limiter that would deny every emergency scan.
+func newBreakLimiter(cfg *config.Config) *ratelimit.Limiter {
+	rl := cfg.RateLimitBreakGlassPerIP
+	if rl.Count <= 0 || rl.Window <= 0 {
+		rl = cfg.RateLimitPerIP
+	}
+	return ratelimit.New(rl.Count, rl.Window)
 }
 
 // Handler returns the root http.Handler.

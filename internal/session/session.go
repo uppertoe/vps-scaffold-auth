@@ -97,6 +97,12 @@ type Identity struct {
 	// TTL is the session's chosen lifetime in seconds, so a renewal re-issues
 	// with the same lifetime (e.g. a 30-day "remember me" session).
 	TTL int64 `json:"ttl,omitempty"`
+	// TOTP records that the admin second factor was satisfied when this session
+	// was minted. It lets /verify (and the admin UI gate) re-challenge an admin
+	// whose session predates TOTP being enabled, or who was promoted to admin
+	// after signing in: such a session carries totp=false and must complete the
+	// TOTP step before it is honoured for admin access.
+	TOTP bool `json:"totp,omitempty"`
 }
 
 // State is the short-lived login progress carried between /request and
@@ -193,16 +199,18 @@ func (m *Manager) clearCookie(w http.ResponseWriter, name, domain string) {
 
 // IssueSession writes a normal session cookie using the default TTL.
 func (m *Manager) IssueSession(w http.ResponseWriter, email, groups string, now time.Time) error {
-	return m.IssueSessionTTL(w, email, groups, "", m.ttl, now)
+	return m.IssueSessionTTL(w, email, groups, "", false, m.ttl, now)
 }
 
 // IssueSessionTTL writes a session cookie with an explicit lifetime and kind.
 // The chosen TTL is stored in the identity so a later renewal preserves it.
-func (m *Manager) IssueSessionTTL(w http.ResponseWriter, email, groups, kind string, ttl time.Duration, now time.Time) error {
+// totp records whether the admin second factor was satisfied at login; a renewal
+// must pass the existing value through so the assurance is not silently dropped.
+func (m *Manager) IssueSessionTTL(w http.ResponseWriter, email, groups, kind string, totp bool, ttl time.Duration, now time.Time) error {
 	if ttl <= 0 {
 		ttl = m.ttl
 	}
-	id := Identity{Email: email, Groups: groups, Iat: now.Unix(), Kind: kind, TTL: int64(ttl.Seconds())}
+	id := Identity{Email: email, Groups: groups, Iat: now.Unix(), Kind: kind, TTL: int64(ttl.Seconds()), TOTP: totp}
 	tok, err := m.encode(id, now.Add(ttl))
 	if err != nil {
 		return err
