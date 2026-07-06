@@ -1,0 +1,27 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+<h1>Admin audit</h1>
+<p class="sub">Attributable record of privileged actions &mdash; break-glass mint/revoke/re-mint, group and membership changes, admin 2FA provisioning/removal, branding and settings edits. Read-only; retained on the same window as the access log.</p>
+
+<div class="panel">
+  {{if .AdminEvents}}
+  <table>
+    <thead><tr><th>When</th><th>Admin</th><th>Action</th><th>Target</th><th>Detail</th><th>Client IP</th></tr></thead>
+    <tbody>
+    {{range .AdminEvents}}
+      <tr>
+        <td class="muted">{{.Time}}</td>
+        <td>{{.Actor}}</td>
+        <td><code class="mono">{{.Action}}</code></td>
+        <td>{{.Target}}</td>
+        <td class="muted">{{.Detail}}</td>
+        <td><code class="mono">{{.ClientIP}}</code></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No administrative actions recorded yet.</p>
+  {{end}}
+</div>
+{{end}}

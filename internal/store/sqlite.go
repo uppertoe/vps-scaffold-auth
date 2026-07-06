@@ -145,7 +145,19 @@ CREATE TABLE IF NOT EXISTS app_access (
 	UNIQUE (email, host, kind, bucket)
 );
 CREATE INDEX IF NOT EXISTS idx_app_access_email ON app_access(email, created_at);
-CREATE INDEX IF NOT EXISTS idx_app_access_created ON app_access(created_at);`
+CREATE INDEX IF NOT EXISTS idx_app_access_created ON app_access(created_at);
+CREATE TABLE IF NOT EXISTS admin_events (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	actor      TEXT NOT NULL,
+	action     TEXT NOT NULL,
+	target     TEXT NOT NULL DEFAULT '',
+	detail     TEXT NOT NULL DEFAULT '',
+	client_ip  TEXT NOT NULL DEFAULT '',
+	user_agent TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_admin_events_created ON admin_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_admin_events_actor ON admin_events(actor, created_at);`
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
@@ -537,6 +549,40 @@ func (s *SQLite) RecordBreakGlassEvent(ctx context.Context, e BreakGlassEvent) e
 	return err
 }
 
+// RecordAdminEvent appends an administrative-action audit row.
+func (s *SQLite) RecordAdminEvent(ctx context.Context, e AdminEvent) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO admin_events (actor, action, target, detail, client_ip, user_agent, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		e.Actor, e.Action, e.Target, e.Detail, e.ClientIP, e.UserAgent, e.CreatedAt.Unix())
+	return err
+}
+
+// ListAdminEvents returns admin-action events, newest first.
+func (s *SQLite) ListAdminEvents(ctx context.Context, limit, offset int) ([]AdminEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, actor, action, target, detail, client_ip, user_agent, created_at
+		 FROM admin_events ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AdminEvent
+	for rows.Next() {
+		var e AdminEvent
+		var ts int64
+		if err := rows.Scan(&e.ID, &e.Actor, &e.Action, &e.Target, &e.Detail, &e.ClientIP, &e.UserAgent, &ts); err != nil {
+			return nil, err
+		}
+		e.CreatedAt = time.Unix(ts, 0)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // RecordAuthEvent appends a login-flow audit row.
 func (s *SQLite) RecordAuthEvent(ctx context.Context, e AuthEvent) error {
 	_, err := s.db.ExecContext(ctx,
@@ -627,7 +673,10 @@ func (s *SQLite) PruneAuditBefore(ctx context.Context, cutoff time.Time) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM auth_events WHERE created_at < ?`, cut); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM app_access WHERE created_at < ?`, cut)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM app_access WHERE created_at < ?`, cut); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM admin_events WHERE created_at < ?`, cut)
 	return err
 }
 

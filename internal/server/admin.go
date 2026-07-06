@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -27,6 +28,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/groups/{name}/members", s.handleAdminAddMember)
 	mux.HandleFunc("POST /admin/groups/{name}/members/delete", s.handleAdminRemoveMember)
 	mux.HandleFunc("GET /admin/access", s.handleAdminAccess)
+	mux.HandleFunc("GET /admin/audit", s.handleAdminAudit)
 	mux.HandleFunc("GET /admin/break", s.handleAdminBreakList)
 	mux.HandleFunc("POST /admin/break", s.handleAdminBreakCreate)
 	mux.HandleFunc("GET /admin/break/{id}", s.handleAdminBreakDetail)
@@ -86,6 +88,7 @@ func (s *Server) handleAdminTOTPGenerate(w http.ResponseWriter, r *http.Request)
 		s.adminError(w, r)
 		return
 	}
+	s.auditAdmin(r, store.AdminActionTOTPGenerate, emailAddr, "")
 	// Render (not redirect) so the secret appears once and lands in no URL or
 	// history; refreshing the page drops it.
 	s.renderAdmin(w, r, http.StatusOK, "admin_totp", adminData{
@@ -107,6 +110,7 @@ func (s *Server) handleAdminTOTPRemove(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
+	s.auditAdmin(r, store.AdminActionTOTPRemove, emailAddr, "")
 	http.Redirect(w, r, "/admin/totp", http.StatusFound)
 }
 
@@ -341,6 +345,7 @@ func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request)
 		s.brandingUploadError(w, r)
 		return
 	}
+	s.auditAdmin(r, store.AdminActionBrandingUpdate, "global", "")
 	http.Redirect(w, r, "/admin/branding", http.StatusFound)
 }
 
@@ -460,6 +465,9 @@ func (s *Server) handleAdminSaveSettings(w http.ResponseWriter, r *http.Request)
 		s.adminError(w, r)
 		return
 	}
+	// Record whether a webhook is set, not the URL itself (it may carry a token).
+	s.auditAdmin(r, store.AdminActionSettingsUpdate, "break_glass",
+		fmt.Sprintf("ttl=%gh notify_emails=%d webhook=%t", hours, len(emails), webhook != ""))
 	http.Redirect(w, r, "/admin/settings", http.StatusFound)
 }
 
@@ -534,6 +542,28 @@ func (s *Server) checkCSRF(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// auditAdmin records an attributable administrative action. The actor is taken
+// from the already-validated admin session (this only runs behind requireAdmin).
+// Best-effort: a write failure is logged but does not undo the action that has
+// already happened. Call it AFTER the mutation succeeds.
+func (s *Server) auditAdmin(r *http.Request, action, target, detail string) {
+	actor := ""
+	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
+		actor = id.Email
+	}
+	if err := s.store.RecordAdminEvent(r.Context(), store.AdminEvent{
+		Actor:     actor,
+		Action:    action,
+		Target:    target,
+		Detail:    detail,
+		ClientIP:  clientIP(r),
+		UserAgent: clampUserAgent(r.UserAgent()),
+		CreatedAt: s.now(),
+	}); err != nil {
+		log.Printf("record admin event %s (actor=%s target=%q): %v", action, actor, target, err)
+	}
+}
+
 // --- Home ---
 
 func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
@@ -561,8 +591,24 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 	s.renderAdmin(w, r, http.StatusOK, "admin_access", adminData{
 		Title:       "Access log",
 		FilterEmail: email,
-		AuthEvents:  toAuthEventViews(logins),
-		AppAccess:   toAppAccessViews(access),
+		AuthEvents:  s.toAuthEventViews(logins),
+		AppAccess:   s.toAppAccessViews(access),
+	})
+}
+
+// handleAdminAudit shows the administrative-action audit trail: which admin
+// minted/revoked a break-glass code, changed groups, removed another admin's
+// 2FA, or edited settings — the attributable record of privileged mutations.
+func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
+	const limit = 250
+	events, err := s.store.ListAdminEvents(r.Context(), limit, 0)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	s.renderAdmin(w, r, http.StatusOK, "admin_audit", adminData{
+		Title:       "Admin audit",
+		AdminEvents: s.toAdminEventViews(events),
 	})
 }
 
@@ -609,6 +655,7 @@ func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) 
 		s.adminError(w, r)
 		return
 	}
+	s.auditAdmin(r, store.AdminActionGroupCreate, name, "")
 	http.Redirect(w, r, "/admin/groups", http.StatusFound)
 }
 
@@ -620,6 +667,7 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 		s.adminError(w, r)
 		return
 	}
+	s.auditAdmin(r, store.AdminActionGroupDelete, r.PathValue("name"), "")
 	http.Redirect(w, r, "/admin/groups", http.StatusFound)
 }
 
@@ -634,6 +682,7 @@ func (s *Server) handleAdminAddMember(w http.ResponseWriter, r *http.Request) {
 			s.adminError(w, r)
 			return
 		}
+		s.auditAdmin(r, store.AdminActionGroupAddMember, group, emailAddr)
 	}
 	http.Redirect(w, r, "/admin/groups", http.StatusFound)
 }
@@ -642,10 +691,13 @@ func (s *Server) handleAdminRemoveMember(w http.ResponseWriter, r *http.Request)
 	if !s.checkCSRF(w, r) {
 		return
 	}
-	if err := s.store.RemoveGroupMember(r.Context(), r.PathValue("name"), normalizeEmail(r.PostFormValue("email"))); err != nil {
+	group := r.PathValue("name")
+	emailAddr := normalizeEmail(r.PostFormValue("email"))
+	if err := s.store.RemoveGroupMember(r.Context(), group, emailAddr); err != nil {
 		s.adminError(w, r)
 		return
 	}
+	s.auditAdmin(r, store.AdminActionGroupRemoveMember, group, emailAddr)
 	http.Redirect(w, r, "/admin/groups", http.StatusFound)
 }
 
@@ -659,7 +711,7 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 	}
 	view := make([]codeView, 0, len(codes))
 	for _, c := range codes {
-		view = append(view, toCodeView(c))
+		view = append(view, s.toCodeView(c))
 	}
 	s.renderAdmin(w, r, http.StatusOK, "admin_codes", adminData{Title: "Break-glass codes", Codes: view})
 }
@@ -711,6 +763,7 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
+	s.auditAdmin(r, store.AdminActionBreakCreate, label, "group="+group)
 	http.Redirect(w, r, "/admin/break", http.StatusFound)
 }
 
@@ -735,7 +788,7 @@ func (s *Server) handleAdminBreakDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.renderAdmin(w, r, http.StatusOK, "admin_code_detail", adminData{
-		Title: code.Label, Code: toCodeView(code), Events: events,
+		Title: code.Label, Code: s.toCodeView(code), Events: events,
 		CodeBranding: s.codeBrandingView(r.Context(), id),
 	})
 }
@@ -812,6 +865,7 @@ func (s *Server) handleAdminSaveCodeBranding(w http.ResponseWriter, r *http.Requ
 		s.brandingUploadError(w, r)
 		return
 	}
+	s.auditAdmin(r, store.AdminActionCodeBranding, "code#"+strconv.FormatInt(id, 10), "")
 	http.Redirect(w, r, "/admin/break/"+strconv.FormatInt(id, 10), http.StatusFound)
 }
 
@@ -858,6 +912,7 @@ func (s *Server) handleAdminBreakRevoke(w http.ResponseWriter, r *http.Request) 
 		s.adminError(w, r)
 		return
 	}
+	s.auditAdmin(r, store.AdminActionBreakRevoke, "code#"+strconv.FormatInt(id, 10), "")
 	http.Redirect(w, r, "/admin/break/"+strconv.FormatInt(id, 10), http.StatusFound)
 }
 
@@ -879,6 +934,7 @@ func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) 
 		s.adminError(w, r)
 		return
 	}
+	s.auditAdmin(r, store.AdminActionBreakRemint, "code#"+strconv.FormatInt(id, 10), "")
 	http.Redirect(w, r, "/admin/break/"+strconv.FormatInt(id, 10), http.StatusFound)
 }
 

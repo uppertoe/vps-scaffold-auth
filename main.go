@@ -16,6 +16,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	// Embed the IANA timezone database so DISPLAY_TIMEZONE (time.LoadLocation)
+	// works on the distroless/static image, which ships no /usr/share/zoneinfo.
+	_ "time/tzdata"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"

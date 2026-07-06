@@ -55,6 +55,39 @@ const (
 	AuthOutcomeNoSecret  = "totp_not_provisioned"
 )
 
+// Administrative action types, recorded in admin_events. Every privileged
+// mutation is attributed to the acting admin so emergency-access minting,
+// group changes, another admin's 2FA removal, and settings edits leave a
+// reviewable trail (previously only break-glass *scans* were audited).
+const (
+	AdminActionBreakCreate       = "break_glass_create"
+	AdminActionBreakRevoke       = "break_glass_revoke"
+	AdminActionBreakRemint       = "break_glass_remint"
+	AdminActionGroupCreate       = "group_create"
+	AdminActionGroupDelete       = "group_delete"
+	AdminActionGroupAddMember    = "group_add_member"
+	AdminActionGroupRemoveMember = "group_remove_member"
+	AdminActionTOTPGenerate      = "totp_generate"
+	AdminActionTOTPRemove        = "totp_remove"
+	AdminActionSettingsUpdate    = "settings_update"
+	AdminActionBrandingUpdate    = "branding_update"
+	AdminActionCodeBranding      = "break_glass_branding"
+)
+
+// AdminEvent records one administrative mutation for attribution: which admin
+// (Actor) did what (Action) to which subject (Target), with optional Detail,
+// from which client IP. Actor is the acting admin's validated session email.
+type AdminEvent struct {
+	ID        int64
+	Actor     string
+	Action    string // AdminAction* constant
+	Target    string // subject of the action (group, code label, email, setting scope)
+	Detail    string // optional extra context
+	ClientIP  string
+	UserAgent string
+	CreatedAt time.Time
+}
+
 // Group is a named, DB-managed group surfaced via Remote-Groups.
 type Group struct {
 	Name      string
@@ -286,6 +319,11 @@ type Store interface {
 
 	// --- Login & access audit ---
 
+	// RecordAdminEvent appends an administrative-action audit row. CreatedAt is
+	// taken from the event.
+	RecordAdminEvent(ctx context.Context, e AdminEvent) error
+	// ListAdminEvents returns admin-action events, newest first, paginated.
+	ListAdminEvents(ctx context.Context, limit, offset int) ([]AdminEvent, error)
 	// RecordAuthEvent appends a login-flow audit row. CreatedAt is taken from the
 	// supplied value (callers pass the server clock).
 	RecordAuthEvent(ctx context.Context, e AuthEvent) error

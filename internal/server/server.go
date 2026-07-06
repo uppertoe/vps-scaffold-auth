@@ -37,15 +37,20 @@ type Server struct {
 	emailTmpl    *texttemplate.Template
 	handler      http.Handler
 	now          func() time.Time
+	loc          *time.Location // timezone for rendering timestamps in the admin UI
 }
 
 // New constructs a Server from its dependencies.
 func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, error) {
+	loc := cfg.DisplayLocation
+	if loc == nil {
+		loc = time.UTC
+	}
 	tmpls, err := loadTemplates()
 	if err != nil {
 		return nil, err
 	}
-	adminTmpls, err := loadAdminTemplates()
+	adminTmpls, err := loadAdminTemplates(loc)
 	if err != nil {
 		return nil, err
 	}
@@ -73,6 +78,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		adminPages:   adminTmpls,
 		emailTmpl:    emailTmpl,
 		now:          time.Now,
+		loc:          loc,
 	}
 	// Anti-replay reads the clock through s.now so tests sharing a fake clock stay
 	// consistent with the rest of the server.

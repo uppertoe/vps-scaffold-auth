@@ -247,8 +247,9 @@ for the annotated list. Key ones:
 | `ADMIN_EMAILS` | CSV of explicit admin addresses |
 | `SESSION_SECRET` | 32+ random bytes (`openssl rand -hex 32`) |
 | `COOKIE_DOMAIN` | Leading-dot domain for the shared session cookie |
-| `EMAIL_BACKEND` | `smtp` \| `resend` \| `log` |
+| `EMAIL_BACKEND` | `smtp` \| `resend` \| `log` (`log` is dev-only; refused unless `COOKIE_INSECURE=true`) |
 | `TOTP_ENABLED` | Optional admin TOTP (off by default) |
+| `DISPLAY_TIMEZONE` | IANA name for admin-UI timestamps (e.g. `Australia/Melbourne`); empty = UTC |
 | `DOMAIN` | The server domain (provided by the server `.env`) |
 
 ### Admin two-factor (optional)
@@ -311,6 +312,10 @@ Admins (anyone in the `admin` group) get a web UI on the `auth.<domain>` host:
   apps each person has reached (deduplicated to one row per user/app/hour, not
   per request). Filter by email. Rows are pruned after `AUDIT_RETENTION`
   (default one year; `0` keeps them forever).
+- **`/admin/audit`** — the administrative-action trail: which admin minted,
+  revoked, or re-minted a break-glass code, changed groups/memberships, removed
+  another admin's 2FA, or edited branding/settings — each attributed to the
+  acting admin with a client IP and timestamp. Same retention as the access log.
 - **`/admin/totp`** — when `TOTP_ENABLED=true`, provision/reset/remove admins'
   two-factor secrets (see [Admin two-factor](#admin-two-factor-optional)).
 - **`/admin/branding`** — two logos plus the break-glass card content. The
