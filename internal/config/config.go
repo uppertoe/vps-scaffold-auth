@@ -218,6 +218,13 @@ func (c *Config) validate() error {
 	if len(c.SessionSecret) < 32 {
 		return fmt.Errorf("SESSION_SECRET must be at least 32 bytes (got %d)", len(c.SessionSecret))
 	}
+	// Length alone doesn't imply entropy: a 32-char run like "aaaa…a" passes the
+	// check above but is trivially guessable. Require a spread of distinct bytes.
+	// A real secret (openssl rand -hex 32 → 16 distinct hex symbols; base64/raw →
+	// far more) clears this easily; only degenerate/repeated strings fail.
+	if n := distinctBytes(c.SessionSecret); n < 10 {
+		return fmt.Errorf("SESSION_SECRET looks low-entropy (%d distinct bytes); generate one with: openssl rand -hex 32", n)
+	}
 	if len(c.AllowedDomains) == 0 && len(c.AdminEmails) == 0 {
 		return fmt.Errorf("at least one of ALLOWED_EMAIL_DOMAINS or ADMIN_EMAILS must be set")
 	}
@@ -249,8 +256,10 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("EMAIL_BACKEND must be one of: log, smtp, resend (got %q)", c.EmailBackend)
 	}
-	if c.OTPLength < 4 || c.OTPLength > 10 {
-		return fmt.Errorf("OTP_LENGTH must be between 4 and 10 (got %d)", c.OTPLength)
+	// Floor of 6: a 4-digit code (10^4 keyspace) is brute-forceable within the
+	// attempt cap + resends over a code's lifetime. 6 digits (10^6) is the default.
+	if c.OTPLength < 6 || c.OTPLength > 10 {
+		return fmt.Errorf("OTP_LENGTH must be between 6 and 10 (got %d)", c.OTPLength)
 	}
 	if c.OTPMaxAttempts < 1 {
 		return fmt.Errorf("OTP_MAX_ATTEMPTS must be >= 1 (got %d)", c.OTPMaxAttempts)
@@ -301,6 +310,21 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// distinctBytes counts the distinct byte values in b — a cheap entropy floor
+// that rejects degenerate secrets (a single repeated character, short cycles)
+// while comfortably passing any real random secret.
+func distinctBytes(b []byte) int {
+	var seen [256]bool
+	n := 0
+	for _, c := range b {
+		if !seen[c] {
+			seen[c] = true
+			n++
+		}
+	}
+	return n
 }
 
 func getbool(key string, def bool) bool {

@@ -6,8 +6,10 @@ import (
 )
 
 // totpReplayWindow bounds how long an accepted TOTP code is remembered. The
-// validator accepts only the current 30s step (skew 0), so two steps covers the
-// whole window a code could still be valid, with margin for clock drift.
+// validator runs with skew 1, so a single code value is accepted across three
+// 30s steps (previous/current/next) — up to ~90s of real validity. The window
+// must cover that whole span so a code can't be replayed before it is remembered;
+// keep it >= period*(2*skew+1) = 90s.
 const totpReplayWindow = 90 * time.Second
 
 // totpReplay records recently-accepted (admin, code) pairs so a single TOTP code

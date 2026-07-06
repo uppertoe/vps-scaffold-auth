@@ -198,3 +198,20 @@ func TestRateLimitBadFormatFails(t *testing.T) {
 		t.Error("expected error for malformed rate limit")
 	}
 }
+
+func TestLoadRejectsLowEntropySecret(t *testing.T) {
+	setValid(t)
+	// 32 bytes, but a single repeated character — passes length, fails entropy.
+	t.Setenv("SESSION_SECRET", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if _, err := Load(); err == nil {
+		t.Error("expected error for a low-entropy SESSION_SECRET")
+	}
+}
+
+func TestLoadRejectsShortOTPLength(t *testing.T) {
+	setValid(t)
+	t.Setenv("OTP_LENGTH", "4")
+	if _, err := Load(); err == nil {
+		t.Error("expected error for OTP_LENGTH below the floor of 6")
+	}
+}

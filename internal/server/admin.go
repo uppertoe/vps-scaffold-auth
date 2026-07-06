@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -455,8 +456,17 @@ func (s *Server) handleAdminSaveSettings(w http.ResponseWriter, r *http.Request)
 	}
 	webhook := trimField(r.PostFormValue("webhook"))
 	if webhook != "" {
-		if u, err := url.Parse(webhook); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		u, err := url.Parse(webhook)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			s.settingsError(w, r, "The webhook URL must be an absolute http(s) URL, or left blank.")
+			return
+		}
+		// Block the SSRF vector a compromised admin could point the notification
+		// POST at: cloud metadata (link-local 169.254/16, fe80::/10) and loopback.
+		// Private ranges (10/8, 192.168/16, 172.16/12) are intentionally allowed —
+		// notifications legitimately target internal services on this stack.
+		if ip := net.ParseIP(u.Hostname()); ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()) {
+			s.settingsError(w, r, "The webhook host may not be a loopback or link-local address.")
 			return
 		}
 	}
@@ -995,6 +1005,12 @@ func (s *Server) codeImage(w http.ResponseWriter, r *http.Request) ([]byte, stor
 		return nil, store.BreakGlassCode{}, false
 	}
 	if !found {
+		http.NotFound(w, r)
+		return nil, store.BreakGlassCode{}, false
+	}
+	// Do not render (QR/PDF) a revoked code: scanning it is denied at /break, and
+	// serving its live token as an image would only hand back a dead credential.
+	if code.Status != store.BreakGlassActive {
 		http.NotFound(w, r)
 		return nil, store.BreakGlassCode{}, false
 	}

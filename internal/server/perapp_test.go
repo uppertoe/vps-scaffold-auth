@@ -19,6 +19,13 @@ func requireGroups(g string) map[string]string {
 	return map[string]string{"X-Auth-Policy": "groups=" + g}
 }
 
+// protectedAny simulates the plain `import protected` door, which sends the
+// explicit "any" sentinel (any authenticated non-break-glass user). /verify now
+// fails closed on a MISSING policy header, so plain-protected must be explicit.
+func protectedAny() map[string]string {
+	return map[string]string{"X-Auth-Policy": "any"}
+}
+
 func TestPerAppDomainGate(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
@@ -74,7 +81,7 @@ func TestDeniedPreservesSessionAndOffersLogin(t *testing.T) {
 		t.Fatal("denial cleared the session cookie")
 	}
 	// ...so a plain app still grants.
-	if rec := c.get("/verify", nil); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
 		t.Fatalf("plain /verify after denial = %d, want 200 (session intact)", rec.Code)
 	}
 
@@ -105,8 +112,8 @@ func TestBreakGlassScopedToItsGroup(t *testing.T) {
 		t.Fatalf("scan = %d", rec.Code)
 	}
 
-	// Plain protected app (no requirement) -> denied.
-	if rec := c.get("/verify", nil); rec.Code != http.StatusFound {
+	// Plain protected app (any signed-in user) -> break-glass still denied.
+	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusFound {
 		t.Fatalf("break-glass on plain /verify = %d, want 302 (denied)", rec.Code)
 	}
 	// An app requiring a different group -> denied.
@@ -126,5 +133,24 @@ func TestBreakGlassScopedToItsGroup(t *testing.T) {
 	body := c.get("/denied?rd="+url.QueryEscape("https://app.example.com/"), nil).Body.String()
 	if !strings.Contains(body, "emergency access") || !strings.Contains(body, "Angiography Lab 1") {
 		t.Errorf("break-glass denial page missing emergency framing/label:\n%s", body)
+	}
+}
+
+// TestMissingPolicyFailsClosed verifies the deny-by-default fix: an authenticated
+// user hitting /verify with NO X-Auth-Policy (a hand-rolled guard that forgot the
+// header) is denied rather than silently granted, while the explicit "any"
+// sentinel still admits them.
+func TestMissingPolicyFailsClosed(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "user@example.com", nil)
+
+	// No policy header → deny (302 to /denied).
+	if rec := c.get("/verify", nil); rec.Code != http.StatusFound {
+		t.Fatalf("missing-policy /verify = %d, want 302 (deny-by-default)", rec.Code)
+	}
+	// Explicit "any" sentinel → allowed.
+	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
+		t.Fatalf("explicit any /verify = %d, want 200", rec.Code)
 	}
 }
