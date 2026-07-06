@@ -48,9 +48,26 @@ CREATE TABLE IF NOT EXISTS codes (
 	expires_at INTEGER NOT NULL,
 	attempts   INTEGER NOT NULL DEFAULT 0
 );
+-- Wrong-guess counter scoped to (email, client_ip). Keyed per source IP rather
+-- than per code so a stranger who knows a registered address cannot burn the
+-- victim's live code with wrong guesses: exhausting the cap blocks only that IP,
+-- never the code itself. Reset when a fresh code is minted. Client IP is
+-- non-spoofable here (rightmost XFF + Caddy overwrites it), so this cannot be
+-- rotated cheaply.
+CREATE TABLE IF NOT EXISTS code_attempts (
+	email      TEXT NOT NULL,
+	client_ip  TEXT NOT NULL,
+	attempts   INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (email, client_ip)
+);
 CREATE TABLE IF NOT EXISTS totp_secrets (
 	email  TEXT PRIMARY KEY,
 	secret TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS totp_failures (
+	email        TEXT PRIMARY KEY,
+	fail_count   INTEGER NOT NULL DEFAULT 0,
+	window_start INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS groups (
 	name       TEXT PRIMARY KEY,
@@ -219,17 +236,28 @@ func (s *SQLite) ensureColumns(table string, cols []column) error {
 	return nil
 }
 
-// SaveCode upserts the code hash for an email, resetting attempts to zero.
+// SaveCode upserts the code hash for an email and clears the per-IP wrong-guess
+// counters, giving the freshly minted code a clean attempt budget.
 func (s *SQLite) SaveCode(ctx context.Context, email, codeHash string, expiresAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO codes (email, code_hash, expires_at, attempts)
 VALUES (?, ?, ?, 0)
 ON CONFLICT(email) DO UPDATE SET
 	code_hash = excluded.code_hash,
 	expires_at = excluded.expires_at,
 	attempts = 0`,
-		email, codeHash, expiresAt.Unix())
-	return err
+		email, codeHash, expiresAt.Unix()); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM code_attempts WHERE email = ?`, email); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // EnsureCode inserts a code for an email only if none already exists, never
@@ -263,12 +291,21 @@ func (s *SQLite) HasRecentCode(ctx context.Context, email string, minExpiry time
 
 // DeleteExpiredCodes prunes code rows past their expiry.
 func (s *SQLite) DeleteExpiredCodes(ctx context.Context, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM codes WHERE expires_at < ?`, now.Unix())
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM codes WHERE expires_at < ?`, now.Unix()); err != nil {
+		return err
+	}
+	// Drop attempt rows whose code no longer exists (expired-without-consume).
+	_, err := s.db.ExecContext(ctx, `DELETE FROM code_attempts WHERE email NOT IN (SELECT email FROM codes)`)
 	return err
 }
 
-// ConsumeCode performs the verify-and-consume in a single transaction.
-func (s *SQLite) ConsumeCode(ctx context.Context, email, candidateHash string, maxAttempts int, now time.Time) (ConsumeResult, error) {
+// ConsumeCode performs the verify-and-consume in a single transaction. The
+// wrong-guess cap is scoped to clientIP: hitting it returns ConsumeTooManyAttempts
+// for that IP only and leaves the code intact, so an attacker who set the target
+// email cannot delete a code the legitimate user still holds. The code is removed
+// only on a correct guess or expiry. clientIP is non-spoofable at this layer
+// (rightmost XFF + Caddy overwrites it), so the per-IP scoping cannot be rotated.
+func (s *SQLite) ConsumeCode(ctx context.Context, email, clientIP, candidateHash string, maxAttempts int, now time.Time) (ConsumeResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ConsumeNoCode, err
@@ -277,10 +314,9 @@ func (s *SQLite) ConsumeCode(ctx context.Context, email, candidateHash string, m
 
 	var storedHash string
 	var expiresAt int64
-	var attempts int
 	err = tx.QueryRowContext(ctx,
-		`SELECT code_hash, expires_at, attempts FROM codes WHERE email = ?`, email).
-		Scan(&storedHash, &expiresAt, &attempts)
+		`SELECT code_hash, expires_at FROM codes WHERE email = ?`, email).
+		Scan(&storedHash, &expiresAt)
 	if err == sql.ErrNoRows {
 		return ConsumeNoCode, nil
 	}
@@ -288,41 +324,51 @@ func (s *SQLite) ConsumeCode(ctx context.Context, email, candidateHash string, m
 		return ConsumeNoCode, err
 	}
 
-	del := func() error {
-		_, e := tx.ExecContext(ctx, `DELETE FROM codes WHERE email = ?`, email)
+	// Remove the code and every IP's attempt budget for it.
+	clear := func() error {
+		if _, e := tx.ExecContext(ctx, `DELETE FROM codes WHERE email = ?`, email); e != nil {
+			return e
+		}
+		_, e := tx.ExecContext(ctx, `DELETE FROM code_attempts WHERE email = ?`, email)
 		return e
 	}
 
 	if now.Unix() > expiresAt {
-		if err := del(); err != nil {
+		if err := clear(); err != nil {
 			return ConsumeExpired, err
 		}
 		return ConsumeExpired, tx.Commit()
 	}
+
+	var attempts int
+	err = tx.QueryRowContext(ctx,
+		`SELECT attempts FROM code_attempts WHERE email = ? AND client_ip = ?`, email, clientIP).
+		Scan(&attempts)
+	if err != nil && err != sql.ErrNoRows {
+		return ConsumeMismatch, err
+	}
 	if attempts >= maxAttempts {
-		if err := del(); err != nil {
-			return ConsumeTooManyAttempts, err
-		}
+		// This source has spent its budget. Leave the code for other clients.
 		return ConsumeTooManyAttempts, tx.Commit()
 	}
 
 	if subtle.ConstantTimeCompare([]byte(storedHash), []byte(candidateHash)) == 1 {
-		if err := del(); err != nil {
+		if err := clear(); err != nil {
 			return ConsumeOK, err
 		}
 		return ConsumeOK, tx.Commit()
 	}
 
-	// Wrong code: count the attempt, and invalidate if the cap is now reached.
+	// Wrong code: count this IP's attempt. The code stays valid for everyone else.
 	attempts++
-	if attempts >= maxAttempts {
-		if err := del(); err != nil {
-			return ConsumeTooManyAttempts, err
-		}
-		return ConsumeTooManyAttempts, tx.Commit()
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE codes SET attempts = ? WHERE email = ?`, attempts, email); err != nil {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO code_attempts (email, client_ip, attempts) VALUES (?, ?, ?)
+		 ON CONFLICT(email, client_ip) DO UPDATE SET attempts = excluded.attempts`,
+		email, clientIP, attempts); err != nil {
 		return ConsumeMismatch, err
+	}
+	if attempts >= maxAttempts {
+		return ConsumeTooManyAttempts, tx.Commit()
 	}
 	return ConsumeMismatch, tx.Commit()
 }
@@ -351,6 +397,58 @@ ON CONFLICT(email) DO UPDATE SET secret = excluded.secret`, email, secret)
 // DeleteTOTPSecret removes the secret for an email (no-op if absent).
 func (s *SQLite) DeleteTOTPSecret(ctx context.Context, email string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM totp_secrets WHERE email = ?`, email)
+	return err
+}
+
+// TOTPFailureCount returns the number of failed TOTP verifications recorded for
+// email within the rolling window ending at now. A stale window (last failure
+// older than window) reports 0. This backs the per-account lockout that the
+// shared per-IP limiter alone cannot provide.
+func (s *SQLite) TOTPFailureCount(ctx context.Context, email string, window time.Duration, now time.Time) (int, error) {
+	var count int
+	var start int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT fail_count, window_start FROM totp_failures WHERE email = ?`, email).Scan(&count, &start)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if now.Sub(time.Unix(start, 0)) >= window {
+		return 0, nil
+	}
+	return count, nil
+}
+
+// RecordTOTPFailure registers one failed TOTP verification for email and returns
+// the resulting count within the rolling window. When the previous window has
+// elapsed the counter restarts at 1.
+func (s *SQLite) RecordTOTPFailure(ctx context.Context, email string, window time.Duration, now time.Time) (int, error) {
+	var count int
+	var start int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT fail_count, window_start FROM totp_failures WHERE email = ?`, email).Scan(&count, &start)
+	switch {
+	case err == sql.ErrNoRows || now.Sub(time.Unix(start, 0)) >= window:
+		count, start = 1, now.Unix()
+	case err != nil:
+		return 0, err
+	default:
+		count++
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO totp_failures (email, fail_count, window_start) VALUES (?, ?, ?)
+		 ON CONFLICT(email) DO UPDATE SET fail_count = excluded.fail_count, window_start = excluded.window_start`,
+		email, count, start); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// ClearTOTPFailures resets the failure counter after a successful verification.
+func (s *SQLite) ClearTOTPFailures(ctx context.Context, email string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM totp_failures WHERE email = ?`, email)
 	return err
 }
 

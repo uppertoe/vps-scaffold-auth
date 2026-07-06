@@ -20,7 +20,8 @@ const (
 	ConsumeExpired
 	// ConsumeMismatch means the code did not match (an attempt was counted).
 	ConsumeMismatch
-	// ConsumeTooManyAttempts means the attempt cap was reached; code invalidated.
+	// ConsumeTooManyAttempts means the calling clientIP reached the wrong-guess
+	// cap. The code is left intact for other clients (it is not invalidated).
 	ConsumeTooManyAttempts
 )
 
@@ -214,15 +215,16 @@ type Store interface {
 	// HasRecentCode reports whether an unconsumed code exists for email whose
 	// expiry is later than minExpiry. Callers pass minExpiry = now + OTPTTL -
 	// cooldown, i.e. "issued within the cooldown window", to suppress re-minting a
-	// still-fresh code. Because ConsumeCode deletes a row on lockout/expiry, any
-	// surviving row is by definition still usable, so no separate liveness check is
-	// needed.
+	// still-fresh code. ConsumeCode deletes the code only on a correct guess or
+	// expiry (never on wrong guesses), so any surviving row is still usable.
 	HasRecentCode(ctx context.Context, email string, minExpiry time.Time) (bool, error)
 
 	// ConsumeCode atomically checks candidateHash against the stored code for
-	// email, enforcing expiry and the attempt cap, and consumes the code on a
-	// successful match.
-	ConsumeCode(ctx context.Context, email, candidateHash string, maxAttempts int, now time.Time) (ConsumeResult, error)
+	// email, enforcing expiry and a per-clientIP wrong-guess cap, and consumes the
+	// code on a successful match. Exhausting the cap returns ConsumeTooManyAttempts
+	// for that clientIP only and leaves the code intact for other clients, so a
+	// third party cannot burn a code the legitimate holder still has.
+	ConsumeCode(ctx context.Context, email, clientIP, candidateHash string, maxAttempts int, now time.Time) (ConsumeResult, error)
 
 	// DeleteExpiredCodes removes code rows whose expiry has passed. Called
 	// opportunistically so decoys for never-verified addresses cannot accumulate
@@ -236,6 +238,14 @@ type Store interface {
 	// SetTOTPSecret stores (or replaces) the TOTP secret for an admin email.
 	SetTOTPSecret(ctx context.Context, email, secret string) error
 
+	// TOTPFailureCount returns failed TOTP verifications for email within the
+	// rolling window ending at now (a stale window reports 0).
+	TOTPFailureCount(ctx context.Context, email string, window time.Duration, now time.Time) (int, error)
+	// RecordTOTPFailure registers one failed TOTP verification and returns the
+	// resulting count within the rolling window.
+	RecordTOTPFailure(ctx context.Context, email string, window time.Duration, now time.Time) (int, error)
+	// ClearTOTPFailures resets the counter after a success.
+	ClearTOTPFailures(ctx context.Context, email string) error
 	// DeleteTOTPSecret removes the TOTP secret for an admin email (no-op if
 	// absent). Used for admin-mediated 2FA reset/removal.
 	DeleteTOTPSecret(ctx context.Context, email string) error
