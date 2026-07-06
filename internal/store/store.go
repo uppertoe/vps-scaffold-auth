@@ -99,6 +99,12 @@ type Group struct {
 // BreakGlassCode is a physical, scannable emergency-access credential. The raw
 // token is never stored; TokenEnc holds its AES-GCM ciphertext (for reprint)
 // and TokenHash is the one-way lookup key used at scan time.
+//
+// Deliberately multi-use and NEVER expiring: these are printed QR cards posted
+// at clinical locations for emergency access to critical information, so an
+// expiring or single-use card could deny care during an emergency. Containment
+// of a lost card is by admin *revoke* (Status), not by timeout — do not add
+// per-code expiry. (A 2026-07 audit suggested it; rejected on safety grounds.)
 type BreakGlassCode struct {
 	ID          int64
 	Label       string

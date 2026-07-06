@@ -318,26 +318,50 @@ func (m *Manager) ClearPending(w http.ResponseWriter) {
 
 // --- CSRF (host-only, signed double-submit token) ---
 
-// EnsureCSRF returns the request's CSRF token, minting and setting a fresh
-// signed one (host-only cookie) if absent. Embed the returned value in admin
-// forms; verify POSTs with VerifyCSRF.
-func (m *Manager) EnsureCSRF(w http.ResponseWriter, r *http.Request, ttl time.Duration) (string, error) {
+// csrfPayload is the CSRF token body: an unguessable nonce bound to the current
+// session subject (admin email). Binding to the subject means a token captured
+// from one admin cannot be replayed against another; wrapping it in the signed
+// envelope (encode/decode) gives it a real expiry, not just a cookie MaxAge.
+type csrfPayload struct {
+	Nonce []byte `json:"n"`
+	Sub   string `json:"s"`
+}
+
+// csrfSub returns the subject the CSRF token is bound to: the current session's
+// email, or "" when there is no session (pre-login forms).
+func (m *Manager) csrfSub(r *http.Request, now time.Time) string {
+	if id, ok := m.ReadSession(r, now); ok {
+		return id.Email
+	}
+	return ""
+}
+
+// EnsureCSRF returns the request's CSRF token, minting and setting a fresh one
+// (host-only cookie) if absent, expired, or bound to a different session. Embed
+// the returned value in admin forms; verify POSTs with VerifyCSRF.
+func (m *Manager) EnsureCSRF(w http.ResponseWriter, r *http.Request, ttl time.Duration, now time.Time) (string, error) {
+	sub := m.csrfSub(r, now)
 	if c, err := r.Cookie(CSRFCookie); err == nil {
-		if _, err := m.signer.Verify(c.Value); err == nil {
-			return c.Value, nil
+		var p csrfPayload
+		if err := m.decode(c.Value, now, &p); err == nil && p.Sub == sub {
+			return c.Value, nil // still valid and bound to this session
 		}
 	}
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
+	nonce := make([]byte, 32)
+	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
-	token := m.signer.Sign(buf)
+	token, err := m.encode(csrfPayload{Nonce: nonce, Sub: sub}, now.Add(ttl))
+	if err != nil {
+		return "", err
+	}
 	m.setCookie(w, CSRFCookie, token, "", ttl)
 	return token, nil
 }
 
-// VerifyCSRF reports whether the submitted token matches the signed CSRF cookie.
-func (m *Manager) VerifyCSRF(r *http.Request, submitted string) bool {
+// VerifyCSRF reports whether the submitted token matches the signed CSRF cookie,
+// is unexpired, and is bound to the current session (double-submit + binding).
+func (m *Manager) VerifyCSRF(r *http.Request, submitted string, now time.Time) bool {
 	if submitted == "" {
 		return false
 	}
@@ -348,6 +372,9 @@ func (m *Manager) VerifyCSRF(r *http.Request, submitted string) bool {
 	if subtle.ConstantTimeCompare([]byte(c.Value), []byte(submitted)) != 1 {
 		return false
 	}
-	_, err = m.signer.Verify(c.Value)
-	return err == nil
+	var p csrfPayload
+	if err := m.decode(c.Value, now, &p); err != nil { // signature + expiry
+		return false
+	}
+	return p.Sub == m.csrfSub(r, now)
 }

@@ -543,7 +543,7 @@ const csrfTTL = 12 * time.Hour
 // checkCSRF verifies the submitted token; on failure it writes a 403 and
 // returns false.
 func (s *Server) checkCSRF(w http.ResponseWriter, r *http.Request) bool {
-	if !s.sessions.VerifyCSRF(r, r.PostFormValue("csrf")) {
+	if !s.sessions.VerifyCSRF(r, r.PostFormValue("csrf"), s.now()) {
 		s.renderAdmin(w, r, http.StatusForbidden, "admin_message", adminData{
 			Title: "Request rejected", Message: "Invalid or expired form token. Please try again.",
 		})

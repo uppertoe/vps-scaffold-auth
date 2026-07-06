@@ -245,7 +245,7 @@ func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, status int,
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if tok, err := s.sessions.EnsureCSRF(w, r, csrfTTL); err == nil {
+	if tok, err := s.sessions.EnsureCSRF(w, r, csrfTTL, s.now()); err == nil {
 		data.CSRF = tok
 	}
 	w.Header().Set("Content-Security-Policy", s.csp)
