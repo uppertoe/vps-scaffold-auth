@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
@@ -30,6 +31,8 @@ type adminData struct {
 	FilterEmail string
 	AuthEvents  []authEventView
 	AppAccess   []appAccessView
+	// Admin-action audit page.
+	AdminEvents []adminEventView
 }
 
 // authEventView is one login-flow attempt row on the access-log page.
@@ -52,11 +55,24 @@ type appAccessView struct {
 	BreakGlass bool
 }
 
-func toAuthEventViews(es []store.AuthEvent) []authEventView {
+// stamp renders t in the configured display timezone (default UTC). The "MST"
+// token prints the zone abbreviation (e.g. AEDT/AEST/UTC) so the offset is
+// unambiguous. stampMin drops the seconds.
+func (s *Server) stamp(t time.Time) string    { return t.In(s.tzloc()).Format("2006-01-02 15:04:05 MST") }
+func (s *Server) stampMin(t time.Time) string { return t.In(s.tzloc()).Format("2006-01-02 15:04 MST") }
+
+func (s *Server) tzloc() *time.Location {
+	if s.loc == nil {
+		return time.UTC
+	}
+	return s.loc
+}
+
+func (s *Server) toAuthEventViews(es []store.AuthEvent) []authEventView {
 	out := make([]authEventView, 0, len(es))
 	for _, e := range es {
 		out = append(out, authEventView{
-			Time:      e.CreatedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+			Time:      s.stamp(e.CreatedAt),
 			Email:     e.Email,
 			Type:      e.EventType,
 			Outcome:   e.Outcome,
@@ -68,11 +84,11 @@ func toAuthEventViews(es []store.AuthEvent) []authEventView {
 	return out
 }
 
-func toAppAccessViews(as []store.AppAccess) []appAccessView {
+func (s *Server) toAppAccessViews(as []store.AppAccess) []appAccessView {
 	out := make([]appAccessView, 0, len(as))
 	for _, a := range as {
 		v := appAccessView{
-			Time:  a.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"),
+			Time:  s.stampMin(a.CreatedAt),
 			Email: a.Email,
 			Host:  a.Host,
 			Kind:  "login",
@@ -155,7 +171,7 @@ type codeView struct {
 	Updated     string
 }
 
-func toCodeView(c store.BreakGlassCode) codeView {
+func (s *Server) toCodeView(c store.BreakGlassCode) codeView {
 	return codeView{
 		ID:          c.ID,
 		Label:       c.Label,
@@ -164,18 +180,51 @@ func toCodeView(c store.BreakGlassCode) codeView {
 		Redirect:    c.Redirect,
 		Status:      c.Status,
 		Active:      c.Status == store.BreakGlassActive,
-		Created:     c.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"),
-		Updated:     c.UpdatedAt.UTC().Format("2006-01-02 15:04 UTC"),
+		Created:     s.stampMin(c.CreatedAt),
+		Updated:     s.stampMin(c.UpdatedAt),
 	}
 }
 
-func loadAdminTemplates() (pages, error) {
-	base, err := template.New("admin_base.html").ParseFS(templatesFS, "templates/admin_base.html")
+// adminEventView is one administrative-action row on the admin audit page.
+type adminEventView struct {
+	Time      string
+	Actor     string
+	Action    string
+	Target    string
+	Detail    string
+	ClientIP  string
+	UserAgent string
+}
+
+func (s *Server) toAdminEventViews(es []store.AdminEvent) []adminEventView {
+	out := make([]adminEventView, 0, len(es))
+	for _, e := range es {
+		out = append(out, adminEventView{
+			Time:      s.stamp(e.CreatedAt),
+			Actor:     e.Actor,
+			Action:    e.Action,
+			Target:    e.Target,
+			Detail:    e.Detail,
+			ClientIP:  e.ClientIP,
+			UserAgent: e.UserAgent,
+		})
+	}
+	return out
+}
+
+func loadAdminTemplates(loc *time.Location) (pages, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	funcs := template.FuncMap{
+		"fmtTime": func(t time.Time) string { return t.In(loc).Format("2006-01-02 15:04:05 MST") },
+	}
+	base, err := template.New("admin_base.html").Funcs(funcs).ParseFS(templatesFS, "templates/admin_base.html")
 	if err != nil {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_message", "admin_groups", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access"} {
+	for _, name := range []string{"admin_message", "admin_groups", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err

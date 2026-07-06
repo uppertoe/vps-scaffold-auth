@@ -14,6 +14,49 @@ func setValid(t *testing.T) {
 	t.Setenv("ADMIN_EMAILS", "admin@example.com")
 	t.Setenv("SESSION_SECRET", "0123456789abcdef0123456789abcdef") // 32 bytes
 	t.Setenv("EMAIL_BACKEND", "log")
+	// The log backend is dev-only (it writes OTP codes to the process log) and
+	// is gated behind the insecure-cookie dev flag; a minimal *valid* config
+	// using it must therefore also be in dev mode.
+	t.Setenv("COOKIE_INSECURE", "true")
+}
+
+func TestLoadDisplayTimezone(t *testing.T) {
+	setValid(t)
+	t.Setenv("DISPLAY_TIMEZONE", "Australia/Melbourne")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.DisplayLocation == nil || c.DisplayLocation.String() != "Australia/Melbourne" {
+		t.Errorf("DisplayLocation = %v, want Australia/Melbourne", c.DisplayLocation)
+	}
+}
+
+func TestLoadDisplayTimezoneDefaultsUTC(t *testing.T) {
+	setValid(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.DisplayLocation != time.UTC {
+		t.Errorf("DisplayLocation = %v, want UTC", c.DisplayLocation)
+	}
+}
+
+func TestLoadDisplayTimezoneInvalidFails(t *testing.T) {
+	setValid(t)
+	t.Setenv("DISPLAY_TIMEZONE", "Mars/Olympus")
+	if _, err := Load(); err == nil {
+		t.Error("expected error for an invalid DISPLAY_TIMEZONE")
+	}
+}
+
+func TestLoadLogBackendRequiresInsecure(t *testing.T) {
+	setValid(t)
+	t.Setenv("COOKIE_INSECURE", "false")
+	if _, err := Load(); err == nil {
+		t.Error("expected error: EMAIL_BACKEND=log must be refused without COOKIE_INSECURE=true")
+	}
 }
 
 func TestLoadValid(t *testing.T) {

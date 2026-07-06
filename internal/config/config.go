@@ -29,9 +29,16 @@ type Config struct {
 	AdminEmails     []string
 	DefaultRedirect string
 
-	SessionSecret      []byte
-	CookieDomain       string
-	CookieInsecure     bool // dev only: drop the Secure attribute (no TLS)
+	SessionSecret  []byte
+	CookieDomain   string
+	CookieInsecure bool // dev only: drop the Secure attribute (no TLS)
+
+	// DisplayTimezone is an IANA name (e.g. "Australia/Melbourne") used to render
+	// timestamps in the admin UI; empty means UTC. DisplayLocation is the parsed
+	// form, resolved once at load (always non-nil).
+	DisplayTimezone string
+	DisplayLocation *time.Location
+
 	SessionTTL         time.Duration
 	SessionRenew       time.Duration
 	SessionRememberTTL time.Duration // "remember me" lifetime (>= SessionTTL)
@@ -134,6 +141,15 @@ func Load() (*Config, error) {
 	if c.BreakGlassWebhookTimeout, err = getdur("BREAKGLASS_WEBHOOK_TIMEOUT", 5*time.Second); err != nil {
 		return nil, err
 	}
+	c.DisplayTimezone = strings.TrimSpace(getenv("DISPLAY_TIMEZONE", ""))
+	c.DisplayLocation = time.UTC
+	if c.DisplayTimezone != "" {
+		loc, lerr := time.LoadLocation(c.DisplayTimezone)
+		if lerr != nil {
+			return nil, fmt.Errorf("DISPLAY_TIMEZONE %q is not a valid IANA timezone (e.g. Australia/Melbourne): %w", c.DisplayTimezone, lerr)
+		}
+		c.DisplayLocation = loc
+	}
 	if c.DataEncryptionKey, err = gethexkey("DATA_ENCRYPTION_KEY"); err != nil {
 		return nil, err
 	}
@@ -213,6 +229,15 @@ func (c *Config) validate() error {
 	}
 	switch c.EmailBackend {
 	case "log":
+		// The log backend writes every OTP code to the process log (see
+		// email/log.go) -- anyone with log-read access could mint a session.
+		// It is dev/CI only, so refuse it unless the operator has also opted
+		// into the insecure-cookie dev mode. This keeps the config fail-closed:
+		// a production box (Secure cookies) that never set EMAIL_BACKEND, or set
+		// it to log by mistake, will not boot leaking codes.
+		if !c.CookieInsecure {
+			return fmt.Errorf("EMAIL_BACKEND=log writes OTP codes to the process log and is dev-only; set EMAIL_BACKEND=smtp or resend for production (or COOKIE_INSECURE=true for local dev)")
+		}
 	case "smtp":
 		if c.SMTPHost == "" || c.EmailFrom == "" {
 			return fmt.Errorf("EMAIL_BACKEND=smtp requires SMTP_HOST and EMAIL_FROM")

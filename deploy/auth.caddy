@@ -4,6 +4,13 @@
 # any inbound X-Forwarded-For (appending the real peer), which a leftmost reader
 # would trust. Caddy faces clients directly here, so {remote_host} is the client.
 auth.{$DOMAIN} {
+	# The break-glass token rides in the URL path (/break/<token>). Keep those
+	# requests out of the access log so the live bearer credential is never
+	# written to disk / shipped off-host. (Browser history still holds it -- that
+	# is inherent to a scannable card; this closes the server-side log exposure.)
+	@breakglass path /break /break/*
+	log_skip @breakglass
+
 	reverse_proxy auth:8080 {
 		header_up X-Forwarded-For {http.request.remote.host}
 	}
