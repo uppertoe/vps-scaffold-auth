@@ -71,8 +71,17 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		// to login — they are already signed in; logging in again wouldn't help and
 		// would clobber a working (e.g. break-glass) session. Their cookie is left
 		// untouched, so access to apps they *are* allowed on keeps working.
-		reqDomains, reqGroups := parsePolicy(r.Header.Get(headerPolicy))
+		policy := r.Header.Get(headerPolicy)
 		s.warnLegacyPolicy(r)
+		if strings.TrimSpace(policy) == "" {
+			// Fail closed: every shipped guard declares a policy (the plain
+			// `protected` door sends the explicit "any" sentinel). A /verify that
+			// arrives with no X-Auth-Policy is a misconfigured or hand-rolled guard,
+			// so deny rather than silently granting access to any signed-in user.
+			s.redirectToDenied(w, r)
+			return
+		}
+		reqDomains, reqGroups := parsePolicy(policy)
 		if !authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass,
 			reqDomains, reqGroups) {
 			s.redirectToDenied(w, r)

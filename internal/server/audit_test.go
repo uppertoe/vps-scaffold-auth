@@ -20,7 +20,7 @@ func TestRevokedPrincipalNotRenewed(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
 
-	if rec := c.get("/verify", nil); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
 		t.Fatalf("initial /verify = %d, want 200", rec.Code)
 	}
 
@@ -29,7 +29,7 @@ func TestRevokedPrincipalNotRenewed(t *testing.T) {
 	// Push the clock past the renew threshold so /verify hits the renew path.
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
 
-	rec := c.get("/verify", nil)
+	rec := c.get("/verify", protectedAny())
 	if rec.Code == http.StatusOK {
 		t.Fatal("revoked principal still granted at renewal (access-revocation bypass)")
 	}
@@ -44,7 +44,7 @@ func TestDemotedAdminLosesAdminGroupAtRenewal(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	if g := c.get("/verify", nil).Header().Get("Remote-Groups"); g != "admin" {
+	if g := c.get("/verify", protectedAny()).Header().Get("Remote-Groups"); g != "admin" {
 		t.Fatalf("initial groups = %q, want admin", g)
 	}
 
@@ -52,7 +52,7 @@ func TestDemotedAdminLosesAdminGroupAtRenewal(t *testing.T) {
 	srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
 
-	rec := c.get("/verify", nil)
+	rec := c.get("/verify", protectedAny())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("demoted-but-allowed user = %d, want 200", rec.Code)
 	}

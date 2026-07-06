@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- build stage ---
-FROM golang:1.25.11-alpine AS build
+FROM golang:1.25.11-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS build
 WORKDIR /src
 
 # Cache modules first.
@@ -20,7 +20,7 @@ RUN mkdir -p /data && chown 65532:65532 /data
 # --- runtime stage ---
 # distroless/static: no shell, includes CA certs for SMTP/Resend TLS, runs as
 # nonroot. The binary self-probes via `-healthcheck`, so no curl is needed.
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639
 COPY --from=build /out/auth /app
 COPY --from=build --chown=65532:65532 /data /data
 USER nonroot:nonroot

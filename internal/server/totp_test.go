@@ -97,7 +97,7 @@ func TestTOTPLoginWithProvisionedSecret(t *testing.T) {
 		t.Fatalf("/totp = %d, want 302 after valid code", rec.Code)
 	}
 
-	rec = c.get("/verify", nil)
+	rec = c.get("/verify", protectedAny())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/verify after TOTP = %d, want 200", rec.Code)
 	}

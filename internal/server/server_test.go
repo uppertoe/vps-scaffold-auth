@@ -199,7 +199,7 @@ func TestFullLoginCycle(t *testing.T) {
 	}
 
 	// 3. now /verify grants and emits identity headers
-	rec = c.get("/verify", nil)
+	rec = c.get("/verify", protectedAny())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/verify status = %d, want 200", rec.Code)
 	}
@@ -216,7 +216,7 @@ func TestAdminGetsAdminGroup(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
 	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
-	rec := c.get("/verify", nil)
+	rec := c.get("/verify", protectedAny())
 	if got := rec.Header().Get("Remote-Groups"); got != "admin" {
 		t.Errorf("Remote-Groups = %q, want admin", got)
 	}
@@ -585,7 +585,7 @@ func TestLogoutGetConfirmsThenPostSignsOut(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `action="/logout"`) || !strings.Contains(rec.Body.String(), "Sign out") {
 		t.Errorf("confirm page missing POST sign-out form: %q", rec.Body.String())
 	}
-	if rec := c.get("/verify", nil); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
 		t.Errorf("GET /logout must not end the session; /verify = %d", rec.Code)
 	}
 
