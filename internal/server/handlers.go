@@ -464,7 +464,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	code := strings.TrimSpace(r.PostFormValue("code"))
-	res, err := s.store.ConsumeCode(r.Context(), st.Email, s.hashCode(code), s.cfg.OTPMaxAttempts, now)
+	res, err := s.store.ConsumeCode(r.Context(), st.Email, clientIP(r), s.hashCode(code), s.cfg.OTPMaxAttempts, now)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
@@ -569,6 +569,16 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// Per-account lockout: the shared per-IP limiter alone lets a distributed
+	// attacker (who already controls the admin's inbox) grind the 10^6 TOTP
+	// space. Cap wrong codes per admin, mirroring the email-code attempt cap.
+	if s.totpLockedOut(r.Context(), p.Email, now) {
+		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeLockedOut)
+		s.render(w, http.StatusTooManyRequests, "totp", pageData{
+			Error: "Too many incorrect codes. This account is temporarily locked; try again shortly.", Redirect: rd,
+		})
+		return
+	}
 	secret, ok, err := s.getTOTPSecret(r.Context(), p.Email)
 	if err != nil || !ok {
 		if err == nil {
@@ -579,6 +589,9 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	code := strings.TrimSpace(r.PostFormValue("code"))
 	if !totp.Validate(code, secret) {
+		if _, err := s.store.RecordTOTPFailure(r.Context(), p.Email, totpLockoutWindow, now); err != nil {
+			log.Printf("record totp failure for %s: %v", p.Email, err)
+		}
 		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeWrongCode)
 		s.render(w, http.StatusUnauthorized, "totp", pageData{
 			Error: "Incorrect code. Please try again.", Redirect: rd,
@@ -594,8 +607,27 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// TOTP satisfied: the session carries the second-factor assurance.
+	// TOTP satisfied: clear the failure counter and issue the session.
+	if err := s.store.ClearTOTPFailures(r.Context(), p.Email); err != nil {
+		log.Printf("clear totp failures for %s: %v", p.Email, err)
+	}
 	s.completeLogin(w, r, p.Email, p.Role, rd, p.Remember, true, now)
+}
+
+// totpLockoutWindow is the rolling window over which failed TOTP verifications
+// are counted toward the per-account lockout (cap = OTP_MAX_ATTEMPTS).
+const totpLockoutWindow = 15 * time.Minute
+
+// totpLockedOut reports whether an admin has reached the TOTP failure cap within
+// the lockout window. It fails open on a store read error so an infrastructure
+// hiccup cannot lock a legitimate admin out (the per-IP limiter still applies).
+func (s *Server) totpLockedOut(ctx context.Context, email string, now time.Time) bool {
+	n, err := s.store.TOTPFailureCount(ctx, email, totpLockoutWindow, now)
+	if err != nil {
+		log.Printf("totp failure count for %s: %v", email, err)
+		return false
+	}
+	return n >= s.cfg.OTPMaxAttempts
 }
 
 // servedTarget validates rawURL as a post-login destination the gateway can
