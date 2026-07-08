@@ -57,6 +57,37 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
             type=ref,event=tag
+
+      # Build once and LOAD into the runner's docker: the image must boot and
+      # serve /healthz before anything is pushed (unit tests can pass while
+      # the packaged image is broken).
+      - name: Build image (load for smoke test)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          load: true
+          tags: vps-scaffold-auth:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — image boots and serves /healthz
+        run: |
+          set -e
+          docker run -d --name vps-scaffold-auth-smoke -p 8899:8080 -e SESSION_SECRET=$(openssl rand -hex 32) -e DOMAIN=example.com -e AUTH_PUBLIC_URL=https://auth.example.com -e ALLOWED_EMAIL_DOMAINS=example.com -e EMAIL_BACKEND=log -e COOKIE_INSECURE=true vps-scaffold-auth:ci
+          code=000
+          for i in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8899/healthz || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          echo "GET /healthz -> $code (after ${i}s)"
+          docker logs vps-scaffold-auth-smoke || true
+          docker rm -f vps-scaffold-auth-smoke >/dev/null 2>&1 || true
+          if [ "$code" != "200" ]; then
+            echo "::error::boot smoke failed — image does not serve /healthz"
+            exit 1
+          fi
+
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
