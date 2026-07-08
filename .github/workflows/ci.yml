@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
+  schedule:
+    # Weekly rebuild so base-image security fixes are picked up even when no
+    # code changes; the digest pin on the server repo follows.
+    - cron: "50 17 * * 0" # Sun 17:50 UTC (Mon 03:50 AEST)
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,7 +35,7 @@ jobs:
   publish:
     # Build and push the image on pushes to main and on version tags.
     needs: test
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
