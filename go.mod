@@ -3,7 +3,7 @@ module github.com/uppertoe/vps-scaffold-auth
 go 1.25.12
 
 require (
-	github.com/boombuler/barcode v1.0.1
+	github.com/boombuler/barcode v1.1.0
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/pquerna/otp v1.4.0
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
