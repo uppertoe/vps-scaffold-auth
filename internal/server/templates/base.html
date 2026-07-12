@@ -23,6 +23,8 @@
     --input-border: #ccd0d5;
     --err-bg: #fde8e8;
     --err-text: #9b1c1c;
+    --ok-bg: #e6f4ea;
+    --ok-text: #1e6b39;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -36,6 +38,8 @@
       --input-border: #3a3d44;
       --err-bg: #3a1a1a;
       --err-text: #f3b4b4;
+      --ok-bg: #16301f;
+      --ok-text: #92d7a8;
     }
   }
   * { box-sizing: border-box; }
@@ -90,6 +94,9 @@
   .linkbtn { width: auto; margin: 0; padding: 0; background: none; border: 0; color: var(--accent); font: inherit; cursor: pointer; }
   .linkbtn:hover { text-decoration: underline; }
   .err { background: var(--err-bg); color: var(--err-text); border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-bottom: 16px; }
+  /* Success confirmation (e.g. "email verified" before the second factor), so a
+     step that asks for another code doesn't read as the previous one failing. */
+  .ok { background: var(--ok-bg); color: var(--ok-text); border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-bottom: 16px; }
   label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: -4px 0 16px; cursor: pointer; }
   label.check input { width: auto; margin: 0; }
   .links { margin-top: 18px; text-align: center; font-size: 14px; }
