@@ -115,6 +115,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /denied", s.handleDenied)
 	mux.HandleFunc("GET /welcome", s.handleWelcome)
 	mux.HandleFunc("GET /break/{token}", s.handleBreakGlass)
+	mux.HandleFunc("POST /break/activate", s.handleBreakGlassActivate)
 	mux.HandleFunc("GET /logo.img", s.handleLogo)
 
 	// Admin subtree: one gate wraps the whole /admin/ tree. The inner mux

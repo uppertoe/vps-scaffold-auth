@@ -1,5 +1,17 @@
 {{define "title"}}No access{{end}}
 {{define "content"}}
+{{if .EmergencyOffer}}
+{{/* Emergency-first: the visitor scanned a break-glass card and their normal
+     sign-in was refused here. Time is critical, so offer ONLY the one-tap
+     emergency grant — no email-login detour. */}}
+<h1>Emergency access</h1>
+<p class="sub">Your current sign-in{{if .Identity}} (<strong>{{.Identity}}</strong>){{end}} can't open this page. To get in now, use the emergency code you just scanned.</p>
+<form method="post" action="/break/activate">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button type="submit">Use emergency access{{if .EmergencyLabel}} &mdash; {{.EmergencyLabel}}{{end}}</button>
+</form>
+<p class="sub" style="margin-top:16px">This starts a short, emergency-only session and replaces your current sign-in.</p>
+{{else}}
 <h1>You don't have access to this page</h1>
 {{if .BreakGlass}}
 <p class="sub">You're signed in for emergency access (<strong>{{.Identity}}</strong>). That emergency code only opens its own page.</p>
@@ -11,4 +23,5 @@
 <p class="sub">This account isn't allowed to open this page. You can sign in with a different account below.</p>
 {{end}}
 <a class="btn" href="{{.LoginURL}}">Sign in to continue</a>
+{{end}}
 {{end}}

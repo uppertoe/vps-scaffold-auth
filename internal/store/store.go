@@ -36,6 +36,10 @@ const (
 	OutcomeGranted = "granted"
 	OutcomeRevoked = "revoked"
 	OutcomeUnknown = "unknown"
+	// OutcomeRedirected records a scan by someone who already had a normal
+	// session: no emergency session was minted; they were sent to the resource on
+	// their own identity (which may still be offered emergency access if denied).
+	OutcomeRedirected = "redirected"
 )
 
 // Human-login audit event types, recorded in auth_events.

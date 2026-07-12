@@ -26,6 +26,18 @@ type pageData struct {
 	Identity   string
 	LoginURL   string
 	BreakGlass bool
+	// EmergencyOffer drives the one-tap "Use emergency access" button on the
+	// denial page: it appears only when the visitor arrived carrying a valid
+	// break-glass offer cookie (they scanned a card while already signed in and
+	// their normal identity was then refused). EmergencyLabel names the card; the
+	// button POSTs to /break/activate, which mints the emergency session.
+	EmergencyOffer bool
+	EmergencyLabel string
+	// CSRF is the double-submit token embedded in the emergency-access form on
+	// the denial page; /break/activate verifies it. Necessary because the offer
+	// cookie is SameSite=Lax, which is site- not origin-scoped: a sibling app on
+	// the same registrable domain could otherwise forge the activation POST.
+	CSRF string
 	// IsAdmin surfaces an Admin link on the signed-in /welcome landing for a
 	// real (non-break-glass) admin session.
 	IsAdmin bool

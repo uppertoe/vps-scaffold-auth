@@ -166,6 +166,22 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 			data.Identity = id.Email
 		}
 	}
+	// If they arrived carrying a valid break-glass offer — they scanned a card
+	// while signed in and were then refused on their own identity — surface the
+	// one-tap emergency-access button. Never offer it over a session that is
+	// already emergency access.
+	if !data.BreakGlass {
+		if offer, ok := s.sessions.ReadOffer(r, now); ok {
+			data.EmergencyOffer = true
+			data.EmergencyLabel = offer.Label
+			// Mint/return the CSRF token for the activation form. Must run before
+			// render writes the status line (EnsureCSRF sets a cookie). A failure
+			// here just leaves CSRF empty, so the POST is rejected — fail closed.
+			if tok, err := s.sessions.EnsureCSRF(w, r, csrfTTL, now); err == nil {
+				data.CSRF = tok
+			}
+		}
+	}
 	s.render(w, http.StatusForbidden, "denied", data)
 }
 
@@ -848,6 +864,48 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If the scanner already holds a normal (non-break-glass) session, don't
+	// clobber it with a scoped, short-lived emergency one. Send them to the
+	// resource on their own identity and let its own /verify decide — that is the
+	// only place that knows the resource's full policy (its domain gate lives in
+	// the app's Caddy snippet, invisible here). Carry a short-lived signed offer
+	// so that, if their identity is refused there, the denial page can grant
+	// emergency access in one tap without a re-scan. An existing break-glass
+	// session has no richer identity worth preserving, so it falls through to a
+	// fresh grant.
+	if id, ok := s.sessions.ReadSession(r, now); ok && id.Kind != session.KindBreakGlass {
+		rd := authz.SafeRedirect(code.Redirect, s.cfg.Domain, s.cfg.BreakGlassRedirect)
+		if err := s.sessions.SetOffer(w, session.Offer{CodeID: code.ID, Label: code.Label, Redirect: rd}, s.cfg.OTPTTL, now); err != nil {
+			// Non-fatal: fall through to a normal grant rather than fail the scan.
+			log.Printf("break-glass set offer: %v", err)
+		} else {
+			// Audit the deferred scan so the trail still shows the card was used,
+			// then send them on with their existing session intact. Best-effort: no
+			// access is granted here, so a failed write can't mask a privilege change
+			// (unlike the grant path, which fails closed), but log it rather than
+			// swallow it so a persistently failing store is visible.
+			if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
+				CodeID: code.ID, Label: code.Label, ClientIP: ip,
+				UserAgent: ua, Outcome: store.OutcomeRedirected,
+			}); err != nil {
+				log.Printf("break-glass record redirected event for %q: %v", code.Label, err)
+			}
+			log.Printf("break-glass redirect (existing session) for %q from %s", code.Label, ip)
+			http.Redirect(w, r, s.loginRedirect(rd), http.StatusFound)
+			return
+		}
+	}
+
+	s.grantBreakGlass(w, r, code, ip, ua, now)
+}
+
+// grantBreakGlass mints an emergency session for an active code: it writes the
+// source-of-truth audit row (before granting), notifies admins out of band, and
+// issues the short-lived, never-renewed break-glass session, then redirects to
+// the code's resource. Shared by a direct scan (handleBreakGlass, when there is
+// no existing login) and the one-tap activation from the denial page
+// (handleBreakGlassActivate).
+func (s *Server) grantBreakGlass(w http.ResponseWriter, r *http.Request, code store.BreakGlassCode, ip, ua string, now time.Time) {
 	// Source-of-truth audit, written before granting.
 	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
 		CodeID: code.ID, Label: code.Label, ClientIP: ip,
@@ -876,6 +934,67 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	}
 	rd := authz.SafeRedirect(code.Redirect, s.cfg.Domain, s.cfg.BreakGlassRedirect)
 	http.Redirect(w, r, s.loginRedirect(rd), http.StatusFound)
+}
+
+// handleBreakGlassActivate mints the emergency session from a pending offer: the
+// one-tap follow-through when someone scanned a card while already signed in and
+// their normal identity was then refused at the resource (see handleBreakGlass).
+// POST-only + CSRF-checked: the offer cookie alone is NOT sufficient authority,
+// because SameSite=Lax is site- not origin-scoped — a sibling app on the same
+// registrable domain (planka., handbook., …) is same-site with the auth host, so
+// Lax would send the offer cookie on a cross-origin POST it forged. The
+// double-submit CSRF token (minted into the denial-page form, unreadable
+// cross-origin) is the real defense; without it a malicious sibling could force a
+// session downgrade + a spoofed "granted" audit row against a signed-in user. The
+// code id from the offer is re-looked-up and re-checked active, so a card revoked
+// between scan and tap grants nothing. A card RE-MINTED (token rotated, still
+// active) in that window still activates — re-mint keeps the card live, so
+// honouring an in-flight offer for the same scope is intended; only revoke cuts a
+// pending offer off.
+func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request) {
+	now := s.now()
+	ip := clientIP(r)
+	ua := clampUserAgent(r.UserAgent())
+	if !s.breakLimiter.Allow(ip) {
+		s.render(w, http.StatusTooManyRequests, "message", pageData{
+			Title:   "Too many requests",
+			Message: "Please wait a little while and try again.",
+		})
+		return
+	}
+	if !s.sessions.VerifyCSRF(r, r.PostFormValue("csrf"), now) {
+		s.render(w, http.StatusForbidden, "message", pageData{
+			Title:   "Request rejected",
+			Message: "This emergency-access request could not be verified. Please scan the code again.",
+		})
+		return
+	}
+
+	offer, ok := s.sessions.ReadOffer(r, now)
+	if !ok {
+		// No/expired offer: nothing to activate. Send them to sign in.
+		s.restartLogin(w, r, "")
+		return
+	}
+	// Consume the offer regardless of the outcome below, so a dead or single-use
+	// offer can't be re-submitted.
+	s.sessions.ClearOffer(w)
+
+	code, ok, err := s.store.GetBreakGlassCode(r.Context(), offer.CodeID)
+	if err != nil {
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+		return
+	}
+	if !ok || code.Status != store.BreakGlassActive {
+		log.Printf("break-glass activate denied (inactive/unknown code %d) from %s", offer.CodeID, ip)
+		s.render(w, http.StatusNotFound, "message", pageData{
+			Title:   "Access code not available",
+			Message: "This emergency access code is not active. Please contact an administrator.",
+		})
+		return
+	}
+
+	s.grantBreakGlass(w, r, code, ip, ua, now)
 }
 
 // handleLogo serves the global branding logo for the public login pages.

@@ -21,6 +21,7 @@ const (
 	SessionCookie = "vps_auth_session"
 	StateCookie   = "vps_auth_state"
 	PendingCookie = "vps_auth_pending"
+	OfferCookie   = "vps_auth_bg_offer"
 	CSRFCookie    = "vps_auth_csrf"
 )
 
@@ -119,6 +120,17 @@ type Pending struct {
 	Role     string `json:"role"`
 	Redirect string `json:"rd"`
 	Remember bool   `json:"rem,omitempty"`
+}
+
+// Offer records a scanned-but-not-yet-activated break-glass card, held while an
+// already-signed-in user is redirected to the resource on their normal session
+// first. If that identity is denied, the denial page uses the offer to grant
+// emergency access in one tap without a re-scan. It carries the code's id (the
+// grant re-looks it up and re-checks it is still active), never the raw token.
+type Offer struct {
+	CodeID   int64  `json:"cid"`
+	Label    string `json:"lbl"`
+	Redirect string `json:"rd"`
 }
 
 // Manager issues and reads the typed cookies.
@@ -314,6 +326,38 @@ func (m *Manager) ReadPending(r *http.Request, now time.Time) (*Pending, bool) {
 // ClearPending expires the pending-TOTP cookie.
 func (m *Manager) ClearPending(w http.ResponseWriter) {
 	m.clearCookie(w, PendingCookie, "")
+}
+
+// --- Break-glass offer (host-only cookie) ---
+
+// SetOffer writes the break-glass offer cookie, valid for ttl. Host-only (like
+// State/Pending) so it is scoped to the auth host, where both the denial page
+// and the activation endpoint live.
+func (m *Manager) SetOffer(w http.ResponseWriter, o Offer, ttl time.Duration, now time.Time) error {
+	tok, err := m.encode(o, now.Add(ttl))
+	if err != nil {
+		return err
+	}
+	m.setCookie(w, OfferCookie, tok, "", ttl)
+	return nil
+}
+
+// ReadOffer returns the break-glass offer cookie if present and valid.
+func (m *Manager) ReadOffer(r *http.Request, now time.Time) (*Offer, bool) {
+	c, err := r.Cookie(OfferCookie)
+	if err != nil {
+		return nil, false
+	}
+	var o Offer
+	if err := m.decode(c.Value, now, &o); err != nil {
+		return nil, false
+	}
+	return &o, true
+}
+
+// ClearOffer expires the break-glass offer cookie.
+func (m *Manager) ClearOffer(w http.ResponseWriter) {
+	m.clearCookie(w, OfferCookie, "")
 }
 
 // --- CSRF (host-only, signed double-submit token) ---
