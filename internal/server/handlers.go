@@ -157,6 +157,7 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 		Redirect: rd,
 		LoginURL: s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd),
 	}
+	normalSession := false
 	if id, ok := s.sessions.ReadSession(r, now); ok {
 		if id.Kind == session.KindBreakGlass {
 			data.BreakGlass = true
@@ -164,13 +165,16 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 			data.Identity = strings.TrimPrefix(id.Email, "breakglass:")
 		} else {
 			data.Identity = id.Email
+			normalSession = true
 		}
 	}
-	// If they arrived carrying a valid break-glass offer — they scanned a card
-	// while signed in and were then refused on their own identity — surface the
-	// one-tap emergency-access button. Never offer it over a session that is
-	// already emergency access.
-	if !data.BreakGlass {
+	// Surface the one-tap emergency-access button only to someone who arrived with
+	// a pending offer AND still holds a normal session — the session the offer flow
+	// exists to preserve, and the (non-empty) subject the activation's CSRF token
+	// binds to. A session-less visitor (e.g. their session expired since the scan)
+	// is not offered it: they should re-scan the physical code, which grants
+	// directly. This keeps activation off the empty-subject CSRF path.
+	if normalSession {
 		if offer, ok := s.sessions.ReadOffer(r, now); ok {
 			data.EmergencyOffer = true
 			data.EmergencyLabel = offer.Label
@@ -875,7 +879,7 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	// fresh grant.
 	if id, ok := s.sessions.ReadSession(r, now); ok && id.Kind != session.KindBreakGlass {
 		rd := authz.SafeRedirect(code.Redirect, s.cfg.Domain, s.cfg.BreakGlassRedirect)
-		if err := s.sessions.SetOffer(w, session.Offer{CodeID: code.ID, Label: code.Label, Redirect: rd}, s.cfg.OTPTTL, now); err != nil {
+		if err := s.sessions.SetOffer(w, session.Offer{CodeID: code.ID, Label: code.Label}, s.cfg.OTPTTL, now); err != nil {
 			// Non-fatal: fall through to a normal grant rather than fail the scan.
 			log.Printf("break-glass set offer: %v", err)
 		} else {
@@ -979,6 +983,21 @@ func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request
 	// Consume the offer regardless of the outcome below, so a dead or single-use
 	// offer can't be re-submitted.
 	s.sessions.ClearOffer(w)
+
+	// Require a live normal session to activate. The offer flow exists only to
+	// preserve an existing normal session; if it is gone (expired since the scan)
+	// or is itself break-glass, there is nothing to preserve. This also closes the
+	// one case where the session-bound CSRF token degrades to the empty subject: a
+	// session-less browser, into which a same-site sibling holding a card token
+	// could otherwise force emergency access (and a spoofed grant audit row). A
+	// session-less user should re-scan the physical code, which grants directly.
+	if id, ok := s.sessions.ReadSession(r, now); !ok || id.Kind == session.KindBreakGlass {
+		s.render(w, http.StatusForbidden, "message", pageData{
+			Title:   "Please scan the code again",
+			Message: "Your sign-in is no longer active. Scan the emergency code again to get access.",
+		})
+		return
+	}
 
 	code, ok, err := s.store.GetBreakGlassCode(r.Context(), offer.CodeID)
 	if err != nil {

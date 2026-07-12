@@ -131,6 +131,35 @@ func TestBreakGlassActivateWithoutOffer(t *testing.T) {
 	}
 }
 
+// A session-less visitor (e.g. the normal session expired after the scan) is not
+// offered one-tap emergency access -- the denial page hides the button, and a
+// forced activation is refused and grants nothing. They must re-scan the physical
+// code, which grants directly.
+func TestBreakGlassActivateRequiresLiveSession(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "user@example.com", nil)
+	mintScanToken(t, srv, c, "Lab 1", "g")
+	csrf := denialCSRF(t, c) // button + token present while signed in
+
+	// Session expires; the offer and CSRF cookies remain.
+	delete(c.cookies, session.SessionCookie)
+
+	// The denial page no longer offers emergency access.
+	body := c.get("/denied?rd=https://app.example.com/", nil).Body.String()
+	if strings.Contains(body, "Use emergency access") {
+		t.Error("emergency button shown to a session-less visitor")
+	}
+	// A forced activation grants nothing.
+	rec := c.postForm("/break/activate", url.Values{"csrf": {csrf}})
+	if rec.Code == http.StatusFound {
+		t.Fatalf("session-less activation succeeded (status %d)", rec.Code)
+	}
+	if c.cookies[session.SessionCookie] != nil {
+		t.Error("session-less activation minted a session")
+	}
+}
+
 // A card revoked between scan and activation grants nothing.
 func TestBreakGlassActivateRevokedCode(t *testing.T) {
 	srv, sender := testServer(t)

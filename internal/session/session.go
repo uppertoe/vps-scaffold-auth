@@ -126,11 +126,11 @@ type Pending struct {
 // already-signed-in user is redirected to the resource on their normal session
 // first. If that identity is denied, the denial page uses the offer to grant
 // emergency access in one tap without a re-scan. It carries the code's id (the
-// grant re-looks it up and re-checks it is still active), never the raw token.
+// grant re-looks it up, re-checks it is still active, and re-derives the redirect
+// from the card), never the raw token and never the group.
 type Offer struct {
-	CodeID   int64  `json:"cid"`
-	Label    string `json:"lbl"`
-	Redirect string `json:"rd"`
+	CodeID int64  `json:"cid"`
+	Label  string `json:"lbl"`
 }
 
 // Manager issues and reads the typed cookies.
