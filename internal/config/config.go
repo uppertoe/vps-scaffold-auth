@@ -25,6 +25,7 @@ type Config struct {
 	PublicURL       string
 	Domain          string // bare server domain, e.g. example.com (from DOMAIN)
 	BrandName       string // product/site name shown in the OTP email (defaults to Domain)
+	OTPEmailSubject string // OTP email subject template; {code}/{brand} are substituted
 	AllowedDomains  []string
 	AdminEmails     []string
 	DefaultRedirect string
@@ -98,6 +99,7 @@ func Load() (*Config, error) {
 		PublicURL:       strings.TrimRight(getenv("AUTH_PUBLIC_URL", ""), "/"),
 		Domain:          strings.ToLower(getenv("DOMAIN", "")),
 		BrandName:       strings.TrimSpace(getenv("BRAND_NAME", "")),
+		OTPEmailSubject: strings.TrimSpace(getenv("OTP_EMAIL_SUBJECT", "")),
 		AllowedDomains:  splitLowerCSV(getenv("ALLOWED_EMAIL_DOMAINS", "")),
 		AdminEmails:     splitLowerCSV(getenv("ADMIN_EMAILS", "")),
 		DefaultRedirect: getenv("DEFAULT_REDIRECT", ""),
@@ -197,6 +199,16 @@ func Load() (*Config, error) {
 	// BRAND_NAME is set.
 	if c.BrandName == "" {
 		c.BrandName = c.Domain
+	}
+
+	// OTP subject defaults to the code-led form ("<code> is your sign-in code"),
+	// which keeps the code visible in the inbox/notification preview and offered
+	// to one-time-code autofill. A deployment can override it (e.g.
+	// OTP_EMAIL_SUBJECT="Login - {brand}") — {code} and {brand} are substituted
+	// at send time; a template with no {code} trades that inbox-preview
+	// affordance for a branded subject.
+	if c.OTPEmailSubject == "" {
+		c.OTPEmailSubject = "{code} is your sign-in code"
 	}
 
 	// Break-glass notifications and redirect fall back to the existing global

@@ -47,6 +47,15 @@ type pageData struct {
 	HintDomains        string
 	RequireDomains     string
 	RequireDomainLabel string
+	// RequireGroups marks a group-gated route (admin/collaborator door) carried
+	// through to the login page. It suppresses the configured-domain fallback
+	// hint/placeholder: that door is deliberately for people who can't match the
+	// domain, so it must neither hint a domain nor presume one in the example.
+	RequireGroups string
+	// EmailPlaceholder is the login field's example address, derived from the
+	// effective domain (the route requirement, else the configured allow-list)
+	// as you@<domain>; empty falls back to a generic example in the template.
+	EmailPlaceholder string
 	// AltLoginURL/AltLoginLabel offer a small "sign in another way" link for
 	// people who can't match the domain (e.g. admins via a separate route). The
 	// URL is validated to be within the server domain before it's ever rendered.
@@ -99,6 +108,11 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 		if b, ok, err := s.store.GetBranding(context.Background()); err == nil && ok && len(b.Logo) > 0 {
 			data.LogoURL = "/logo.img"
 		}
+	}
+	// Fill domain-derived UX fields on the login page (hint line + email
+	// placeholder), so even a direct visit tells the user which domain to use.
+	if page == "login" {
+		s.applyLoginBranding(&data)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)

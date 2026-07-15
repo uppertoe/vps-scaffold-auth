@@ -215,3 +215,26 @@ func TestLoadRejectsShortOTPLength(t *testing.T) {
 		t.Error("expected error for OTP_LENGTH below the floor of 6")
 	}
 }
+
+func TestOTPEmailSubjectDefault(t *testing.T) {
+	setValid(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.OTPEmailSubject != "{code} is your sign-in code" {
+		t.Errorf("OTPEmailSubject = %q, want the code-led default", c.OTPEmailSubject)
+	}
+}
+
+func TestOTPEmailSubjectOverride(t *testing.T) {
+	setValid(t)
+	t.Setenv("OTP_EMAIL_SUBJECT", "Login - {brand}")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.OTPEmailSubject != "Login - {brand}" {
+		t.Errorf("OTPEmailSubject = %q, want the override verbatim", c.OTPEmailSubject)
+	}
+}

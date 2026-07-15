@@ -114,13 +114,19 @@ func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	// address early. UX only — see the note in handleRequest; enforcement remains
 	// in handleVerify. A group-only route (admin/collaborator door) declares no
 	// domain, so nothing is carried and it neither hints nor declines.
-	reqDomains, _ := parsePolicy(r.Header.Get(headerPolicy))
+	reqDomains, reqGroups := parsePolicy(r.Header.Get(headerPolicy))
 	if v := clampHint(reqDomains); v != "" {
 		loginURL += "&rqd=" + url.QueryEscape(v)
 		// Optional friendly label to display instead of enumerating domains.
 		if lbl := clampHint(r.Header.Get(headerDomainLabel)); lbl != "" {
 			loginURL += "&dlabel=" + url.QueryEscape(lbl)
 		}
+	} else if g := clampHint(reqGroups); g != "" {
+		// Group-only route (admin/collaborator door): no domain to hint, but carry
+		// that this IS a gated route so the login page suppresses the configured-
+		// domain fallback hint/placeholder — this door is deliberately for people
+		// who can't match the domain.
+		loginURL += "&rqg=" + url.QueryEscape(g)
 	}
 	// Optional alternate-entrance link (set by the app's snippet). Validated to
 	// be within the server domain before it is carried, so it can't become an
@@ -195,7 +201,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// stay empty so completeLogin can land on the auth-host signed-in page rather
 	// than bouncing to a default that may be unservable (see loginRedirect).
 	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, "")
-	data := pageData{Redirect: rd}
+	data := pageData{Redirect: rd, RequireGroups: clampHint(r.URL.Query().Get("rqg"))}
 	applyAccessHint(&data, r.URL.Query().Get("rqd"), r.URL.Query().Get("dlabel"))
 	s.applyAltLogin(&data, r.URL.Query().Get("alt"), r.URL.Query().Get("altlabel"))
 	s.render(w, http.StatusOK, "login", data)
@@ -213,6 +219,48 @@ func applyAccessHint(d *pageData, rqd, label string) {
 	if rqd != "" {
 		d.HintDomains = domainLabel(rqd, label)
 	}
+}
+
+// applyLoginBranding fills the domain-derived UX fields on the login page from
+// the configured ALLOWED_EMAIL_DOMAINS, so a DIRECT visit (no route rqd) still
+// tells the user which domain to use. It runs after applyAccessHint, so a
+// route-supplied requirement (HintDomains/RequireDomains) always wins; this only
+// fills the gaps:
+//   - HintDomains: the "This page is for <domains> email addresses" line, from
+//     the allow-list when no route set one.
+//   - EmailPlaceholder: you@<first effective domain> — the route requirement if
+//     present, else the first allow-list domain — so the example matches who may
+//     sign in. Left empty (→ generic placeholder) when no domain is configured.
+func (s *Server) applyLoginBranding(d *pageData) {
+	// A group-gated door declares no domain on purpose (it's the entrance for
+	// people who can't match one), so never presume the allow-list here.
+	if d.RequireGroups != "" {
+		return
+	}
+	if d.HintDomains == "" && len(s.cfg.AllowedDomains) > 0 {
+		d.HintDomains = formatDomains(strings.Join(s.cfg.AllowedDomains, ","))
+	}
+	if d.EmailPlaceholder == "" {
+		dom := firstDomain(d.RequireDomains)
+		if dom == "" && len(s.cfg.AllowedDomains) > 0 {
+			dom = s.cfg.AllowedDomains[0]
+		}
+		if dom != "" {
+			d.EmailPlaceholder = "you@" + dom
+		}
+	}
+}
+
+// firstDomain returns the first domain from a comma/space/semicolon-separated
+// list (the raw route requirement), lower-cased; "" when the list is empty.
+func firstDomain(s string) string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == ';' || r == '\n' || r == '\r' || r == '\t'
+	})
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.ToLower(fields[0])
 }
 
 // domainLabel is the human display of a route's domain requirement: the
@@ -298,10 +346,11 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	rqd := clampHint(r.PostFormValue("rqd"))
 	dlabel := clampHint(r.PostFormValue("dlabel"))
+	rqg := clampHint(r.PostFormValue("rqg"))
 	alt, altLabel := r.PostFormValue("alt"), r.PostFormValue("altlabel")
 
 	if !validEmail(emailAddr) {
-		data := pageData{Error: "Please enter a valid email address.", Redirect: rd, Remember: remember}
+		data := pageData{Error: "Please enter a valid email address.", Redirect: rd, Remember: remember, RequireGroups: rqg}
 		applyAccessHint(&data, rqd, dlabel)
 		s.applyAltLogin(&data, alt, altLabel)
 		s.render(w, http.StatusBadRequest, "login", data)
@@ -319,7 +368,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	if rqd != "" && !authz.CanAccessApp(emailAddr, "", false, rqd, "") {
 		data := pageData{
 			Error:    "This app is only available to " + domainLabel(rqd, dlabel) + " email addresses. Please sign in with one of those.",
-			Redirect: rd, Remember: remember,
+			Redirect: rd, Remember: remember, RequireGroups: rqg,
 		}
 		applyAccessHint(&data, rqd, dlabel)
 		s.applyAltLogin(&data, alt, altLabel)

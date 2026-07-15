@@ -7,12 +7,13 @@
 <form method="post" action="/request" autocomplete="on">
   <input type="hidden" name="rd" value="{{.Redirect}}">
   {{if .RequireDomains}}<input type="hidden" name="rqd" value="{{.RequireDomains}}">{{end}}
+  {{if .RequireGroups}}<input type="hidden" name="rqg" value="{{.RequireGroups}}">{{end}}
   {{if .RequireDomainLabel}}<input type="hidden" name="dlabel" value="{{.RequireDomainLabel}}">{{end}}
   {{if .AltLoginURL}}<input type="hidden" name="alt" value="{{.AltLoginURL}}"><input type="hidden" name="altlabel" value="{{.AltLoginLabel}}">{{end}}
   <label for="email">Email address</label>
   <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
          autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus
-         value="{{.Email}}" placeholder="you@example.com">
+         value="{{.Email}}" placeholder="{{if .EmailPlaceholder}}{{.EmailPlaceholder}}{{else}}you@example.com{{end}}">
   <label class="check"><input type="checkbox" name="remember" value="1" {{if .Remember}}checked{{end}}> Keep me signed in</label>
   <button type="submit">Send code</button>
 </form>
