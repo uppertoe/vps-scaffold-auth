@@ -237,6 +237,17 @@ func (s *Server) applyLoginBranding(d *pageData) {
 	if d.RequireGroups != "" {
 		return
 	}
+	// Open registration accepts any domain, so there is no domain to advertise:
+	// leave the hint empty and fall back to the generic placeholder. (A route may
+	// still have set RequireDomains/HintDomains above; those win and are kept.)
+	if s.policy.OpenRegistration() {
+		if d.EmailPlaceholder == "" {
+			if dom := firstDomain(d.RequireDomains); dom != "" {
+				d.EmailPlaceholder = "you@" + dom
+			}
+		}
+		return
+	}
 	if d.HintDomains == "" && len(s.cfg.AllowedDomains) > 0 {
 		d.HintDomains = formatDomains(strings.Join(s.cfg.AllowedDomains, ","))
 	}

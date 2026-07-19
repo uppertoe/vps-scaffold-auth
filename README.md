@@ -110,6 +110,15 @@ particular people, the access rule lives in **that app's own `.caddy` snippet**
 stays global (`ALLOWED_EMAIL_DOMAINS` is the superset of who can sign in *at
 all*); each app then narrows to its own subset (the upstream is the last arg):
 
+> **Open registration (`ALLOWED_EMAIL_DOMAINS=*`).** For a public service, set the
+> allow-list to `*`: any email verified by a one-time code becomes a user. This is
+> safe because login is email-verified — the code proves the visitor controls that
+> mailbox — but it widens the global superset to *everyone*. So a bare
+> `import protected` app now admits any signed-in stranger; put public apps behind
+> plain `protected` deliberately, and gate every private app with
+> `protected_groups`/`protected_domains` (below). Admin stays an exact
+> `ADMIN_EMAILS` allow-list regardless.
+
 ```caddyfile
 # only @rch.org.au may open this one
 clinical.{$DOMAIN}  { import protected_domains "rch.org.au" clinical:3000 }
@@ -243,7 +252,7 @@ for the annotated list. Key ones:
 | Variable | Purpose |
 |---|---|
 | `AUTH_PUBLIC_URL` | Base URL of the `auth.<domain>` site |
-| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose users may sign in |
+| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose users may sign in; `*` = open registration (any OTP-verified email) |
 | `ADMIN_EMAILS` | CSV of explicit admin addresses |
 | `SESSION_SECRET` | 32+ random bytes (`openssl rand -hex 32`) |
 | `COOKIE_DOMAIN` | Leading-dot domain for the shared session cookie |
