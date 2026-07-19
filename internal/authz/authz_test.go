@@ -27,6 +27,51 @@ func TestRole(t *testing.T) {
 	}
 }
 
+func TestRoleWildcard(t *testing.T) {
+	// Open registration: "*" plus an explicit admin whitelist and an incidental
+	// literal domain (which is now redundant but must not break anything).
+	p := NewPolicy([]string{"*", "example.org"}, []string{"Admin@Example.com"})
+	if !p.OpenRegistration() {
+		t.Fatal("expected OpenRegistration() true when \"*\" is configured")
+	}
+
+	cases := []struct {
+		email string
+		want  string
+	}{
+		{"admin@example.com", RoleAdmin}, // whitelist still wins over wildcard
+		{"user@example.org", RoleUser},   // explicit domain still works
+		{"anyone@gmail.com", RoleUser},   // wildcard: any real domain
+		{"person@some.co.uk", RoleUser},  // multi-label domain
+		{"a@b.io", RoleUser},             // short but valid
+		{"", RoleDeny},                   // empty
+		{"nobody", RoleDeny},             // no @
+		{"trailing@", RoleDeny},          // empty domain
+		{"x@localhost", RoleDeny},        // no TLD: not a public mail domain
+		{"x@internal", RoleDeny},         // bare host rejected
+		{"x@a..b.com", RoleDeny},         // empty label rejected
+		{"x@example.c", RoleDeny},        // one-char TLD rejected
+		{"x@example.123", RoleDeny},      // numeric TLD rejected
+		{"x@example.com.", RoleDeny},     // trailing dot rejected
+		{"x@.example.com", RoleDeny},     // leading dot rejected
+	}
+	for _, c := range cases {
+		if got := p.Role(c.email); got != c.want {
+			t.Errorf("Role(%q) = %q, want %q", c.email, got, c.want)
+		}
+	}
+}
+
+func TestOpenRegistrationDefaultOff(t *testing.T) {
+	p := NewPolicy([]string{"example.com"}, nil)
+	if p.OpenRegistration() {
+		t.Error("expected OpenRegistration() false without \"*\"")
+	}
+	if p.Role("anyone@gmail.com") != RoleDeny {
+		t.Error("non-wildcard policy must still deny unlisted domains")
+	}
+}
+
 func TestAllowed(t *testing.T) {
 	p := NewPolicy([]string{"example.com"}, nil)
 	if !p.Allowed("a@example.com") {

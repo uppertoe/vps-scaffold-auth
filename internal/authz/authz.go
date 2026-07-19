@@ -16,27 +16,47 @@ const (
 	RoleDeny  = ""
 )
 
+// Wildcard is the ALLOWED_EMAIL_DOMAINS entry that opts an instance into open
+// registration: any email at a syntactically valid domain becomes a regular
+// user. Safe only because login is email-verified (OTP) — the code proves the
+// visitor controls that mailbox — so a wildcard grants no access to an address
+// the visitor cannot actually receive mail at. Admin remains an exact allow-list
+// regardless, and per-app gates (CanAccessApp / protected_groups) are unchanged:
+// with a wildcard, a plain `import protected` route admits any verified email,
+// so private apps behind the same auth must gate by group or domain.
+const Wildcard = "*"
+
 // Policy captures the access rules. Domains and emails are stored lowercased.
 type Policy struct {
 	allowedDomains map[string]struct{}
 	adminEmails    map[string]struct{}
+	openReg        bool // ALLOWED_EMAIL_DOMAINS contained "*": any valid domain is a user
 }
 
 // NewPolicy builds a Policy from the configured allowed domains and admin
-// emails.
+// emails. A "*" entry in allowedDomains enables open registration (see Wildcard).
 func NewPolicy(allowedDomains, adminEmails []string) *Policy {
 	p := &Policy{
 		allowedDomains: make(map[string]struct{}, len(allowedDomains)),
 		adminEmails:    make(map[string]struct{}, len(adminEmails)),
 	}
 	for _, d := range allowedDomains {
-		p.allowedDomains[strings.ToLower(strings.TrimSpace(d))] = struct{}{}
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d == Wildcard {
+			p.openReg = true
+			continue // not a literal domain; never store "*" in the exact set
+		}
+		p.allowedDomains[d] = struct{}{}
 	}
 	for _, e := range adminEmails {
 		p.adminEmails[strings.ToLower(strings.TrimSpace(e))] = struct{}{}
 	}
 	return p
 }
+
+// OpenRegistration reports whether any verified email is accepted as a user
+// (the "*" wildcard). Callers use it to suppress domain-specific login hints.
+func (p *Policy) OpenRegistration() bool { return p.openReg }
 
 // Role returns the role for an email address: RoleAdmin, RoleUser, or RoleDeny
 // (empty string) if the email is not permitted.
@@ -56,7 +76,45 @@ func (p *Policy) Role(email string) string {
 	if _, ok := p.allowedDomains[domain]; ok {
 		return RoleUser
 	}
+	// Open registration: any address at a syntactically valid, deliverable-looking
+	// domain is a user. The dot requirement rejects bare hosts like "localhost" or
+	// "internal" that can't receive public mail; real security rests on OTP, which
+	// only lets in someone who can read the code at that address.
+	if p.openReg && validPublicDomain(domain) {
+		return RoleUser
+	}
 	return RoleDeny
+}
+
+// validPublicDomain reports whether domain is plausibly a public, mail-carrying
+// domain: at least one dot, no empty labels, and a non-numeric TLD. It is a
+// sanity gate for the open-registration path, not a substitute for OTP delivery.
+func validPublicDomain(domain string) bool {
+	if domain == "" || len(domain) > 253 {
+		return false
+	}
+	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return false // needs a TLD, so "localhost" is rejected
+	}
+	for _, l := range labels {
+		if l == "" {
+			return false // no empty label (rejects "a..b")
+		}
+	}
+	tld := labels[len(labels)-1]
+	if len(tld) < 2 {
+		return false
+	}
+	for _, r := range tld {
+		if r < 'a' || r > 'z' { // TLDs are alphabetic (a-z after lowercasing)
+			return false
+		}
+	}
+	return true
 }
 
 // Allowed reports whether the email may authenticate at all.
