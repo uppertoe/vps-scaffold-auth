@@ -25,6 +25,7 @@ type Config struct {
 	PublicURL       string
 	Domain          string // bare server domain, e.g. example.com (from DOMAIN)
 	BrandName       string // product/site name shown in the OTP email (defaults to Domain)
+	LoginNotice     string // optional operator-set instruction line on the sign-in page (plain text, auto-escaped)
 	OTPEmailSubject string // OTP email subject template; {code}/{brand} are substituted
 	AllowedDomains  []string
 	AdminEmails     []string
@@ -99,6 +100,7 @@ func Load() (*Config, error) {
 		PublicURL:       strings.TrimRight(getenv("AUTH_PUBLIC_URL", ""), "/"),
 		Domain:          strings.ToLower(getenv("DOMAIN", "")),
 		BrandName:       strings.TrimSpace(getenv("BRAND_NAME", "")),
+		LoginNotice:     strings.TrimSpace(getenv("LOGIN_NOTICE", "")),
 		OTPEmailSubject: strings.TrimSpace(getenv("OTP_EMAIL_SUBJECT", "")),
 		AllowedDomains:  splitLowerCSV(getenv("ALLOWED_EMAIL_DOMAINS", "")),
 		AdminEmails:     splitLowerCSV(getenv("ADMIN_EMAILS", "")),
