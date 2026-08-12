@@ -720,11 +720,13 @@ func (s *Server) totpLockedOut(ctx context.Context, email string, now time.Time)
 }
 
 // servedTarget validates rawURL as a post-login destination the gateway can
-// actually serve: an absolute https URL on a SUBDOMAIN of the server domain. The
-// bare apex is rejected on purpose — this gateway serves subdomains
-// (auth.<domain>, app.<domain>), and a bare apex commonly has no TLS certificate,
-// so sending a freshly signed-in user there strands them on a browser security
-// error. Returns the normalised URL and true when usable.
+// actually serve: an absolute https URL on a SUBDOMAIN of the server domain.
+// The bare apex is rejected by default — this gateway usually serves
+// subdomains (auth.<domain>, app.<domain>), and a bare apex commonly has no
+// TLS certificate, so sending a freshly signed-in user there strands them on
+// a browser security error. Deployments whose apex IS a real gated site opt
+// in with ALLOW_APEX_REDIRECT=true. Returns the normalised URL and true when
+// usable.
 func (s *Server) servedTarget(rawURL string) (string, bool) {
 	target, ok := authz.ValidateRedirect(rawURL, s.cfg.Domain)
 	if !ok {
@@ -734,7 +736,8 @@ func (s *Server) servedTarget(rawURL string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	if strings.EqualFold(u.Hostname(), strings.TrimPrefix(s.cfg.Domain, ".")) {
+	if !s.cfg.AllowApexRedirect &&
+		strings.EqualFold(u.Hostname(), strings.TrimPrefix(s.cfg.Domain, ".")) {
 		return "", false // bare apex: not a host this gateway serves
 	}
 	return target, true

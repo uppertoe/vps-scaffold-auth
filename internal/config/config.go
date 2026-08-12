@@ -31,6 +31,13 @@ type Config struct {
 	AdminEmails     []string
 	DefaultRedirect string
 
+	// AllowApexRedirect permits the bare server domain as a post-login
+	// destination. Default off: on a subdomain-only deployment the apex
+	// commonly has no TLS certificate, and sending a freshly signed-in user
+	// there strands them on a browser security error. Enable when the apex is
+	// a real site behind this gateway (e.g. a gated path on a landing page).
+	AllowApexRedirect bool
+
 	SessionSecret  []byte
 	CookieDomain   string
 	CookieInsecure bool // dev only: drop the Secure attribute (no TLS)
@@ -97,27 +104,28 @@ type Config struct {
 // Load reads configuration from the environment and validates it.
 func Load() (*Config, error) {
 	c := &Config{
-		PublicURL:       strings.TrimRight(getenv("AUTH_PUBLIC_URL", ""), "/"),
-		Domain:          strings.ToLower(getenv("DOMAIN", "")),
-		BrandName:       strings.TrimSpace(getenv("BRAND_NAME", "")),
-		LoginNotice:     strings.TrimSpace(getenv("LOGIN_NOTICE", "")),
-		OTPEmailSubject: strings.TrimSpace(getenv("OTP_EMAIL_SUBJECT", "")),
-		AllowedDomains:  splitLowerCSV(getenv("ALLOWED_EMAIL_DOMAINS", "")),
-		AdminEmails:     splitLowerCSV(getenv("ADMIN_EMAILS", "")),
-		DefaultRedirect: getenv("DEFAULT_REDIRECT", ""),
-		SessionSecret:   []byte(getenv("SESSION_SECRET", "")),
-		CookieDomain:    getenv("COOKIE_DOMAIN", ""),
-		CookieInsecure:  getbool("COOKIE_INSECURE", false),
-		EmailBackend:    strings.ToLower(getenv("EMAIL_BACKEND", "log")),
-		EmailFrom:       getenv("EMAIL_FROM", ""),
-		SMTPHost:        getenv("SMTP_HOST", ""),
-		SMTPUsername:    getenv("SMTP_USERNAME", ""),
-		SMTPPassword:    getenv("SMTP_PASSWORD", ""),
-		ResendAPIKey:    getenv("RESEND_API_KEY", ""),
-		TOTPEnabled:     getbool("TOTP_ENABLED", false),
-		TOTPIssuer:      getenv("TOTP_ISSUER", ""),
-		SQLitePath:      getenv("SQLITE_PATH", "/data/auth.db"),
-		ListenAddr:      getenv("LISTEN_ADDR", ":8080"),
+		PublicURL:         strings.TrimRight(getenv("AUTH_PUBLIC_URL", ""), "/"),
+		Domain:            strings.ToLower(getenv("DOMAIN", "")),
+		BrandName:         strings.TrimSpace(getenv("BRAND_NAME", "")),
+		LoginNotice:       strings.TrimSpace(getenv("LOGIN_NOTICE", "")),
+		OTPEmailSubject:   strings.TrimSpace(getenv("OTP_EMAIL_SUBJECT", "")),
+		AllowedDomains:    splitLowerCSV(getenv("ALLOWED_EMAIL_DOMAINS", "")),
+		AdminEmails:       splitLowerCSV(getenv("ADMIN_EMAILS", "")),
+		DefaultRedirect:   getenv("DEFAULT_REDIRECT", ""),
+		AllowApexRedirect: getbool("ALLOW_APEX_REDIRECT", false),
+		SessionSecret:     []byte(getenv("SESSION_SECRET", "")),
+		CookieDomain:      getenv("COOKIE_DOMAIN", ""),
+		CookieInsecure:    getbool("COOKIE_INSECURE", false),
+		EmailBackend:      strings.ToLower(getenv("EMAIL_BACKEND", "log")),
+		EmailFrom:         getenv("EMAIL_FROM", ""),
+		SMTPHost:          getenv("SMTP_HOST", ""),
+		SMTPUsername:      getenv("SMTP_USERNAME", ""),
+		SMTPPassword:      getenv("SMTP_PASSWORD", ""),
+		ResendAPIKey:      getenv("RESEND_API_KEY", ""),
+		TOTPEnabled:       getbool("TOTP_ENABLED", false),
+		TOTPIssuer:        getenv("TOTP_ISSUER", ""),
+		SQLitePath:        getenv("SQLITE_PATH", "/data/auth.db"),
+		ListenAddr:        getenv("LISTEN_ADDR", ":8080"),
 
 		BreakGlassRedirect:     getenv("BREAKGLASS_REDIRECT", ""),
 		BreakGlassWebhookURL:   getenv("BREAKGLASS_WEBHOOK_URL", ""),

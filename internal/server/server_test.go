@@ -521,6 +521,19 @@ func TestApexRedirectFallsToWelcome(t *testing.T) {
 	}
 }
 
+func TestApexRedirectFollowedWhenAllowed(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.AllowApexRedirect = true
+	c := newClient(t, srv.Handler())
+	// Deployments whose apex is a real gated site (ALLOW_APEX_REDIRECT=true)
+	// get sent back to it after login, like any subdomain destination.
+	c.postForm("/request", url.Values{"email": {"user@example.com"}, "rd": {"https://example.com/useful-numbers/"}})
+	rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	if loc := rec.Header().Get("Location"); loc != "https://example.com/useful-numbers/" {
+		t.Fatalf("apex redirect should be followed when allowed; got %q", loc)
+	}
+}
+
 func TestRootRedirectsBySession(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
