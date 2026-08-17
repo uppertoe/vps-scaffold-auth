@@ -65,6 +65,15 @@
   @media (prefers-color-scheme: dark) { .brand img { filter: invert(1); } }
   h1 { font-size: 20px; margin: 0 0 4px; }
   p.sub { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
+  /* The operator-set notice (LOGIN_NOTICE) is an instruction the person must
+     read BEFORE choosing which email to type — for some deployments the wrong
+     address is costly to back out of (p.stonn pins the council link to it).
+     As muted .sub text it was the least visible thing on the page; give it
+     the weight of a callout instead. */
+  p.sub.notice {
+    background: var(--soft-bg); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 10px 12px; color: var(--text);
+  }
   label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
   input[type=email], input[type=text] {
     width: 100%; padding: 12px 14px; font-size: 16px; border: 1px solid var(--input-border); border-radius: 10px;
