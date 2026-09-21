@@ -119,6 +119,13 @@ func (c *client) postForm(target string, form url.Values) *httptest.ResponseReco
 
 func testServer(t *testing.T) (*Server, *captureSender) {
 	t.Helper()
+	return testServerWith(t, nil)
+}
+
+// testServerWith builds the standard test server, letting the caller adjust
+// the config before construction (some settings, like the CSP, are precomputed).
+func testServerWith(t *testing.T, adjust func(*config.Config)) (*Server, *captureSender) {
+	t.Helper()
 	st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "auth.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +150,9 @@ func testServer(t *testing.T) (*Server, *captureSender) {
 		EmailFrom:         "auth@example.com",
 		RateLimitPerEmail: config.RateLimit{Count: 100, Window: time.Minute},
 		RateLimitPerIP:    config.RateLimit{Count: 100, Window: time.Minute},
+	}
+	if adjust != nil {
+		adjust(cfg)
 	}
 	sender := newCaptureSender()
 	srv, err := New(cfg, st, sender)
@@ -785,6 +795,78 @@ func TestLoginCSPAllowsApexRedirectWhenEnabled(t *testing.T) {
 		}
 		if !allow && strings.Contains(csp, " https://example.com") {
 			t.Fatalf("apex not allowed but CSP form-action lists it; got %q", csp)
+		}
+	}
+}
+
+// formActionAllows reports whether the CSP's form-action source list permits a
+// navigation to target from a document on self, using the host-source forms the
+// policy actually emits ('self', https://host, https://*.host). Browsers apply
+// form-action to the redirect that follows a form submission (Safari still
+// does), so this is the check that decides whether a sign-in lands.
+func formActionAllows(t *testing.T, csp, self, target string) bool {
+	t.Helper()
+	var sources []string
+	for _, d := range strings.Split(csp, ";") {
+		f := strings.Fields(d)
+		if len(f) > 0 && f[0] == "form-action" {
+			sources = f[1:]
+		}
+	}
+	if sources == nil {
+		t.Fatalf("CSP has no form-action directive: %q", csp)
+	}
+	tu, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	su, _ := url.Parse(self)
+	for _, src := range sources {
+		switch {
+		case src == "'self'":
+			if tu.Scheme == su.Scheme && tu.Host == su.Host {
+				return true
+			}
+		case strings.HasPrefix(src, "https://*."):
+			if tu.Scheme == "https" && strings.HasSuffix(tu.Hostname(), strings.TrimPrefix(src, "https://*")) {
+				return true
+			}
+		case strings.HasPrefix(src, "https://"):
+			if tu.Scheme == "https" && tu.Hostname() == strings.TrimPrefix(src, "https://") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Wherever a completed sign-in redirects, the login page's own CSP must let the
+// browser follow it. This drives the real flow (request → code → verify) and
+// checks the resulting Location against the policy, for both apex settings —
+// the header-only tests above cannot catch the policy and servedTarget
+// disagreeing, which is exactly how apex sign-ins broke on Safari.
+func TestPostLoginRedirectIsAllowedByCSP(t *testing.T) {
+	for _, allowApex := range []bool{false, true} {
+		for _, rd := range []string{
+			"https://app.example.com/secret",
+			"https://example.com/gated/",
+			"https://example.com/",
+		} {
+			srv, sender := testServerWith(t, func(cfg *config.Config) { cfg.AllowApexRedirect = allowApex })
+			c := newClient(t, srv.Handler())
+			rec := c.postForm("/request", url.Values{"email": {"user@example.com"}, "rd": {rd}})
+			csp := rec.Header().Get("Content-Security-Policy")
+			rec = c.postForm("/verify-code", url.Values{"code": {sender.code()}, "rd": {rd}})
+			if rec.Code != http.StatusFound {
+				t.Fatalf("apex=%v rd=%s: /verify-code = %d, want 302", allowApex, rd, rec.Code)
+			}
+			loc := rec.Header().Get("Location")
+			if !formActionAllows(t, csp, "https://auth.example.com", loc) {
+				t.Errorf("apex=%v rd=%s: sign-in redirects to %s but form-action forbids it: %q", allowApex, rd, loc, csp)
+			}
+			if allowApex && !strings.HasPrefix(loc, rd) {
+				t.Errorf("apex=%v rd=%s: expected redirect to the destination, got %s", allowApex, rd, loc)
+			}
 		}
 	}
 }
