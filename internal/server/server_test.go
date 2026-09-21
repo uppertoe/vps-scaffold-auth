@@ -772,6 +772,23 @@ func TestLoginCSPAllowsAppSubdomainRedirects(t *testing.T) {
 	}
 }
 
+// With ALLOW_APEX_REDIRECT the bare domain is also a post-login destination,
+// and https://*.example.com does not match https://example.com. Safari enforces
+// form-action on the post-submission redirect, so the apex must be listed
+// explicitly or an apex sign-in silently goes nowhere there.
+func TestLoginCSPAllowsApexRedirectWhenEnabled(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		csp := cspPolicy("example.com", allow)
+		hasApex := strings.Contains(csp, "form-action 'self' https://example.com https://*.example.com")
+		if allow && !hasApex {
+			t.Fatalf("apex allowed but CSP form-action omits it; got %q", csp)
+		}
+		if !allow && strings.Contains(csp, " https://example.com") {
+			t.Fatalf("apex not allowed but CSP form-action lists it; got %q", csp)
+		}
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	srv, _ := testServer(t)
 	c := newClient(t, srv.Handler())

@@ -74,7 +74,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
 		breakLimiter: newBreakLimiter(cfg),
 		access:       newAccessAudit(st, cfg.AuditRetention),
-		csp:          cspPolicy(cfg.Domain),
+		csp:          cspPolicy(cfg.Domain, cfg.AllowApexRedirect),
 		pages:        tmpls,
 		adminPages:   adminTmpls,
 		emailTmpl:    emailTmpl,
@@ -150,11 +150,17 @@ func (s *Server) routes() http.Handler {
 // Safari, and newer Firefox silently refuse to follow a form-submission redirect
 // whose target isn't listed in form-action, stranding a freshly-authenticated
 // user on the auth host. The permitted set mirrors exactly what servedTarget
-// already allows as a post-login destination (subdomains of cfg.Domain); an
+// already allows as a post-login destination: subdomains of cfg.Domain, plus
+// the bare apex when ALLOW_APEX_REDIRECT is on — https://*.<domain> does not
+// match <domain> itself, and Safari enforces form-action on the redirect, so
+// an apex destination the policy omits fails silently there (2026-09-21). An
 // off-domain form post stays blocked.
-func cspPolicy(domain string) string {
+func cspPolicy(domain string, allowApex bool) string {
 	formAction := "'self'"
 	if d := strings.TrimPrefix(domain, "."); d != "" {
+		if allowApex {
+			formAction += " https://" + d
+		}
 		formAction += " https://*." + d
 	}
 	return "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action " + formAction + "; base-uri 'none'; frame-ancestors 'none'"
