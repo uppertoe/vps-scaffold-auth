@@ -621,6 +621,41 @@ func TestLogoutGetConfirmsThenPostSignsOut(t *testing.T) {
 	}
 }
 
+// An app's sign-out link may carry rd; it survives the confirmation form and
+// reaches the login page, so the person returns to the app they left. Anything
+// off-domain or not https is dropped, as on the login page.
+func TestLogoutCarriesRedirectToLogin(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+
+	rec := c.get("/logout?rd=https%3A%2F%2Fapp.example.com%2F", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `name="rd" value="https://app.example.com/"`) {
+		t.Fatalf("GET /logout?rd should carry rd into the form: %d %q", rec.Code, rec.Body.String())
+	}
+	rec = c.postForm("/logout", url.Values{"rd": {"https://app.example.com/"}})
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusFound || loc != "https://auth.example.com/login?rd=https%3A%2F%2Fapp.example.com%2F" {
+		t.Errorf("POST /logout with rd should land on login with the same rd; got %d %q", rec.Code, loc)
+	}
+
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	rec = c.get("/logout?rd=https%3A%2F%2Fevil.example.org%2F", nil)
+	if strings.Contains(rec.Body.String(), `name="rd"`) {
+		t.Errorf("an off-domain rd must be dropped from the confirmation form")
+	}
+	rec = c.postForm("/logout", url.Values{"rd": {"http://app.example.com/"}})
+	if loc := rec.Header().Get("Location"); strings.Contains(loc, "rd=") {
+		t.Errorf("a non-https rd must be dropped: %q", loc)
+	}
+	// Signed out, GET /logout?rd goes to the login page with rd intact.
+	rec = c.get("/logout?rd=https%3A%2F%2Fapp.example.com%2F", nil)
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusFound || !strings.Contains(loc, "/login?rd=https%3A%2F%2Fapp.example.com%2F") {
+		t.Errorf("signed-out GET /logout?rd should keep rd on the way to login: %d %q", rec.Code, loc)
+	}
+}
+
 func TestLogoutGetWhenSignedOutRedirectsToLogin(t *testing.T) {
 	srv, _ := testServer(t)
 	c := newClient(t, srv.Handler())

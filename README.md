@@ -302,6 +302,14 @@ secrets are issued out of band:
 instant-grant break-glass credentials, so the admin tier should carry a second
 factor.
 
+### Signing out
+
+`GET /logout` on the auth host shows a confirmation; `POST /logout` ends the
+session for every app on the domain. An app's "Sign out" link may add
+`?rd=<https URL on the domain>`; it is validated like the login page's `rd`,
+carried through the confirmation form, and handed to the login page, so the
+person returns to that app's sign-in rather than the bare login page.
+
 ### Staying signed in
 
 The login page has a **"Keep me signed in"** checkbox. Unchecked, a session

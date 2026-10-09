@@ -857,18 +857,33 @@ func (s *Server) setTOTPSecret(ctx context.Context, emailAddr, secret string) er
 	return s.store.SetTOTPSecret(ctx, emailAddr, enc)
 }
 
+// loginURL is the login page, carrying rd when there is one so the person
+// returns to the app they came from after signing in.
+func (s *Server) loginURL(rd string) string {
+	if rd == "" {
+		return s.cfg.PublicURL + "/login"
+	}
+	return s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd)
+}
+
 // handleLogoutConfirm renders a sign-out confirmation for GET /logout (a typed
 // or clicked URL). The logout itself is POST-only (handleLogout), so it can't be
 // triggered by a cross-site GET, link, or redirect; this page just gives that
 // POST a button instead of a 404. A request without a session has nothing to
 // confirm, so it's sent to the login page.
+//
+// An app may pass rd, validated like the login page's, so that after signing
+// out the person lands back on that app's login rather than the bare login
+// page: an applicant who wrote from one address and wants to sign in with
+// another goes straight back to where they were.
 func (s *Server) handleLogoutConfirm(w http.ResponseWriter, r *http.Request) {
+	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, "")
 	id, ok := s.sessions.ReadSession(r, s.now())
 	if !ok {
-		http.Redirect(w, r, s.cfg.PublicURL+"/login", http.StatusFound)
+		http.Redirect(w, r, s.loginURL(rd), http.StatusFound)
 		return
 	}
-	data := pageData{}
+	data := pageData{Redirect: rd}
 	if id.Kind == session.KindBreakGlass {
 		data.BreakGlass = true
 		data.Identity = strings.TrimPrefix(id.Email, "breakglass:")
@@ -879,10 +894,12 @@ func (s *Server) handleLogoutConfirm(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleLogout clears the session. POST-only (see handleLogoutConfirm) so a
-// cross-site GET cannot force a logout.
+// cross-site GET cannot force a logout. The confirmation form re-carries rd,
+// so the login page it lands on knows where to return to.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	rd := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
 	s.sessions.ClearSession(w)
-	http.Redirect(w, r, s.cfg.PublicURL+"/login", http.StatusFound)
+	http.Redirect(w, r, s.loginURL(rd), http.StatusFound)
 }
 
 // handleBreakGlass grants emergency access from a scanned QR code. It is public
