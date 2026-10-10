@@ -22,16 +22,16 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: "1.25.13"
+          go-version: "1.26.9"
           cache-dependency-path: go.sum
       - run: go vet ./...
       - run: go test -race ./...
       - run: CGO_ENABLED=0 go build ./...
       - name: Vulnerability scan
-        # Pinned: govulncheck v1.8.0+ needs Go 1.26, and GOTOOLCHAIN=local holds
-        # this job to the go-version above. Bump alongside the Go upgrade.
+        # Pinned, and GOTOOLCHAIN=local holds this job to the go-version above.
+        # Bump alongside the Go upgrade.
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           govulncheck ./...
 
   publish:
