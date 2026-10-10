@@ -637,7 +637,11 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 			s.adminError(w, r)
 			return
 		}
-		view = append(view, groupView{Name: g.Name, Label: g.Label, Members: members})
+		mv := make([]memberView, 0, len(members))
+		for _, m := range members {
+			mv = append(mv, memberView{Email: m, Permitted: s.policy.Allowed(m)})
+		}
+		view = append(view, groupView{Name: g.Name, Label: g.Label, Members: mv})
 	}
 	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{Title: "Groups", Groups: view})
 }
@@ -650,7 +654,7 @@ func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) 
 	if authz.IsReservedGroup(name) {
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title:   "Reserved group name",
-			Message: "The names \"admin\" and \"user\" are reserved roles and cannot be used as group names.",
+			Message: "The names \"admin\", \"user\" and \"guest\" are reserved roles and cannot be used as group names.",
 		})
 		return
 	}
@@ -741,7 +745,7 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 	if authz.IsReservedGroup(group) {
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title:   "Reserved target group",
-			Message: "A break-glass code cannot target the reserved roles \"admin\" or \"user\". Use a dedicated group instead.",
+			Message: "A break-glass code cannot target the reserved roles \"admin\", \"user\" or \"guest\". Use a dedicated group instead.",
 		})
 		return
 	}

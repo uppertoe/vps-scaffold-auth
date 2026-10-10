@@ -148,10 +148,10 @@ Always use these snippets rather than hand-rolling `forward_auth`: each one
 declares its requirement in a single `X-Auth-Policy` header set with `header_up`,
 which **replaces** any client-sent value — so a client can't inject or widen it,
 and there's no per-guard "delete the rest" list to keep in sync as features are
-added. A custom guard that omits `X-Auth-Policy` is treated as a plain
-`protected` (any signed-in user), and the gateway logs a warning if it still
-sends the old `X-Auth-Require-*` headers, so an unmigrated guard is caught loudly
-rather than silently failing open. Each guard also owns the `reverse_proxy` to
+added. A custom guard that omits `X-Auth-Policy` is refused: the gateway sends
+every signed-in user to the "no access" page rather than guessing, and logs a
+warning if the guard still sends the old `X-Auth-Require-*` headers, so an
+unmigrated guard is caught loudly rather than silently failing open. Each guard also owns the `reverse_proxy` to
 the upstream and strips the session cookie there (see the trust-model note
 above), so neither is something an app author can forget; an app that genuinely
 needs custom proxy options hand-rolls `forward_auth` + `reverse_proxy` and adds
@@ -233,15 +233,27 @@ and every group guard whose groups the guest is not in. This is deliberate. If a
 app elsewhere on the server is left with a bare `import protected`, it stays
 closed to strangers. A guest is never an admin and never sees the TOTP step.
 
-Guest sessions renew like ordinary ones, keeping their guest kind. If a guest
-reaches a page they cannot open, the "no access" page tells them they are signed
-in as a guest and offers to sign them out, so they can sign in again with an
-approved address. Guest visits appear as `guest` in the admin access log.
+Guest sessions renew like ordinary ones, keeping their guest kind, but a guest
+never receives the remember-me lifetime: sessions are stateless, so a stranger
+is kept on the short lifetime to bound how long an unwanted guest can hold a
+cookie before renewal re-checks it. If a guest reaches a page they cannot open,
+the "no access" page tells them they are signed in as a guest and offers to sign
+them out, so they can sign in again with an approved address. Guest visits
+appear as `guest` in the admin access log.
 
 The host check decides only where the gateway offers a guest sign-in; it is not
 the boundary. The destination rides in the login URL, so anyone who can receive
 mail can obtain a guest session once any host is listed. What keeps guests
 contained is that only routes which opt in will admit them.
+
+Listing a host also gives effect to group memberships that were previously
+inert. A membership for an address the allow-list does not permit used to do
+nothing, because that address could never sign in. Once any host is open, the
+same address can sign in as a guest, and the membership admits it to every app
+guarded by that group. Before listing a host, review the admin groups page,
+which marks each member the allow-list no longer admits, and remove any
+membership that should have ended with the person's access. Removing a domain
+from `ALLOWED_EMAIL_DOMAINS` does not remove group memberships.
 
 `OPEN_REGISTRATION_HOSTS` takes a comma-separated list of bare hostnames, each
 either `DOMAIN` or a subdomain of it. The gateway refuses to start if an entry is

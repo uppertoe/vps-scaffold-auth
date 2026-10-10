@@ -75,8 +75,8 @@ auth.{$DOMAIN} {
 # rest" list to keep in sync: new policy fields go inside X-Auth-Policy, so a
 # forgotten strip can't silently widen access. Always use these snippets rather
 # than hand-rolling forward_auth; a custom guard that omits X-Auth-Policy is
-# treated as a plain `protected` (any signed-in user), and the auth service logs
-# a warning if it still sends the old X-Auth-Require-* headers.
+# refused (every signed-in user is sent to the "no access" page), and the auth
+# service logs a warning if it still sends the old X-Auth-Require-* headers.
 #
 # X-Auth-Policy grammar: ";"-separated key=value fields. "domains" and "groups"
 # each hold a space/comma-separated allow-list; a bare "any" (no fields) is the

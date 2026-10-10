@@ -427,3 +427,98 @@ func TestGuestSessionEndsWhenNoHostIsOpen(t *testing.T) {
 		}
 	}
 }
+
+// A guest never gets the remember-me lifetime, whatever the form asked for.
+// Sessions are stateless, so this bounds how long an unwanted guest can hold a
+// cookie before renewal re-checks the host list.
+func TestGuestIgnoresRememberMe(t *testing.T) {
+	srv, sender := guestServer(t)
+	srv.cfg.SessionRememberTTL = 720 * time.Hour
+	c := newClient(t, srv.Handler())
+
+	sender.reset()
+	c.postForm("/request", url.Values{"email": {strangerAddr}, "rd": {openHostRD}, "remember": {"1"}})
+	code := sender.code()
+	if code == "" {
+		t.Fatal("no code sent to the stranger via the open host")
+	}
+	if rec := c.postForm("/verify-code", url.Values{"code": {code}, "rd": {openHostRD}}); rec.Code != http.StatusFound {
+		t.Fatalf("guest verify-code = %d, want 302", rec.Code)
+	}
+	ck := c.cookies[session.SessionCookie]
+	if ck == nil {
+		t.Fatal("no session cookie")
+	}
+	if ck.MaxAge > int(srv.cfg.SessionTTL.Seconds()) {
+		t.Errorf("guest remember-me MaxAge = %d, want <= %d (the short lifetime)", ck.MaxAge, int(srv.cfg.SessionTTL.Seconds()))
+	}
+	if id := sessionOf(t, srv, c); id.Kind != session.KindGuest {
+		t.Errorf("kind = %q, want guest", id.Kind)
+	}
+}
+
+// The admin groups page marks a member whose address the allow-list does not
+// admit: such a membership is a live door for a guest once any host is open.
+func TestGroupPageMarksMemberNotOnAllowList(t *testing.T) {
+	srv, sender := guestServer(t)
+	ctx := context.Background()
+	if err := srv.store.CreateGroup(ctx, "reviewers", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.AddGroupMember(ctx, "reviewers", "staff@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.AddGroupMember(ctx, "reviewers", strangerAddr); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	body := c.get("/admin/groups", nil).Body.String()
+
+	const mark = "not on the allow-list"
+	if strings.Count(body, mark) != 1 {
+		t.Fatalf("want exactly one %q mark, got %d in:\n%s", mark, strings.Count(body, mark), body)
+	}
+	// The mark sits in the stranger's cell: the member cell is "<td>email mark</td>".
+	cell := func(email string) string {
+		i := strings.Index(body, "<td>"+email)
+		if i < 0 {
+			t.Fatalf("no member cell for %s", email)
+		}
+		return body[i : i+strings.Index(body[i:], "</td>")]
+	}
+	if !strings.Contains(cell(strangerAddr), mark) {
+		t.Errorf("stranger's cell lacks the mark: %q", cell(strangerAddr))
+	}
+	if strings.Contains(cell("staff@example.com"), mark) {
+		t.Errorf("staff member's cell carries the mark: %q", cell("staff@example.com"))
+	}
+}
+
+// A session whose kind this build does not know is refused at /verify rather
+// than read as a normal login. The kind rides inside the signed envelope, so
+// only a sibling build sharing SESSION_SECRET could mint one; CanAccessApp
+// would otherwise treat it as a department user and admit it to bare
+// `protected` routes.
+func TestVerifyRefusesUnknownSessionKind(t *testing.T) {
+	srv, _ := guestServer(t)
+	c := newClient(t, srv.Handler())
+	rec := httptest.NewRecorder()
+	if err := srv.sessions.IssueSessionTTL(rec, "user@example.com", "user", "future_kind", false, time.Hour, srv.now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, ck := range rec.Result().Cookies() {
+		c.cookies[ck.Name] = ck
+	}
+	res := c.get("/verify", map[string]string{"X-Auth-Policy": "any"})
+	if res.Code != http.StatusFound || !strings.Contains(res.Header().Get("Location"), "/login") {
+		t.Fatalf("unknown kind at /verify = %d %q, want 302 to login", res.Code, res.Header().Get("Location"))
+	}
+	if ck := c.cookies[session.SessionCookie]; ck != nil && ck.Value != "" {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.AddCookie(ck)
+		if _, ok := srv.sessions.ReadSession(req, srv.now()); ok {
+			t.Error("unknown-kind session should have been cleared")
+		}
+	}
+}

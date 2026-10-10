@@ -26,6 +26,17 @@ import (
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	if id, ok := s.sessions.ReadSession(r, now); ok {
+		// Fail closed on a kind this build does not know. The kind is inside the
+		// signed envelope, so only this service can mint one, but a cookie left by
+		// a newer build (a rollback, or two versions sharing SESSION_SECRET) must
+		// not be read as a normal session and waved through a bare `protected`:
+		// CanAccessApp treats anything that is neither break-glass nor guest as
+		// a department login. Such a session is cleared and sent to sign in.
+		if !knownSessionKind(id.Kind) {
+			s.sessions.ClearSession(w)
+			s.redirectToLogin(w, r)
+			return
+		}
 		if s.sessions.NeedsRenew(id, now) {
 			// Re-check policy at renewal so access revocation actually takes
 			// effect: a principal who is no longer permitted (removed from the
@@ -816,15 +827,20 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 // first-factor-only one (see needsAdminStepUp).
 func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember, totpVerified bool, now time.Time) {
 	groups := s.computeGroups(r.Context(), emailAddr, role)
-	ttl := s.cfg.SessionTTL
-	if remember {
-		ttl = s.cfg.SessionRememberTTL
-	}
 	// The kind follows the role: a guest login is marked so /verify confines it
 	// to routes that opt in, and renewal keeps it a guest.
 	kind := ""
 	if role == authz.RoleGuest {
 		kind = session.KindGuest
+	}
+	// A guest never gets the remember-me lifetime. Sessions are stateless, so
+	// the only ways to end one guest's access are emptying
+	// OPEN_REGISTRATION_HOSTS (every guest, at their next renewal) or rotating
+	// SESSION_SECRET (everyone). Keeping a stranger on the short lifetime bounds
+	// how long an unwanted guest can hold a cookie before renewal re-checks it.
+	ttl := s.cfg.SessionTTL
+	if remember && kind != session.KindGuest {
+		ttl = s.cfg.SessionRememberTTL
 	}
 	if err := s.sessions.IssueSessionTTL(w, emailAddr, groups, kind, totpVerified, ttl, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
@@ -848,6 +864,16 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 // Break-glass sessions are never admin, so callers pass isAdmin=false for them.
 func (s *Server) needsAdminStepUp(isAdmin, totpVerified bool) bool {
 	return s.cfg.TOTPEnabled && isAdmin && !totpVerified
+}
+
+// knownSessionKind reports whether kind is one this build understands: a
+// normal login, a break-glass grant, or a guest. /verify refuses any other.
+func knownSessionKind(kind string) bool {
+	switch kind {
+	case "", session.KindBreakGlass, session.KindGuest:
+		return true
+	}
+	return false
 }
 
 // isAdminSession reports whether a session carries the admin tier. Only a normal

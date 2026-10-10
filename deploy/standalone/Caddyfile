@@ -71,7 +71,8 @@
 # "domains"/"groups" hold space/comma-separated lists; a bare "any" is the
 # plain-protected sentinel. Label + alt-login are UX only (alt is re-validated
 # server-side to be within the domain) and ride in their own plain headers. A
-# custom guard that omits X-Auth-Policy is treated as plain `protected`.
+# custom guard that omits X-Auth-Policy is refused: every signed-in user is sent
+# to the "no access" page.
 (protected) {
 	route {
 		import strip_client_identity
