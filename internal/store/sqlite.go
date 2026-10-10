@@ -305,7 +305,7 @@ func (s *SQLite) DeleteExpiredCodes(ctx context.Context, now time.Time) error {
 // email cannot delete a code the legitimate user still holds. The code is removed
 // only on a correct guess or expiry. clientIP is non-spoofable at this layer
 // (rightmost XFF + Caddy overwrites it), so the per-IP scoping cannot be rotated.
-func (s *SQLite) ConsumeCode(ctx context.Context, email, clientIP, candidateHash string, maxAttempts int, now time.Time) (ConsumeResult, error) {
+func (s *SQLite) ConsumeCode(ctx context.Context, email, clientIP, candidateHash string, maxAttempts, maxTotalAttempts int, now time.Time) (ConsumeResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ConsumeNoCode, err
@@ -314,9 +314,10 @@ func (s *SQLite) ConsumeCode(ctx context.Context, email, clientIP, candidateHash
 
 	var storedHash string
 	var expiresAt int64
+	var total int
 	err = tx.QueryRowContext(ctx,
-		`SELECT code_hash, expires_at FROM codes WHERE email = ?`, email).
-		Scan(&storedHash, &expiresAt)
+		`SELECT code_hash, expires_at, attempts FROM codes WHERE email = ?`, email).
+		Scan(&storedHash, &expiresAt, &total)
 	if err == sql.ErrNoRows {
 		return ConsumeNoCode, nil
 	}
@@ -340,6 +341,17 @@ func (s *SQLite) ConsumeCode(ctx context.Context, email, clientIP, candidateHash
 		return ConsumeExpired, tx.Commit()
 	}
 
+	// Aggregate budget across every source: the per-IP cap below cannot stop a
+	// guesser who rotates addresses, so the code itself carries a total, and
+	// reaching it burns the code. The total is set well above the per-IP cap so
+	// a single stranger still cannot burn a victim's code on their own.
+	if maxTotalAttempts > 0 && total >= maxTotalAttempts {
+		if err := clear(); err != nil {
+			return ConsumeTooManyAttempts, err
+		}
+		return ConsumeTooManyAttempts, tx.Commit()
+	}
+
 	var attempts int
 	err = tx.QueryRowContext(ctx,
 		`SELECT attempts FROM code_attempts WHERE email = ? AND client_ip = ?`, email, clientIP).
@@ -359,13 +371,25 @@ func (s *SQLite) ConsumeCode(ctx context.Context, email, clientIP, candidateHash
 		return ConsumeOK, tx.Commit()
 	}
 
-	// Wrong code: count this IP's attempt. The code stays valid for everyone else.
+	// Wrong code: count this IP's attempt and the code's total. The code stays
+	// valid for everyone else unless the total is now spent, in which case it
+	// is burned so no further source can keep guessing at it.
 	attempts++
+	total++
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO code_attempts (email, client_ip, attempts) VALUES (?, ?, ?)
 		 ON CONFLICT(email, client_ip) DO UPDATE SET attempts = excluded.attempts`,
 		email, clientIP, attempts); err != nil {
 		return ConsumeMismatch, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE codes SET attempts = ? WHERE email = ?`, total, email); err != nil {
+		return ConsumeMismatch, err
+	}
+	if maxTotalAttempts > 0 && total >= maxTotalAttempts {
+		if err := clear(); err != nil {
+			return ConsumeTooManyAttempts, err
+		}
+		return ConsumeTooManyAttempts, tx.Commit()
 	}
 	if attempts >= maxAttempts {
 		return ConsumeTooManyAttempts, tx.Commit()

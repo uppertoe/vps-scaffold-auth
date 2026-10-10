@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
@@ -912,5 +913,51 @@ func TestHealthz(t *testing.T) {
 	rec := c.get("/healthz", nil)
 	if rec.Code != http.StatusOK {
 		t.Errorf("healthz status = %d", rec.Code)
+	}
+}
+
+// The login-progress cookie is set for anyone who requests a code. Presented
+// under the session cookie's name it must not read as a session, let alone one
+// that renewal would upgrade to the claimed address's real groups.
+func TestStateCookieCannotBecomeSession(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+	state := c.cookies[session.StateCookie]
+	if state == nil {
+		t.Fatal("no state cookie after /request")
+	}
+	c.cookies[session.SessionCookie] = &http.Cookie{Name: session.SessionCookie, Value: state.Value}
+
+	// Past the renewal threshold, where a decoded identity with iat=0 would be
+	// re-derived from policy.
+	srv.now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+	if rec := c.get("/verify", map[string]string{"X-Auth-Policy": "any"}); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+		t.Fatalf("/verify with a state token as session = %d %q, want 302 to login", rec.Code, rec.Header().Get("Location"))
+	}
+	srv.now = time.Now
+	if rec := c.get("/admin/groups", nil); rec.Code != http.StatusFound {
+		t.Errorf("/admin/groups with a state token as session = %d, want 302", rec.Code)
+	}
+	if rec := c.get("/welcome", nil); rec.Code != http.StatusFound {
+		t.Errorf("/welcome with a state token as session = %d, want 302", rec.Code)
+	}
+}
+
+// An administrator removed from ADMIN_EMAILS loses the admin UI at once, not
+// at cookie expiry: the admin gate re-checks the current policy.
+func TestRemovedAdminLosesAdminUI(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	if rec := c.get("/admin/groups", nil); rec.Code != http.StatusOK {
+		t.Fatalf("admin before removal = %d, want 200", rec.Code)
+	}
+	srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
+	if rec := c.get("/admin/groups", nil); rec.Code != http.StatusFound {
+		t.Errorf("admin after removal = %d, want 302 to login", rec.Code)
+	}
+	if body := c.get("/welcome", nil).Body.String(); strings.Contains(body, `href="/admin`) {
+		t.Error("/welcome still offers the Admin link after removal")
 	}
 }

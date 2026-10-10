@@ -523,7 +523,11 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 		// its groups somehow include "admin": the admin tier requires a real
 		// login (and TOTP when enabled), not a bearer QR scan or a stranger's
 		// sign-in. isAdminSession admits only the normal session kind.
-		admin := ok && isAdminSession(id)
+		// The cookie's groups were true when it was minted; the admin UI never
+		// passes through /verify, where renewal re-checks policy, so an admin
+		// removed from ADMIN_EMAILS would otherwise keep this door until the
+		// cookie expired. Re-check the current policy on every admin request.
+		admin := ok && isAdminSession(id) && s.policy.Role(id.Email) == authz.RoleAdmin
 		// A first-factor-only admin session (minted before TOTP was enabled) is
 		// bounced to a fresh login so the TOTP step runs, rather than being
 		// honoured here. needsAdminStepUp is only evaluated once admin is true, so

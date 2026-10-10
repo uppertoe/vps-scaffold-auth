@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -112,5 +113,74 @@ func TestStateAndPendingRoundTrip(t *testing.T) {
 	p, ok := m.ReadPending(req2, now)
 	if !ok || p.Role != "admin" {
 		t.Errorf("ReadPending = %+v ok=%v", p, ok)
+	}
+}
+
+// Every token carries the purpose it was minted for, and a reader accepts only
+// its own: the state cookie set for anyone who requests a code must never read
+// as a session, nor a session as anything else.
+func TestTokenPurposeIsBound(t *testing.T) {
+	m := NewManager([]byte("0123456789abcdef0123456789abcdef"), time.Hour, 30*time.Minute, "", false)
+	now := time.Unix(1_700_000_000, 0)
+
+	rec := httptest.NewRecorder()
+	if err := m.SetState(rec, State{Email: "admin@example.com", Redirect: "https://app.example.com/"}, 10*time.Minute, now); err != nil {
+		t.Fatal(err)
+	}
+	state := rec.Result().Cookies()[0].Value
+
+	// State presented under the session cookie's name.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: state})
+	if id, ok := m.ReadSession(req, now); ok {
+		t.Fatalf("a state token read as a session: %+v", id)
+	}
+	// And under the pending and offer names.
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: PendingCookie, Value: state})
+	if _, ok := m.ReadPending(req, now); ok {
+		t.Fatal("a state token read as pending")
+	}
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: OfferCookie, Value: state})
+	if _, ok := m.ReadOffer(req, now); ok {
+		t.Fatal("a state token read as an offer")
+	}
+
+	// The other direction: a real session is not a state cookie.
+	rec = httptest.NewRecorder()
+	if err := m.IssueSession(rec, "user@example.com", "user", now); err != nil {
+		t.Fatal(err)
+	}
+	sess := rec.Result().Cookies()[0].Value
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: StateCookie, Value: sess})
+	if _, ok := m.ReadState(req, now); ok {
+		t.Fatal("a session token read as state")
+	}
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: sess})
+	if _, ok := m.ReadSession(req, now); !ok {
+		t.Fatal("a genuine session no longer reads")
+	}
+}
+
+// A token minted before the purpose field existed carries no typ and is
+// refused, so an old cookie cannot be replayed under another name after the
+// upgrade. Everyone signs in again once; that is the intended cost.
+func TestLegacyUntypedTokenRejected(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	m := NewManager(secret, time.Hour, 30*time.Minute, "", false)
+	now := time.Unix(1_700_000_000, 0)
+	data, _ := json.Marshal(Identity{Email: "admin@example.com", Groups: "admin", Iat: now.Unix()})
+	env, _ := json.Marshal(struct {
+		Exp  int64           `json:"exp"`
+		Data json.RawMessage `json:"data"`
+	}{Exp: now.Add(time.Hour).Unix(), Data: data})
+	legacy := NewSigner(secret).Sign(env)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: legacy})
+	if _, ok := m.ReadSession(req, now); ok {
+		t.Fatal("an untyped legacy token was accepted as a session")
 	}
 }

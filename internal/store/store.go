@@ -234,7 +234,14 @@ type Store interface {
 	// code on a successful match. Exhausting the cap returns ConsumeTooManyAttempts
 	// for that clientIP only and leaves the code intact for other clients, so a
 	// third party cannot burn a code the legitimate holder still has.
-	ConsumeCode(ctx context.Context, email, clientIP, candidateHash string, maxAttempts int, now time.Time) (ConsumeResult, error)
+	//
+	// maxAttempts caps wrong guesses per (email, client IP); maxTotalAttempts caps
+	// wrong guesses for the code as a whole, across every IP. Reaching the total
+	// deletes the code: a guesser who rotates source addresses gets at most
+	// maxTotalAttempts tries at any one code, and the real owner simply requests
+	// another. The per-IP cap is what stops one stranger burning a victim's code
+	// cheaply; the total is what stops a distributed guess.
+	ConsumeCode(ctx context.Context, email, clientIP, candidateHash string, maxAttempts, maxTotalAttempts int, now time.Time) (ConsumeResult, error)
 
 	// DeleteExpiredCodes removes code rows whose expiry has passed. Called
 	// opportunistically so decoys for never-verified addresses cannot accumulate

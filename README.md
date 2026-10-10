@@ -74,8 +74,9 @@ The `server-instance-template` ships the wiring under `apps/auth/`
 ### Protecting an app
 
 Add one `import` line to the app's Caddy snippet — the last argument is the
-app's upstream address. The guard runs `forward_auth` **and** proxies to the
-upstream, so there's no separate `reverse_proxy` line:
+app's upstream address. The guard runs the auth gate (the expanded form of
+`forward_auth`) **and** proxies to the upstream, so there's no separate
+`reverse_proxy` line:
 
 ```caddyfile
 # apps/dashboard/dashboard.caddy
@@ -154,8 +155,15 @@ warning if the guard still sends the old `X-Auth-Require-*` headers, so an
 unmigrated guard is caught loudly rather than silently failing open. Each guard also owns the `reverse_proxy` to
 the upstream and strips the session cookie there (see the trust-model note
 above), so neither is something an app author can forget; an app that genuinely
-needs custom proxy options hand-rolls `forward_auth` + `reverse_proxy` and adds
-`import strip_auth_cookie` itself.
+needs custom proxy options imports `auth_gate "<policy>"` (or the labeled or
+alt variant) inside its own `route`, then its own `reverse_proxy` with
+`import strip_auth_cookie`. The gate is written out in full rather than as
+`forward_auth` because of one thing `forward_auth` cannot do: when `/verify`
+renews the session it answers 2xx with a `Set-Cookie`, and `forward_auth`'s
+`copy_headers` only copies into the upstream request, so the renewed cookie
+never reached the browser and every session ran out at its original expiry.
+The gate adds the gateway's own cookie (matched by name) to the response the
+browser receives, alongside any cookie the app sets.
 
 **Early hint + decline (any route with a domain).** Whenever a route declares a
 required domain (`protected_domains`, or the domain side of `protected_access`),
@@ -376,7 +384,9 @@ The login page has a **"Keep me signed in"** checkbox. Unchecked, a session
 lasts `SESSION_TTL` (default 2h); checked, it lasts `SESSION_REMEMBER_TTL`
 (default 24h). Both are still stateless cookies, and both slide on activity
 (renewing every `SESSION_RENEW_AFTER`, default 1h, which is also where policy
-revocation and group changes take effect).
+revocation and group changes take effect). The renewal is issued by `/verify`
+and carried to the browser by the guard's auth gate; a hand-rolled
+`forward_auth` would drop it (see the note under "Protecting an app").
 
 ### Groups and the admin UI
 

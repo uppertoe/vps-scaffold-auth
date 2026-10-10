@@ -67,6 +67,9 @@ type Config struct {
 	OTPTTL         time.Duration
 	OTPLength      int
 	OTPMaxAttempts int
+	// OTPMaxTotalAttempts caps wrong guesses at one code across every source IP;
+	// reaching it burns the code. Defaults to ten times OTPMaxAttempts.
+	OTPMaxTotalAttempts int
 	// OTPResendCooldown suppresses re-minting a code while a live one is still
 	// fresh: a /request within this window of the last send is a no-op (keeps the
 	// existing code, sends no email). Must be 0 < cooldown < OTPTTL.
@@ -182,6 +185,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.OTPMaxAttempts, err = getint("OTP_MAX_ATTEMPTS", 5); err != nil {
+		return nil, err
+	}
+	if c.OTPMaxTotalAttempts, err = getint("OTP_MAX_TOTAL_ATTEMPTS", 10*c.OTPMaxAttempts); err != nil {
 		return nil, err
 	}
 	if c.OTPResendCooldown, err = getdur("OTP_RESEND_COOLDOWN", 60*time.Second); err != nil {
@@ -308,6 +314,9 @@ func (c *Config) validate() error {
 	}
 	if c.OTPMaxAttempts < 1 {
 		return fmt.Errorf("OTP_MAX_ATTEMPTS must be >= 1 (got %d)", c.OTPMaxAttempts)
+	}
+	if c.OTPMaxTotalAttempts < c.OTPMaxAttempts {
+		return fmt.Errorf("OTP_MAX_TOTAL_ATTEMPTS must be >= OTP_MAX_ATTEMPTS (got %d < %d)", c.OTPMaxTotalAttempts, c.OTPMaxAttempts)
 	}
 	// A cooldown >= TTL means a code always expires before its resend unlocks, so
 	// the user could never legitimately resend; a non-positive one disables the

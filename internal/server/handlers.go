@@ -584,7 +584,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	code := strings.TrimSpace(r.PostFormValue("code"))
-	res, err := s.store.ConsumeCode(r.Context(), st.Email, clientIP(r), s.hashCode(code), s.cfg.OTPMaxAttempts, now)
+	res, err := s.store.ConsumeCode(r.Context(), st.Email, clientIP(r), s.hashCode(code), s.cfg.OTPMaxAttempts, s.cfg.OTPMaxTotalAttempts, now)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
@@ -812,7 +812,7 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 		data.Identity = id.Email
 		// A real admin session gets an Admin link here; a break-glass or guest
 		// session never does (neither can reach the admin UI — see requireAdmin).
-		data.IsAdmin = isAdminSession(id)
+		data.IsAdmin = isAdminSession(id) && s.policy.Role(id.Email) == authz.RoleAdmin
 	}
 	if target, ok := s.servedTarget(s.cfg.DefaultRedirect); ok {
 		data.Redirect = target // rendered as a "Continue" link

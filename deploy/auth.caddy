@@ -85,14 +85,71 @@ auth.{$DOMAIN} {
 # alt URL is re-validated server-side to be within the domain), so they ride in
 # their own plain headers.
 
+# The auth gate every guard imports. It is the expanded form of Caddy's
+# forward_auth (method GET, rewrite to /verify, the two X-Forwarded-* headers
+# and the Remote-* copy on a 2xx) with one addition forward_auth cannot
+# express: when /verify answers 2xx AND sets a renewed session cookie, that
+# Set-Cookie is added to the response the browser receives. forward_auth's
+# copy_headers only copies into the upstream request, so a sliding renewal
+# issued at /verify never reached the browser and every session simply ran
+# out at its original expiry. Only the gateway's own cookie is forwarded
+# (matched by name), and it is ADDED, so an app's own Set-Cookie survives.
+# Args: policy. The labeled and alt variants add their UX header.
+(auth_gate) {
+	reverse_proxy auth:8080 {
+		import auth_gate_common
+		header_up X-Auth-Policy "{args[0]}"
+	}
+}
+
+# Args: policy, display label.
+(auth_gate_labeled) {
+	reverse_proxy auth:8080 {
+		import auth_gate_common
+		header_up X-Auth-Policy "{args[0]}"
+		header_up X-Auth-Domain-Label "{args[1]}"
+	}
+}
+
+# Args: policy, alt-login URL, alt-login label.
+(auth_gate_alt) {
+	reverse_proxy auth:8080 {
+		import auth_gate_common
+		header_up X-Auth-Policy "{args[0]}"
+		header_up X-Auth-Alt-Login "{args[1]}"
+		header_up X-Auth-Alt-Label "{args[2]}"
+	}
+}
+
+# Shared body of the gate: see auth_gate. The renewed branch is listed first
+# because the first matching handle_response wins.
+(auth_gate_common) {
+	method GET
+	rewrite /verify
+	header_up X-Forwarded-Method {method}
+	header_up X-Forwarded-Uri {uri}
+	@renewed {
+		status 2xx
+		header Set-Cookie vps_auth_session=*
+	}
+	handle_response @renewed {
+		request_header Remote-User {http.reverse_proxy.header.Remote-User}
+		request_header Remote-Email {http.reverse_proxy.header.Remote-Email}
+		request_header Remote-Groups {http.reverse_proxy.header.Remote-Groups}
+		header +Set-Cookie {http.reverse_proxy.header.Set-Cookie}
+	}
+	@allowed status 2xx
+	handle_response @allowed {
+		request_header Remote-User {http.reverse_proxy.header.Remote-User}
+		request_header Remote-Email {http.reverse_proxy.header.Remote-Email}
+		request_header Remote-Groups {http.reverse_proxy.header.Remote-Groups}
+	}
+}
+
 (protected) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "any"
-		}
+		import auth_gate "any"
 		reverse_proxy {args[0]} {
 			import strip_auth_cookie
 		}
@@ -108,11 +165,7 @@ auth.{$DOMAIN} {
 (protected_open) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "any;guests=allow"
-		}
+		import auth_gate "any;guests=allow"
 		reverse_proxy {args[0]} {
 			import strip_auth_cookie
 		}
@@ -122,11 +175,7 @@ auth.{$DOMAIN} {
 (protected_domains) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "domains={args[0]}"
-		}
+		import auth_gate "domains={args[0]}"
 		reverse_proxy {args[1]} {
 			import strip_auth_cookie
 		}
@@ -142,12 +191,7 @@ auth.{$DOMAIN} {
 (protected_domains_labeled) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "domains={args[0]}"
-			header_up X-Auth-Domain-Label "{args[1]}"
-		}
+		import auth_gate_labeled "domains={args[0]}" "{args[1]}"
 		reverse_proxy {args[2]} {
 			import strip_auth_cookie
 		}
@@ -162,13 +206,7 @@ auth.{$DOMAIN} {
 (protected_domains_alt) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "domains={args[0]}"
-			header_up X-Auth-Alt-Login "{args[1]}"
-			header_up X-Auth-Alt-Label "{args[2]}"
-		}
+		import auth_gate_alt "domains={args[0]}" "{args[1]}" "{args[2]}"
 		reverse_proxy {args[3]} {
 			import strip_auth_cookie
 		}
@@ -178,11 +216,7 @@ auth.{$DOMAIN} {
 (protected_groups) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "groups={args[0]}"
-		}
+		import auth_gate "groups={args[0]}"
 		reverse_proxy {args[1]} {
 			import strip_auth_cookie
 		}
@@ -194,11 +228,7 @@ auth.{$DOMAIN} {
 (protected_admin) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "groups=admin"
-		}
+		import auth_gate "groups=admin"
 		reverse_proxy {args[0]} {
 			import strip_auth_cookie
 		}
@@ -208,11 +238,7 @@ auth.{$DOMAIN} {
 (protected_access) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "domains={args[0]};groups={args[1]}"
-		}
+		import auth_gate "domains={args[0]};groups={args[1]}"
 		reverse_proxy {args[2]} {
 			import strip_auth_cookie
 		}

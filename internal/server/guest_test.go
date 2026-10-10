@@ -88,7 +88,7 @@ func TestRequestSendsGuestCodeOnlyForOpenHost(t *testing.T) {
 	if !noEmailSent(sender) {
 		t.Fatal("a code was mailed to a stranger for a host that is not open")
 	}
-	res, err := srv.store.ConsumeCode(ctx, strangerAddr, "10.0.0.1", srv.hashCode("000000"), 5, time.Now())
+	res, err := srv.store.ConsumeCode(ctx, strangerAddr, "10.0.0.1", srv.hashCode("000000"), 5, 50, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

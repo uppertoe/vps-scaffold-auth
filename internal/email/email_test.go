@@ -6,9 +6,13 @@ import (
 	"io"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/mail"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestNewBackendSelection(t *testing.T) {
@@ -157,5 +161,49 @@ func TestExtractAddr(t *testing.T) {
 		if got := extractAddr(in); got != want {
 			t.Errorf("extractAddr(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A relay that accepts the connection and then says nothing must not hold
+// Send past its context: the dial, greeting and every later step are bounded.
+func TestSMTPSendHonoursContextDeadline(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var mu sync.Mutex
+	var held []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, c) // accept and stall: never send the 220 greeting
+			mu.Unlock()
+		}
+	}()
+	defer func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range held {
+			c.Close()
+		}
+	}()
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	s := &SMTPSender{Host: host, Port: port, From: "a@b"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = s.Send(ctx, Message{To: "x@y", Subject: "s", Text: "t"})
+	if err == nil {
+		t.Fatal("Send returned nil against a stalled relay")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Send took %v, want to return at the context deadline", elapsed)
 	}
 }
