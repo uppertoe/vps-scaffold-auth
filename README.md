@@ -38,9 +38,10 @@ browser ──▶ Caddy (app.example.com)
 5. `/verify` now returns 200 plus `Remote-User`, `Remote-Email`, and
    `Remote-Groups`, which Caddy forwards to the app.
 
-`Remote-Groups` is a **comma-separated set**: the base role (`admin` or `user`)
-followed by any DB-managed groups the user belongs to (e.g.
-`user,whitelisted`). The role is always present, so existing role-equality
+`Remote-Groups` is a **comma-separated set**: the base role (`admin`, `user`, or
+`guest` for a stranger admitted by [open registration for one
+app](#open-registration-for-one-app)) followed by any DB-managed groups the user
+belongs to (e.g. `user,whitelisted`). The role is always present, so existing role-equality
 matchers keep working — but matchers that want the richer groups should test for
 membership in the list. The group set is computed at login and re-computed when a
 session renews, so membership changes take effect within `SESSION_RENEW_AFTER`.
@@ -110,14 +111,10 @@ particular people, the access rule lives in **that app's own `.caddy` snippet**
 stays global (`ALLOWED_EMAIL_DOMAINS` is the superset of who can sign in *at
 all*); each app then narrows to its own subset (the upstream is the last arg):
 
-> **Open registration (`ALLOWED_EMAIL_DOMAINS=*`).** For a public service, set the
-> allow-list to `*`: any email verified by a one-time code becomes a user. This is
-> safe because login is email-verified — the code proves the visitor controls that
-> mailbox — but it widens the global superset to *everyone*. So a bare
-> `import protected` app now admits any signed-in stranger; put public apps behind
-> plain `protected` deliberately, and gate every private app with
-> `protected_groups`/`protected_domains` (below). Admin stays an exact
-> `ADMIN_EMAILS` allow-list regardless.
+> **Opening one app to the public.** An app that strangers must be able to sign
+> in to (an application form, say) does not need the allow-list widened. List its
+> host in `OPEN_REGISTRATION_HOSTS` and guard it with `protected_open`; see
+> [Open registration for one app](#open-registration-for-one-app).
 
 ```caddyfile
 # only @rch.org.au may open this one
@@ -135,7 +132,8 @@ upstream `host:port`, always the **last** argument):
 
 | Snippet | Grants access to | Login hint + early decline? |
 |---|---|---|
-| `import protected <up>` | any signed-in user (**not** break-glass) | no |
+| `import protected <up>` | any signed-in user (**not** break-glass, **not** guests) | no |
+| `import protected_open <up>` | any signed-in user **and** guests from an open-registration host | no |
 | `import protected_domains "<domains>" <up>` | signed-in users at a listed email domain | **yes** |
 | `import protected_domains_labeled "<domains>" "<label>" <up>` | same, but the hint/decline shows `<label>` instead of listing the domains | **yes** |
 | `import protected_domains_alt "<domains>" "<url>" "<label>" <up>` | same, plus a "sign in another way" link to `<url>` for non-domain users | **yes** |
@@ -209,6 +207,55 @@ Per-route is just per-route Caddy: put a guard inside a `handle @path { … }`
 block so one app can have, say, a staff entrance and a separate emergency one
 (see the worked example in [`deploy/standalone/Caddyfile`](deploy/standalone/Caddyfile)).
 
+##### Open registration for one app
+
+Some apps are meant for people the department does not yet know, such as an
+applicant portal. Set `OPEN_REGISTRATION_HOSTS` to that app's host and guard the
+app with `protected_open`:
+
+```caddyfile
+# .env:  OPEN_REGISTRATION_HOSTS=apply.example.com
+apply.{$DOMAIN} { import protected_open apply:3000 }
+```
+
+When someone signs in on the way to a listed host and their address is not on
+the allow-list, the gateway sends them a code as usual and, once they enter it,
+signs them in as a **guest**. Their `Remote-Groups` begins with `guest`, followed
+by any groups an admin has placed them in, so the app can tell a stranger from a
+member of staff. Someone whose address is on the allow-list, or who is an admin,
+signs in with their usual role on the open host as anywhere else.
+
+A guest is admitted only where a route opts in. `protected_open` (policy
+`any;guests=allow`) admits guests, and a group guard admits a guest whom an admin
+has placed in one of its groups. Every other guard keeps guests out: the bare
+`import protected`, every domain guard (even one naming the guest's own domain),
+and every group guard whose groups the guest is not in. This is deliberate. If an
+app elsewhere on the server is left with a bare `import protected`, it stays
+closed to strangers. A guest is never an admin and never sees the TOTP step.
+
+Guest sessions renew like ordinary ones, keeping their guest kind. If a guest
+reaches a page they cannot open, the "no access" page tells them they are signed
+in as a guest and offers to sign them out, so they can sign in again with an
+approved address. Guest visits appear as `guest` in the admin access log.
+
+The host check decides only where the gateway offers a guest sign-in; it is not
+the boundary. The destination rides in the login URL, so anyone who can receive
+mail can obtain a guest session once any host is listed. What keeps guests
+contained is that only routes which opt in will admit them.
+
+`OPEN_REGISTRATION_HOSTS` takes a comma-separated list of bare hostnames, each
+either `DOMAIN` or a subdomain of it. The gateway refuses to start if an entry is
+anything else, such as a URL, a host with a port, or a sibling domain.
+
+**The global form, `ALLOWED_EMAIL_DOMAINS=*`.** This older switch still works: any
+email verified by a one-time code becomes an ordinary `user`, on every host. Login
+is still email-verified, but every bare `import protected` app then admits any
+signed-in stranger, so each private app must gate itself with
+`protected_groups` or `protected_domains`. We discourage it on a shared server,
+where one app that forgets to gate itself is open to everyone; use
+`OPEN_REGISTRATION_HOSTS` instead. Admin stays an exact `ADMIN_EMAILS` allow-list
+either way.
+
 #### Mixing public and protected routes
 
 Not every route needs a login. A webhook receiver, a health check, or a public
@@ -252,7 +299,8 @@ for the annotated list. Key ones:
 | Variable | Purpose |
 |---|---|
 | `AUTH_PUBLIC_URL` | Base URL of the `auth.<domain>` site |
-| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose users may sign in; `*` = open registration (any OTP-verified email) |
+| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose users may sign in; `*` = open registration on every host (discouraged on a shared server) |
+| `OPEN_REGISTRATION_HOSTS` | CSV of hosts (`DOMAIN` or a subdomain) where other addresses may sign in as guests; see [Open registration for one app](#open-registration-for-one-app) |
 | `ADMIN_EMAILS` | CSV of explicit admin addresses |
 | `SESSION_SECRET` | 32+ random bytes (`openssl rand -hex 32`) |
 | `COOKIE_DOMAIN` | Leading-dot domain for the shared session cookie |
@@ -419,7 +467,8 @@ still reach an app during a time-critical event (e.g. a code stroke).
   Break-glass sessions use a short, non-renewable TTL so revoking a code bounds
   exposure tightly, and are never accepted by the admin UI.
 - Break-glass target groups and DB group names cannot be the reserved roles
-  `admin`/`user`, so emergency access can never silently confer the admin tier.
+  `admin`/`user`/`guest`, so emergency access can never silently confer the admin
+  tier, and no group can make a member of staff look like a guest.
 
 ## Local development
 

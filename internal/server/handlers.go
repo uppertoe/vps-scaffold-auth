@@ -33,7 +33,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			// cleared instead of silently extended. Recomputing groups also
 			// picks up membership and demotion changes. Break-glass sessions
 			// never reach here (NeedsRenew is false for them).
-			role := s.policy.Role(id.Email)
+			role := s.renewalRole(id)
 			if role == authz.RoleDeny {
 				s.sessions.ClearSession(w)
 				s.redirectToLogin(w, r)
@@ -51,15 +51,18 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			groups := s.computeGroups(r.Context(), id.Email, role)
+			// id.Kind is passed through, so a guest stays a guest across renewals
+			// (and so stays confined to guests=allow routes).
 			_ = s.sessions.IssueSessionTTL(w, id.Email, groups, id.Kind, id.TOTP, s.sessions.SessionTTL(id), now)
 			// Reflect the freshly computed set in this response too, not just
 			// the renewed cookie, so a demotion takes effect immediately.
 			id.Groups = groups
-		} else if s.needsAdminStepUp(id.Kind != session.KindBreakGlass && authz.HasGroup(id.Groups, authz.RoleAdmin), id.TOTP) {
+		} else if s.needsAdminStepUp(isAdminSession(id), id.TOTP) {
 			// Not yet due for renewal, but an existing admin session that lacks the
 			// second factor (TOTP was enabled after it was minted) must step up now
 			// rather than riding a first-factor-only cookie for up to
-			// SESSION_RENEW_AFTER. Break-glass sessions are excluded (never admin).
+			// SESSION_RENEW_AFTER. Break-glass and guest sessions are excluded
+			// (never admin).
 			s.sessions.ClearSession(w)
 			s.redirectToLogin(w, r)
 			return
@@ -81,9 +84,9 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			s.redirectToDenied(w, r)
 			return
 		}
-		reqDomains, reqGroups := parsePolicy(policy)
-		if !authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass,
-			reqDomains, reqGroups) {
+		reqDomains, reqGroups, allowGuests := parsePolicy(policy)
+		if !authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass, id.Kind == session.KindGuest,
+			reqDomains, reqGroups, allowGuests) {
 			s.redirectToDenied(w, r)
 			return
 		}
@@ -114,7 +117,7 @@ func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	// address early. UX only — see the note in handleRequest; enforcement remains
 	// in handleVerify. A group-only route (admin/collaborator door) declares no
 	// domain, so nothing is carried and it neither hints nor declines.
-	reqDomains, reqGroups := parsePolicy(r.Header.Get(headerPolicy))
+	reqDomains, reqGroups, _ := parsePolicy(r.Header.Get(headerPolicy))
 	if v := clampHint(reqDomains); v != "" {
 		loginURL += "&rqd=" + url.QueryEscape(v)
 		// Optional friendly label to display instead of enumerating domains.
@@ -165,11 +168,21 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 	}
 	normalSession := false
 	if id, ok := s.sessions.ReadSession(r, now); ok {
-		if id.Kind == session.KindBreakGlass {
+		switch id.Kind {
+		case session.KindBreakGlass:
 			data.BreakGlass = true
 			// principal is "breakglass:<label>"; show the human label.
 			data.Identity = strings.TrimPrefix(id.Email, "breakglass:")
-		} else {
+		case session.KindGuest:
+			// A guest is told plainly what they are signed in as and that this page
+			// wants an approved address. The way forward is to sign out and back in
+			// with that address, so the button is sign-out (carrying rd, so the
+			// login page returns them here). No emergency offer: the one-tap grant
+			// exists to spare a department login, which a guest session is not.
+			data.Guest = true
+			data.Identity = id.Email
+			data.LogoutURL = s.logoutURL(rd)
+		default:
 			data.Identity = id.Email
 			normalSession = true
 		}
@@ -240,7 +253,9 @@ func (s *Server) applyLoginBranding(d *pageData) {
 	// Open registration accepts any domain, so there is no domain to advertise:
 	// leave the hint empty and fall back to the generic placeholder. (A route may
 	// still have set RequireDomains/HintDomains above; those win and are kept.)
-	if s.policy.OpenRegistration() {
+	// The same holds for a login headed to an open-registration host, where a
+	// stranger's address is welcome as a guest.
+	if s.policy.OpenRegistration() || s.isOpenHost(d.Redirect) {
 		if d.EmailPlaceholder == "" {
 			if dom := firstDomain(d.RequireDomains); dom != "" {
 				d.EmailPlaceholder = "you@" + dom
@@ -376,7 +391,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// This is a courtesy, NOT a security boundary: rqd rides in the
 	// (client-modifiable) login URL, so the authoritative check stays in
 	// handleVerify with Caddy's trusted header_up.
-	if rqd != "" && !authz.CanAccessApp(emailAddr, "", false, rqd, "") {
+	if rqd != "" && !authz.CanAccessApp(emailAddr, "", false, false, rqd, "", false) {
 		data := pageData{
 			Error:    "This app is only available to " + domainLabel(rqd, dlabel) + " email addresses. Please sign in with one of those.",
 			Redirect: rd, Remember: remember, RequireGroups: rqg,
@@ -403,7 +418,12 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// off-domain addresses are admins. Either branch falls through to the same
 	// response. EnsureCode is insert-if-absent, so a rate-limited permitted user's
 	// live code is never overwritten.
-	if s.policy.Allowed(emailAddr) {
+	//
+	// "Permitted" includes a would-be guest: when rd points at an open-
+	// registration host, any syntactically valid public address is sent a real
+	// code (LoginRole returns RoleGuest). That leaks nothing, since on such a host
+	// everyone is mailed; on every other host the decoy behaviour is unchanged.
+	if s.policy.LoginRole(emailAddr, s.isOpenHost(rd)) != authz.RoleDeny {
 		// Suppress a re-request while the last code is still fresh: a code minted
 		// within the cooldown window has expires_at > now + OTPTTL - cooldown.
 		// Deriving issue time from expiry is exact because SaveCode sets
@@ -561,7 +581,12 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 
 	switch res {
 	case store.ConsumeOK:
-		role := s.policy.Role(st.Email)
+		// Re-derive "open host" from the destination exactly as /request did. rd
+		// is client-influenced (the posted copy wins), so this is not what keeps
+		// strangers out: a guest session is the same whichever host minted it,
+		// and the boundary is CanAccessApp admitting guests only on routes that
+		// opt in. The host check only decides where a guest login is offered.
+		role := s.policy.LoginRole(st.Email, s.isOpenHost(rd))
 		if role == authz.RoleDeny {
 			s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeDenied)
 			s.sessions.ClearState(w)
@@ -577,7 +602,8 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Code-only completion: either a non-admin, or TOTP is disabled. No second
-		// factor was presented, so the session records totp=false.
+		// factor was presented, so the session records totp=false. A guest always
+		// lands here (RoleGuest is never RoleAdmin), so it is never sent to TOTP.
 		s.completeLogin(w, r, st.Email, role, rd, st.Remember, false, now)
 	case store.ConsumeMismatch:
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeWrongCode)
@@ -773,9 +799,9 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 		data.Identity = strings.TrimPrefix(id.Email, "breakglass:")
 	} else {
 		data.Identity = id.Email
-		// A real admin session gets an Admin link here; a break-glass session
-		// never does (it can't reach the admin UI anyway — see requireAdmin).
-		data.IsAdmin = authz.HasGroup(id.Groups, authz.RoleAdmin)
+		// A real admin session gets an Admin link here; a break-glass or guest
+		// session never does (neither can reach the admin UI — see requireAdmin).
+		data.IsAdmin = isAdminSession(id)
 	}
 	if target, ok := s.servedTarget(s.cfg.DefaultRedirect); ok {
 		data.Redirect = target // rendered as a "Continue" link
@@ -794,7 +820,13 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	if remember {
 		ttl = s.cfg.SessionRememberTTL
 	}
-	if err := s.sessions.IssueSessionTTL(w, emailAddr, groups, "", totpVerified, ttl, now); err != nil {
+	// The kind follows the role: a guest login is marked so /verify confines it
+	// to routes that opt in, and renewal keeps it a guest.
+	kind := ""
+	if role == authz.RoleGuest {
+		kind = session.KindGuest
+	}
+	if err := s.sessions.IssueSessionTTL(w, emailAddr, groups, kind, totpVerified, ttl, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
@@ -816,6 +848,56 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 // Break-glass sessions are never admin, so callers pass isAdmin=false for them.
 func (s *Server) needsAdminStepUp(isAdmin, totpVerified bool) bool {
 	return s.cfg.TOTPEnabled && isAdmin && !totpVerified
+}
+
+// isAdminSession reports whether a session carries the admin tier. Only a normal
+// email-OTP login (kind "") can: break-glass is a bearer QR scan and a guest is a
+// stranger, so neither is admin whatever its groups say. Testing for the normal
+// kind rather than excluding the known exceptions means a future session kind is
+// non-admin until someone decides otherwise.
+func isAdminSession(id *session.Identity) bool {
+	return id.Kind == "" && authz.HasGroup(id.Groups, authz.RoleAdmin)
+}
+
+// renewalRole re-derives a session's base role at sliding renewal. A normal
+// session is re-checked against the allow-list, which is where revocation takes
+// effect. A guest is, by definition, NOT on the allow-list, so asking Role would
+// end every guest session at its first renewal; instead the guest's address is
+// re-checked only for plausibility and it stays RoleGuest. It never steps up to
+// admin here: even if the address has since been made an admin, the guest
+// session keeps its kind and must sign in again to become one.
+func (s *Server) renewalRole(id *session.Identity) string {
+	if id.Kind == session.KindGuest {
+		// A guest stays a guest at renewal, but only while some host still
+		// admits guests: emptying OPEN_REGISTRATION_HOSTS ends every guest
+		// session at its next renewal, the same way de-listing a domain ends
+		// a user's. The address is re-checked for plausibility, nothing more.
+		if len(s.cfg.OpenRegistrationHosts) > 0 && authz.GuestEligible(id.Email) {
+			return authz.RoleGuest
+		}
+		return authz.RoleDeny
+	}
+	return s.policy.Role(id.Email)
+}
+
+// isOpenHost reports whether a (validated) post-login destination is on a host
+// listed in OPEN_REGISTRATION_HOSTS, where an address the allow-list does not
+// permit may sign in as a guest. An empty or unparsable rd is never open.
+func (s *Server) isOpenHost(rd string) bool {
+	if rd == "" || len(s.cfg.OpenRegistrationHosts) == 0 {
+		return false
+	}
+	u, err := url.Parse(rd)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, h := range s.cfg.OpenRegistrationHosts {
+		if host == h {
+			return true
+		}
+	}
+	return false
 }
 
 // computeGroups returns the comma-separated Remote-Groups value for an email:
@@ -864,6 +946,15 @@ func (s *Server) loginURL(rd string) string {
 		return s.cfg.PublicURL + "/login"
 	}
 	return s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd)
+}
+
+// logoutURL is the sign-out confirmation page, carrying rd so that after signing
+// out the person lands on the login page for the app they were trying to reach.
+func (s *Server) logoutURL(rd string) string {
+	if rd == "" {
+		return s.cfg.PublicURL + "/logout"
+	}
+	return s.cfg.PublicURL + "/logout?rd=" + url.QueryEscape(rd)
 }
 
 // handleLogoutConfirm renders a sign-out confirmation for GET /logout (a typed
@@ -956,8 +1047,10 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	// so that, if their identity is refused there, the denial page can grant
 	// emergency access in one tap without a re-scan. An existing break-glass
 	// session has no richer identity worth preserving, so it falls through to a
-	// fresh grant.
-	if id, ok := s.sessions.ReadSession(r, now); ok && id.Kind != session.KindBreakGlass {
+	// fresh grant. A guest session is treated the same way: the denial page never
+	// offers a guest the one-tap grant (see handleDenied), so deferring would
+	// strand them, and a guest login is cheap to redo.
+	if id, ok := s.sessions.ReadSession(r, now); ok && id.Kind == "" {
 		rd := authz.SafeRedirect(code.Redirect, s.cfg.Domain, s.cfg.BreakGlassRedirect)
 		if err := s.sessions.SetOffer(w, session.Offer{CodeID: code.ID, Label: code.Label}, s.cfg.OTPTTL, now); err != nil {
 			// Non-fatal: fall through to a normal grant rather than fail the scan.
@@ -1071,7 +1164,7 @@ func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request
 	// session-less browser, into which a same-site sibling holding a card token
 	// could otherwise force emergency access (and a spoofed grant audit row). A
 	// session-less user should re-scan the physical code, which grants directly.
-	if id, ok := s.sessions.ReadSession(r, now); !ok || id.Kind == session.KindBreakGlass {
+	if id, ok := s.sessions.ReadSession(r, now); !ok || id.Kind != "" {
 		s.render(w, http.StatusForbidden, "message", pageData{
 			Title:   "Please scan the code again",
 			Message: "Your sign-in is no longer active. Scan the emergency code again to get access.",
@@ -1168,11 +1261,13 @@ const (
 // parsePolicy extracts the per-app requirement from the X-Auth-Policy header. The
 // value is a ";"-separated set of key=value fields; "domains" and "groups" each
 // hold a space/comma-separated allow-list (both safe charsets, so no escaping is
-// needed). Unknown fields (a future flag, or the "any" sentinel a plain
-// `protected` guard sets) are ignored. An absent header yields empty
-// requirements — i.e. bare `protected` semantics (any signed-in user, break-glass
-// denied).
-func parsePolicy(h string) (domains, groups string) {
+// needed), and "guests=allow" admits open-registration guest sessions. Only the
+// exact value "allow" turns guests on; anything else (a typo, "yes", "deny")
+// leaves them out, so a malformed field fails closed. Unknown fields (a future
+// flag, or the "any" sentinel a plain `protected` guard sets) are ignored. An
+// absent header yields empty requirements — i.e. bare `protected` semantics (any
+// signed-in user, break-glass and guests denied).
+func parsePolicy(h string) (domains, groups string, allowGuests bool) {
 	for _, field := range strings.Split(h, ";") {
 		k, v, ok := strings.Cut(field, "=")
 		if !ok {
@@ -1183,6 +1278,8 @@ func parsePolicy(h string) (domains, groups string) {
 			domains = strings.TrimSpace(v)
 		case "groups":
 			groups = strings.TrimSpace(v)
+		case "guests":
+			allowGuests = strings.TrimSpace(v) == "allow"
 		}
 	}
 	return

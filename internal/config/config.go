@@ -31,6 +31,14 @@ type Config struct {
 	AdminEmails     []string
 	DefaultRedirect string
 
+	// OpenRegistrationHosts lists the hosts (DOMAIN or a subdomain of it) whose
+	// login admits strangers as guests: an OTP-verified address the allow-list
+	// does not permit is signed in with kind "guest" when the post-login
+	// destination is on one of these hosts. Guests reach only routes whose
+	// policy says guests=allow (the protected_open guard), so openness is a
+	// property of the one app that needs it rather than of the whole server.
+	OpenRegistrationHosts []string
+
 	// AllowApexRedirect permits the bare server domain as a post-login
 	// destination. Default off: on a subdomain-only deployment the apex
 	// commonly has no TLS certificate, and sending a freshly signed-in user
@@ -133,6 +141,8 @@ func Load() (*Config, error) {
 		BreakGlassPDFHeader:    getenv("BREAKGLASS_PDF_HEADER", "Emergency access"),
 		BreakGlassPDFBody:      getenv("BREAKGLASS_PDF_BODY", "Scan this code to gain temporary emergency access. Every use is logged and an administrator is notified."),
 	}
+
+	c.OpenRegistrationHosts = splitLowerCSV(getenv("OPEN_REGISTRATION_HOSTS", ""))
 
 	var err error
 	if c.SessionTTL, err = getdur("SESSION_TTL", 2*time.Hour); err != nil {
@@ -256,6 +266,19 @@ func (c *Config) validate() error {
 	if c.PublicURL == "" {
 		return fmt.Errorf("AUTH_PUBLIC_URL must be set")
 	}
+	// Each open host must be a bare hostname within DOMAIN. The host is compared
+	// against the post-login destination, which ValidateRedirect already confines
+	// to DOMAIN, so an out-of-domain entry could never match; refusing it at boot
+	// catches the typo (a URL, a port, a sibling domain) instead of leaving the
+	// operator wondering why registration is still closed.
+	for _, h := range c.OpenRegistrationHosts {
+		if !validHostname(h) {
+			return fmt.Errorf("OPEN_REGISTRATION_HOSTS: %q is not a bare hostname (no scheme, port, path, or wildcard)", h)
+		}
+		if h != c.Domain && !strings.HasSuffix(h, "."+c.Domain) {
+			return fmt.Errorf("OPEN_REGISTRATION_HOSTS: %q is not %s or a subdomain of it", h, c.Domain)
+		}
+	}
 	switch c.EmailBackend {
 	case "log":
 		// The log backend writes every OTP code to the process log (see
@@ -308,6 +331,26 @@ func (c *Config) validate() error {
 		}
 	}
 	return nil
+}
+
+// validHostname reports whether h is a plain lowercase DNS hostname: dot-
+// separated labels of a-z, 0-9 and hyphen, none empty, none starting or ending
+// with a hyphen. It rejects anything with a scheme, port, path, or "*".
+func validHostname(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	for _, l := range strings.Split(h, ".") {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for _, r := range l {
+			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // gethexkey decodes an optional hex-encoded key. Empty yields a nil key; a

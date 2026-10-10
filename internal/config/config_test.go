@@ -238,3 +238,58 @@ func TestOTPEmailSubjectOverride(t *testing.T) {
 		t.Errorf("OTPEmailSubject = %q, want the override verbatim", c.OTPEmailSubject)
 	}
 }
+
+func TestLoadOpenRegistrationHosts(t *testing.T) {
+	setValid(t)
+	t.Setenv("OPEN_REGISTRATION_HOSTS", " Apply.Example.com, example.com ,deep.sub.example.com")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"apply.example.com", "example.com", "deep.sub.example.com"}
+	if len(c.OpenRegistrationHosts) != len(want) {
+		t.Fatalf("OpenRegistrationHosts = %v, want %v", c.OpenRegistrationHosts, want)
+	}
+	for i := range want {
+		if c.OpenRegistrationHosts[i] != want[i] {
+			t.Errorf("OpenRegistrationHosts[%d] = %q, want %q", i, c.OpenRegistrationHosts[i], want[i])
+		}
+	}
+}
+
+func TestLoadOpenRegistrationHostsDefaultEmpty(t *testing.T) {
+	setValid(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.OpenRegistrationHosts) != 0 {
+		t.Errorf("OpenRegistrationHosts = %v, want none", c.OpenRegistrationHosts)
+	}
+}
+
+// Anything that is not DOMAIN or a subdomain of it, or not a bare hostname,
+// refuses to boot rather than silently never matching.
+func TestLoadOpenRegistrationHostsRejectsOutsideDomain(t *testing.T) {
+	bad := []string{
+		"evil.com",
+		"notexample.com",            // suffix match without the dot
+		"example.com.evil.com",      // look-alike
+		"https://apply.example.com", // a URL, not a host
+		"apply.example.com:443",
+		"apply.example.com/path",
+		"*.example.com",
+		"*",
+		"apply..example.com",
+		"-apply.example.com",
+	}
+	for _, h := range bad {
+		t.Run(h, func(t *testing.T) {
+			setValid(t)
+			t.Setenv("OPEN_REGISTRATION_HOSTS", h)
+			if _, err := Load(); err == nil {
+				t.Errorf("expected OPEN_REGISTRATION_HOSTS=%q to be refused", h)
+			}
+		})
+	}
+}

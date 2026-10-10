@@ -83,9 +83,13 @@ type envelope struct {
 }
 
 // Session kinds. The empty string is a normal email-OTP login; KindBreakGlass
-// marks a session granted by scanning a break-glass QR code.
+// marks a session granted by scanning a break-glass QR code; KindGuest marks an
+// email-OTP login for an address the allow-list does not permit, reached from an
+// open-registration host. A guest renews like a normal session, but is admitted
+// only by routes that opt in (see authz.CanAccessApp) and is never an admin.
 const (
 	KindBreakGlass = "break_glass"
+	KindGuest      = "guest"
 )
 
 // Identity is the authenticated principal carried by the session cookie.
@@ -93,7 +97,8 @@ type Identity struct {
 	Email  string `json:"email"`
 	Groups string `json:"groups"`
 	Iat    int64  `json:"iat"`
-	// Kind distinguishes break-glass sessions, which must not be renewed.
+	// Kind distinguishes break-glass sessions, which must not be renewed, and
+	// guest sessions, which renew but keep their kind.
 	Kind string `json:"kind,omitempty"`
 	// TTL is the session's chosen lifetime in seconds, so a renewal re-issues
 	// with the same lifetime (e.g. a 30-day "remember me" session).

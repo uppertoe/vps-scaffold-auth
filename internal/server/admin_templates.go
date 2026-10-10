@@ -51,8 +51,9 @@ type appAccessView struct {
 	Time       string
 	Email      string
 	Host       string
-	Kind       string // "login" or "break-glass"
+	Kind       string // "login", "break-glass" or "guest"
 	BreakGlass bool
+	Guest      bool
 }
 
 // stamp renders t in the configured display timezone (default UTC). The "MST"
@@ -93,8 +94,11 @@ func (s *Server) toAppAccessViews(as []store.AppAccess) []appAccessView {
 			Host:  a.Host,
 			Kind:  "login",
 		}
-		if a.Kind == session.KindBreakGlass {
+		switch a.Kind {
+		case session.KindBreakGlass:
 			v.Kind, v.BreakGlass = "break-glass", true
+		case session.KindGuest:
+			v.Kind, v.Guest = "guest", true
 		}
 		out = append(out, v)
 	}

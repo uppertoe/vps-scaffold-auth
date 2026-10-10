@@ -13,7 +13,9 @@
 # (stripping client-supplied copies). A signed-in user who isn't allowed on this
 # site is sent to a "no access" page with a sign-in link.
 #
-#   import protected whoami:80                        # any signed-in user (not break-glass)
+#   import protected whoami:80                        # any signed-in user (not break-glass, not guests)
+#   import protected_open app:3000                    # also guests from OPEN_REGISTRATION_HOSTS;
+#                                                     #   for the one public app only
 #   import protected_domains "rch.org.au" app:3000    # signed-in user at a listed domain;
 #                                                     #   login hints the domain + declines early
 #   import protected_groups  "bg_stroke" app:3000     # a listed group, or a break-glass card
@@ -77,6 +79,22 @@
 			uri /verify
 			copy_headers Remote-User Remote-Email Remote-Groups
 			header_up X-Auth-Policy "any"
+		}
+		reverse_proxy {args[0]} {
+			import strip_auth_cookie
+		}
+	}
+}
+
+# Like protected, but also admits guest sessions (strangers who signed in
+# through a host in OPEN_REGISTRATION_HOSTS). Every other guard keeps them out.
+(protected_open) {
+	route {
+		import strip_client_identity
+		forward_auth auth:8080 {
+			uri /verify
+			copy_headers Remote-User Remote-Email Remote-Groups
+			header_up X-Auth-Policy "any;guests=allow"
 		}
 		reverse_proxy {args[0]} {
 			import strip_auth_cookie

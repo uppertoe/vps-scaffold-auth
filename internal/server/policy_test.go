@@ -20,8 +20,27 @@ func TestParsePolicy(t *testing.T) {
 		{"  domains = a.com ; groups = g ", "a.com", "g"},
 		{"mode=any;domains=a.com", "a.com", ""}, // unknown field ignored
 	}
+
+	guests := []struct {
+		in   string
+		want bool
+	}{
+		{"any", false},
+		{"any;guests=allow", true},
+		{" any ; guests = allow ", true},
+		{"guests=allow;groups=g", true},
+		{"any;guests=yes", false}, // only the exact value opens it
+		{"any;guests=Allow", false},
+		{"any;guests", false},
+		{"domains=a.com", false},
+	}
+	for _, tc := range guests {
+		if _, _, got := parsePolicy(tc.in); got != tc.want {
+			t.Errorf("parsePolicy(%q) allowGuests = %v, want %v", tc.in, got, tc.want)
+		}
+	}
 	for _, tc := range tests {
-		d, g := parsePolicy(tc.in)
+		d, g, _ := parsePolicy(tc.in)
 		if d != tc.domains || g != tc.groups {
 			t.Errorf("parsePolicy(%q) = (%q,%q), want (%q,%q)", tc.in, d, g, tc.domains, tc.groups)
 		}

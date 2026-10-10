@@ -32,7 +32,10 @@ auth.{$DOMAIN} {
 # run-caddy.sh counts braces when assembling the Caddyfile.
 #
 # Usage (domains and groups are space/comma-separated; UPSTREAM is host:port):
-#   import protected UPSTREAM                       -- any signed-in user; NOT break-glass
+#   import protected UPSTREAM                       -- any signed-in user; NOT break-glass, NOT guests
+#   import protected_open UPSTREAM                  -- any signed-in user AND guests: strangers who
+#                                                      signed in through a host listed in
+#                                                      OPEN_REGISTRATION_HOSTS. For the one public app.
 #   import protected_domains "rch.org.au" UPSTREAM  -- signed-in user at a listed email domain.
 #                                                      The login page hints the domain and a
 #                                                      wrong-domain address is declined early.
@@ -59,6 +62,13 @@ auth.{$DOMAIN} {
 # group list names the card's target group, so an emergency card is scoped to
 # its location. `import protected` deliberately excludes them.
 #
+# Guest sessions are deny-by-default in the same way. A guest is an address the
+# allow-list does not cover, signed in through an open-registration host. It
+# reaches only a route that says guests=allow, which is protected_open, or a
+# route whose group list names a group an admin has placed that guest in. Every
+# other guard, the bare `import protected` included, keeps guests out, so an app
+# that forgets to gate itself stays closed to strangers.
+#
 # Each guard declares its requirement in ONE header, X-Auth-Policy, set with
 # header_up. Because header_up REPLACES the header, a client can't inject or
 # widen it -- whatever it sends is overwritten. There is no per-guard "delete the
@@ -70,7 +80,8 @@ auth.{$DOMAIN} {
 #
 # X-Auth-Policy grammar: ";"-separated key=value fields. "domains" and "groups"
 # each hold a space/comma-separated allow-list; a bare "any" (no fields) is the
-# plain-protected sentinel. The hint label and alt-login link are UX only (the
+# plain-protected sentinel. "guests=allow" additionally admits guest sessions;
+# only the exact value "allow" counts, and it affects guests alone. The hint label and alt-login link are UX only (the
 # alt URL is re-validated server-side to be within the domain), so they ride in
 # their own plain headers.
 
@@ -81,6 +92,26 @@ auth.{$DOMAIN} {
 			uri /verify
 			copy_headers Remote-User Remote-Email Remote-Groups
 			header_up X-Auth-Policy "any"
+		}
+		reverse_proxy {args[0]} {
+			import strip_auth_cookie
+		}
+	}
+}
+
+# Like protected, but also admits guests. Use it for the one app that is meant
+# for the public -- an application form, a sign-up page -- and list that app's
+# host in OPEN_REGISTRATION_HOSTS so strangers can sign in there. Leave every
+# other app on protected or a narrower guard. The app sees Remote-Groups
+# beginning "guest" for a guest and "user" or "admin" for everyone else, and
+# should treat the two accordingly.
+(protected_open) {
+	route {
+		import strip_client_identity
+		forward_auth auth:8080 {
+			uri /verify
+			copy_headers Remote-User Remote-Email Remote-Groups
+			header_up X-Auth-Policy "any;guests=allow"
 		}
 		reverse_proxy {args[0]} {
 			import strip_auth_cookie

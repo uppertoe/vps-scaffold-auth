@@ -14,7 +14,6 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
-	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 	"github.com/uppertoe/vps-scaffold-auth/internal/totp"
 )
@@ -520,10 +519,11 @@ func (s *Server) handleAdminBrandingImage(w http.ResponseWriter, r *http.Request
 func (s *Server) requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := s.sessions.ReadSession(r, s.now())
-		// A break-glass session must never reach the admin UI, even if its
-		// target group is somehow "admin": the admin tier requires a real login
-		// (and TOTP when enabled), not a bearer QR scan.
-		admin := ok && id.Kind != session.KindBreakGlass && authz.HasGroup(id.Groups, authz.RoleAdmin)
+		// A break-glass or guest session must never reach the admin UI, even if
+		// its groups somehow include "admin": the admin tier requires a real
+		// login (and TOTP when enabled), not a bearer QR scan or a stranger's
+		// sign-in. isAdminSession admits only the normal session kind.
+		admin := ok && isAdminSession(id)
 		// A first-factor-only admin session (minted before TOTP was enabled) is
 		// bounced to a fresh login so the TOTP step runs, rather than being
 		// honoured here. needsAdminStepUp is only evaluated once admin is true, so
