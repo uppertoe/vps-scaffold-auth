@@ -1154,3 +1154,27 @@ func TestVerifyClearsUnreadableSessionCookie(t *testing.T) {
 		t.Errorf("Set-Cookie emitted with no cookie present: %v", sc)
 	}
 }
+
+// Two cookies by the session's name are refused but NOT cleared: the clear
+// would carry the shared Domain and delete the real cookie while leaving the
+// planted one.
+func TestVerifyDoesNotClearAmbiguousSessionCookies(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "user@example.com", nil)
+	real := c.cookies[session.SessionCookie]
+	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
+	req.Header.Set("X-Auth-Policy", "any")
+	req.AddCookie(&http.Cookie{Name: session.SessionCookie, Value: "planted.garbage"})
+	req.AddCookie(real)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("ambiguous cookies = %d, want 302 (refused)", rec.Code)
+	}
+	for _, ck := range rec.Result().Cookies() {
+		if ck.Name == session.SessionCookie {
+			t.Fatalf("ambiguous cookie set triggered a clear: %v", ck)
+		}
+	}
+}

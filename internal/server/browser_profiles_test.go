@@ -34,16 +34,20 @@ var signInProfiles = []browserProfile{
 		"Origin": "null", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document",
 		"User-Agent": "Mozilla/5.0 (Android 14; Mobile; rv:129.0) Gecko/129.0 Firefox/129.0",
 	}},
-	{"desktop Chrome, same-origin POST with Origin and Referer", map[string]string{
-		"Origin": "https://auth.example.com", "Referer": "https://auth.example.com/login", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document",
-	}},
-	{"desktop Firefox, same-origin POST", map[string]string{
-		"Origin": "https://auth.example.com", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document",
+	{"desktop Chrome, navigation POST under no-referrer (same shape as the phones)", map[string]string{
+		"Origin": "null", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document", "Sec-Fetch-User": "?1",
 	}},
 	{"Safari 16.3 (no Sec-Fetch-* support), Origin null under no-referrer", map[string]string{
 		"Origin": "null",
 	}},
-	{"Safari 16.3, Origin present, no Sec-Fetch-*", map[string]string{
+	// This gateway serves Referrer-Policy: no-referrer on every response, under
+	// which every engine serialises the Origin of a navigation POST as "null";
+	// a literal Origin is what a page under the default policy would send.
+	// Kept as extra coverage, not as a recorded shape from this gateway.
+	{"default referrer policy (not what this gateway serves): Origin and Referer present", map[string]string{
+		"Origin": "https://auth.example.com", "Referer": "https://auth.example.com/login", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document",
+	}},
+	{"default referrer policy, old Safari: Origin present, no Sec-Fetch-*", map[string]string{
 		"Origin": "https://auth.example.com",
 	}},
 	{"typed-URL navigation (Sec-Fetch-Site none)", map[string]string{

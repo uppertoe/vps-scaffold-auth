@@ -116,14 +116,23 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A session cookie that is present but unreadable (expired, minted by an
-	// earlier build, or a stray duplicate) is cleared on the way to login.
-	// Otherwise it lingers, and an app route that treats "has a session
-	// cookie" as "signed in" (p.stonn.org sends such visitors from / to the
-	// gated schedule) keeps bouncing a returning visitor to login instead of
-	// showing them the landing page. The clearing Set-Cookie rides on this
-	// 302, which the Caddy gate copies to the browser unchanged.
-	if _, err := r.Cookie(session.SessionCookie); err == nil {
+	// A single session cookie that is present but unreadable (expired, or
+	// minted by an earlier build) is cleared on the way to login. Otherwise it
+	// lingers, and an app route that treats "has a session cookie" as "signed
+	// in" (p.stonn.org sends such visitors from / to the gated schedule) keeps
+	// bouncing a returning visitor to login instead of showing them the
+	// landing page. The clearing Set-Cookie rides on this 302, which the Caddy
+	// gate copies to the browser unchanged. Two cookies by this name (one
+	// planted by a sibling host) are left alone: the clear carries the shared
+	// Domain, so it would delete the visitor's real cookie and leave the
+	// planted one, turning a one-app nuisance into a sign-out everywhere.
+	n := 0
+	for _, ck := range r.Cookies() {
+		if ck.Name == session.SessionCookie {
+			n++
+		}
+	}
+	if n == 1 {
 		s.sessions.ClearSession(w)
 	}
 	s.redirectToLogin(w, r)
@@ -397,6 +406,14 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 // cross-site are refused. A sibling host's form post still arrives as
 // same-site, so the protection holds. Refusing "null" took every mobile
 // sign-in down on 2026-10-11.
+//
+// Accepted residual: a browser that sends Origin: null but no Sec-Fetch-Site
+// at all (Safari and iOS WebKit up to 16.3, older WebViews) passes a
+// cross-site top-level POST from a no-referrer page. Against /logout that
+// forces a sign-out and nothing more; against /request it lands the visitor
+// on a code page for the poster's address; /verify-code and /totp cannot
+// complete because the host-only SameSite=Lax state and pending cookies are
+// not sent on a cross-site POST in any browser that enforces SameSite.
 func (s *Server) requireSameOrigin(w http.ResponseWriter, r *http.Request) bool {
 	if origin := r.Header.Get("Origin"); origin != "" && origin != "null" && !strings.EqualFold(strings.TrimRight(origin, "/"), s.publicOrigin()) {
 		s.refuseCrossOrigin(w)
