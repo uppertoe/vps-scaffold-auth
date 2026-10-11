@@ -993,6 +993,20 @@ func TestLoginFormsRequireSameOrigin(t *testing.T) {
 		if code := post(path, map[string]string{"Origin": "https://auth.example.com", "Sec-Fetch-Site": "same-origin"}); code == http.StatusForbidden {
 			t.Errorf("%s from the auth origin was refused", path)
 		}
+		// Mobile browsers under a no-referrer policy send the literal "null" for
+		// a same-origin navigation POST; the Sec-Fetch-Site value decides.
+		if code := post(path, map[string]string{"Origin": "null", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate"}); code == http.StatusForbidden {
+			t.Errorf("%s with Origin null and Sec-Fetch-Site same-origin was refused (breaks mobile sign-in)", path)
+		}
+		if code := post(path, map[string]string{"Origin": "null", "Sec-Fetch-Site": "none"}); code == http.StatusForbidden {
+			t.Errorf("%s with Origin null and Sec-Fetch-Site none was refused", path)
+		}
+		if code := post(path, map[string]string{"Origin": "null", "Sec-Fetch-Site": "same-site"}); code != http.StatusForbidden {
+			t.Errorf("%s with Origin null from a sibling host = %d, want 403", path, code)
+		}
+		if code := post(path, map[string]string{"Origin": "null", "Sec-Fetch-Site": "cross-site"}); code != http.StatusForbidden {
+			t.Errorf("%s with Origin null from a foreign site = %d, want 403", path, code)
+		}
 		if code := post(path, nil); code == http.StatusForbidden {
 			t.Errorf("%s without browser headers was refused", path)
 		}

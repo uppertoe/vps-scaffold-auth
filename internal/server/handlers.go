@@ -378,8 +378,17 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 // cross-origin form POST and Sec-Fetch-Site on every request, so a value that
 // is not this host is refused; a request carrying neither header (an old client,
 // a script) is let through, since those are not the browsers this protects.
+//
+// Origin: null is NOT a foreign origin. Under the sign-in page's no-referrer
+// policy, browsers (mobile Safari, Chrome and Firefox consistently) serialise
+// the Origin of a same-origin navigation POST as the literal "null" rather than
+// omitting it, so the literal must fall through to the Sec-Fetch-Site test,
+// which is the reliable signal: same-origin and none pass, same-site and
+// cross-site are refused. A sibling host's form post still arrives as
+// same-site, so the protection holds. Refusing "null" took every mobile
+// sign-in down on 2026-10-11.
 func (s *Server) requireSameOrigin(w http.ResponseWriter, r *http.Request) bool {
-	if origin := r.Header.Get("Origin"); origin != "" && !strings.EqualFold(strings.TrimRight(origin, "/"), s.publicOrigin()) {
+	if origin := r.Header.Get("Origin"); origin != "" && origin != "null" && !strings.EqualFold(strings.TrimRight(origin, "/"), s.publicOrigin()) {
 		s.refuseCrossOrigin(w)
 		return false
 	}
