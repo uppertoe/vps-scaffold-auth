@@ -261,6 +261,13 @@ type Store interface {
 	// RecordTOTPFailure registers one failed TOTP verification and returns the
 	// resulting count within the rolling window.
 	RecordTOTPFailure(ctx context.Context, email string, window time.Duration, now time.Time) (int, error)
+	// ReserveTOTPAttempt counts one TOTP verification attempt BEFORE the code is
+	// checked and returns the attempt's ordinal within the rolling window, in a
+	// single transaction. Reserving first means the cap bounds how many codes
+	// are ever checked, however many submissions arrive at once; a check-then-
+	// record sequence would let every concurrent submission pass the check
+	// before any failure was recorded. A successful login clears the counter.
+	ReserveTOTPAttempt(ctx context.Context, email string, window time.Duration, now time.Time) (int, error)
 	// ClearTOTPFailures resets the counter after a success.
 	ClearTOTPFailures(ctx context.Context, email string) error
 	// DeleteTOTPSecret removes the TOTP secret for an admin email (no-op if

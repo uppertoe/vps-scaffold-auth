@@ -87,15 +87,18 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		// untouched, so access to apps they *are* allowed on keeps working.
 		policy := r.Header.Get(headerPolicy)
 		s.warnLegacyPolicy(r)
-		if strings.TrimSpace(policy) == "" {
-			// Fail closed: every shipped guard declares a policy (the plain
-			// `protected` door sends the explicit "any" sentinel). A /verify that
-			// arrives with no X-Auth-Policy is a misconfigured or hand-rolled guard,
-			// so deny rather than silently granting access to any signed-in user.
+		reqDomains, reqGroups, allowGuests, ok := parsePolicy(policy)
+		if !ok {
+			// Fail closed: every shipped guard declares a policy in the exact
+			// grammar (the plain `protected` door sends the explicit "any"
+			// sentinel). A /verify with no X-Auth-Policy, an empty allow-list or
+			// a misspelled field is a misconfigured or hand-rolled guard. Denying
+			// is the only safe reading: "domains=" or "gruops=admin" must never
+			// collapse into "any signed-in user".
+			log.Printf("warning: refusing malformed X-Auth-Policy %q for %q", policy, r.Header.Get("X-Forwarded-Host"))
 			s.redirectToDenied(w, r)
 			return
 		}
-		reqDomains, reqGroups, allowGuests := parsePolicy(policy)
 		if !authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass, id.Kind == session.KindGuest,
 			reqDomains, reqGroups, allowGuests) {
 			s.redirectToDenied(w, r)
@@ -128,7 +131,7 @@ func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	// address early. UX only — see the note in handleRequest; enforcement remains
 	// in handleVerify. A group-only route (admin/collaborator door) declares no
 	// domain, so nothing is carried and it neither hints nor declines.
-	reqDomains, reqGroups, _ := parsePolicy(r.Header.Get(headerPolicy))
+	reqDomains, reqGroups, _, _ := parsePolicy(r.Header.Get(headerPolicy))
 	if v := clampHint(reqDomains); v != "" {
 		loginURL += "&rqd=" + url.QueryEscape(v)
 		// Optional friendly label to display instead of enumerating domains.
@@ -364,10 +367,54 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
+// requireSameOrigin refuses a login-flow POST that a browser reports as coming
+// from another origin, and writes the refusal. The sign-in forms carry no CSRF
+// token (there is no session to bind one to), and SameSite=Lax does not help
+// against a sibling host on the same site: the session cookie is shared across
+// *.DOMAIN precisely so that every app can use it, which also means any app on
+// the domain could drive a visitor's browser through /request and /verify-code
+// with a code the app's operator requested for an address of their choosing,
+// leaving that browser signed in as someone else. Browsers send Origin on every
+// cross-origin form POST and Sec-Fetch-Site on every request, so a value that
+// is not this host is refused; a request carrying neither header (an old client,
+// a script) is let through, since those are not the browsers this protects.
+func (s *Server) requireSameOrigin(w http.ResponseWriter, r *http.Request) bool {
+	if origin := r.Header.Get("Origin"); origin != "" && !strings.EqualFold(strings.TrimRight(origin, "/"), s.publicOrigin()) {
+		s.refuseCrossOrigin(w)
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+		return true
+	}
+	s.refuseCrossOrigin(w)
+	return false
+}
+
+// publicOrigin is scheme://host[:port] of AUTH_PUBLIC_URL, the only origin the
+// sign-in forms are served from.
+func (s *Server) publicOrigin() string {
+	u, err := url.Parse(s.cfg.PublicURL)
+	if err != nil || u.Host == "" {
+		return s.cfg.PublicURL
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+func (s *Server) refuseCrossOrigin(w http.ResponseWriter) {
+	s.render(w, http.StatusForbidden, "message", pageData{
+		Title:   "Please start from the sign-in page",
+		Message: "This request did not come from the sign-in page, so it has not been acted on. Open the sign-in page and try again.",
+	})
+}
+
 // handleRequest sends an OTP code. To avoid leaking which addresses are
 // permitted, it always responds with the enter-code page regardless of whether
 // the email is allowed.
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSameOrigin(w, r) {
+		return
+	}
 	now := s.now()
 	if !s.ipLimiter.Allow(clientIP(r)) {
 		s.render(w, http.StatusTooManyRequests, "message", pageData{
@@ -548,6 +595,9 @@ func (s *Server) recordAuth(r *http.Request, email, eventType, outcome string) {
 // handleVerifyCode checks the submitted OTP code and, on success, issues a
 // session (or starts the admin TOTP step).
 func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSameOrigin(w, r) {
+		return
+	}
 	now := s.now()
 	// The destination rides in two places: the state cookie (set by /request)
 	// and a hidden field in the code form. Prefer the validated posted copy —
@@ -667,6 +717,9 @@ func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, ro
 
 // handleTOTP verifies an admin's authenticator code and completes login.
 func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSameOrigin(w, r) {
+		return
+	}
 	now := s.now()
 	// Same dual-carrier scheme as handleVerifyCode: prefer the validated rd
 	// posted by the TOTP form over the (clobberable, OTP_TTL-lived) pending
@@ -695,10 +748,16 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// Per-account lockout: the shared per-IP limiter alone lets a distributed
+	// Per-account cap: the shared per-IP limiter alone lets a distributed
 	// attacker (who already controls the admin's inbox) grind the 10^6 TOTP
-	// space. Cap wrong codes per admin, mirroring the email-code attempt cap.
-	if s.totpLockedOut(r.Context(), p.Email, now) {
+	// space. The attempt is reserved BEFORE the code is checked, so the cap
+	// bounds how many codes are ever checked within the window no matter how
+	// many submissions arrive together; a successful login clears it. A store
+	// error fails open here (the per-IP limiter still applies) so an
+	// infrastructure hiccup cannot lock a legitimate admin out.
+	if n, err := s.store.ReserveTOTPAttempt(r.Context(), p.Email, totpLockoutWindow, now); err != nil {
+		log.Printf("reserve totp attempt for %s: %v", p.Email, err)
+	} else if n > s.cfg.OTPMaxAttempts {
 		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeLockedOut)
 		s.render(w, http.StatusTooManyRequests, "totp", pageData{
 			Error: "Too many incorrect codes. This account is temporarily locked; try again shortly.", Redirect: rd,
@@ -715,9 +774,7 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	code := strings.TrimSpace(r.PostFormValue("code"))
 	if !totp.Validate(code, secret) {
-		if _, err := s.store.RecordTOTPFailure(r.Context(), p.Email, totpLockoutWindow, now); err != nil {
-			log.Printf("record totp failure for %s: %v", p.Email, err)
-		}
+		// The attempt was already counted by the reservation above.
 		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeWrongCode)
 		s.render(w, http.StatusUnauthorized, "totp", pageData{
 			Error: "Incorrect code. Please try again.", Redirect: rd,
@@ -740,21 +797,9 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	s.completeLogin(w, r, p.Email, p.Role, rd, p.Remember, true, now)
 }
 
-// totpLockoutWindow is the rolling window over which failed TOTP verifications
+// totpLockoutWindow is the rolling window over which TOTP verification attempts
 // are counted toward the per-account lockout (cap = OTP_MAX_ATTEMPTS).
 const totpLockoutWindow = 15 * time.Minute
-
-// totpLockedOut reports whether an admin has reached the TOTP failure cap within
-// the lockout window. It fails open on a store read error so an infrastructure
-// hiccup cannot lock a legitimate admin out (the per-IP limiter still applies).
-func (s *Server) totpLockedOut(ctx context.Context, email string, now time.Time) bool {
-	n, err := s.store.TOTPFailureCount(ctx, email, totpLockoutWindow, now)
-	if err != nil {
-		log.Printf("totp failure count for %s: %v", email, err)
-		return false
-	}
-	return n >= s.cfg.OTPMaxAttempts
-}
 
 // servedTarget validates rawURL as a post-login destination the gateway can
 // actually serve: an absolute https URL on a SUBDOMAIN of the server domain.
@@ -1014,6 +1059,9 @@ func (s *Server) handleLogoutConfirm(w http.ResponseWriter, r *http.Request) {
 // cross-site GET cannot force a logout. The confirmation form re-carries rd,
 // so the login page it lands on knows where to return to.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSameOrigin(w, r) {
+		return
+	}
 	rd := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
 	s.sessions.ClearSession(w)
 	http.Redirect(w, r, s.loginURL(rd), http.StatusFound)
@@ -1284,31 +1332,61 @@ const (
 	headerAltLabel    = "X-Auth-Alt-Label"
 )
 
-// parsePolicy extracts the per-app requirement from the X-Auth-Policy header. The
-// value is a ";"-separated set of key=value fields; "domains" and "groups" each
-// hold a space/comma-separated allow-list (both safe charsets, so no escaping is
-// needed), and "guests=allow" admits open-registration guest sessions. Only the
-// exact value "allow" turns guests on; anything else (a typo, "yes", "deny")
-// leaves them out, so a malformed field fails closed. Unknown fields (a future
-// flag, or the "any" sentinel a plain `protected` guard sets) are ignored. An
-// absent header yields empty requirements — i.e. bare `protected` semantics (any
-// signed-in user, break-glass and guests denied).
-func parsePolicy(h string) (domains, groups string, allowGuests bool) {
+// parsePolicy parses the X-Auth-Policy header against its exact grammar and
+// reports whether the value is well formed. The value is a ";"-separated set
+// of fields: the bare sentinel "any" (a plain `protected` guard: any signed-in
+// user), "domains=<list>" and "groups=<list>" each holding a non-empty
+// space/comma-separated allow-list (both safe charsets, so no escaping is
+// needed), and "guests=allow", which admits open-registration guest sessions.
+//
+// Anything else makes the whole value invalid and ok is false: an empty or
+// absent header, an empty allow-list ("domains="), a misspelled or unknown
+// field ("gruops=admin", "mode=any"), a guests value other than exactly
+// "allow", or "any" combined with an allow-list. The caller denies on !ok.
+// This is deliberate: a lenient parser that skipped what it did not
+// understand would turn a typo in a guard into "any signed-in user", which
+// is the one outcome a per-app policy exists to prevent.
+func parsePolicy(h string) (domains, groups string, allowGuests, ok bool) {
+	sawAny := false
 	for _, field := range strings.Split(h, ";") {
-		k, v, ok := strings.Cut(field, "=")
-		if !ok {
+		field = strings.TrimSpace(field)
+		if field == "" {
 			continue
 		}
-		switch strings.TrimSpace(k) {
+		if field == "any" {
+			sawAny = true
+			continue
+		}
+		k, v, found := strings.Cut(field, "=")
+		if !found {
+			return "", "", false, false
+		}
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		switch k {
 		case "domains":
-			domains = strings.TrimSpace(v)
+			if v == "" {
+				return "", "", false, false
+			}
+			domains = v
 		case "groups":
-			groups = strings.TrimSpace(v)
+			if v == "" {
+				return "", "", false, false
+			}
+			groups = v
 		case "guests":
-			allowGuests = strings.TrimSpace(v) == "allow"
+			if v != "allow" {
+				return "", "", false, false
+			}
+			allowGuests = true
+		default:
+			return "", "", false, false
 		}
 	}
-	return
+	hasList := domains != "" || groups != ""
+	if sawAny == hasList { // neither, or both
+		return "", "", false, false
+	}
+	return domains, groups, allowGuests, true
 }
 
 // warnLegacyPolicy flags a guard that still sends the old X-Auth-Require-*

@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -333,5 +335,60 @@ func TestAdminTOTPGenerateGuards(t *testing.T) {
 	rec = c.postForm("/admin/totp/generate", url.Values{"email": {"admin@example.com"}})
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("generate without CSRF = %d, want 403", rec.Code)
+	}
+}
+
+// The per-account TOTP cap holds under concurrency: however many submissions
+// arrive together, at most OTP_MAX_ATTEMPTS codes are checked within the
+// window and the rest are refused as locked out. The attempt is reserved
+// before the check, so there is no window in which every submission passes a
+// not-yet-updated counter.
+func TestTOTPAttemptCapHoldsUnderConcurrency(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	pending := c.cookies[session.PendingCookie]
+	if pending == nil {
+		t.Fatal("no pending cookie after the email step")
+	}
+
+	const n = 60
+	start := make(chan struct{})
+	codes := make(chan int, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest(http.MethodPost, "/totp", strings.NewReader("code=000000"))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.RemoteAddr = "192.0.2.1:1234"
+			req.AddCookie(pending)
+			rr := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rr, req)
+			codes <- rr.Code
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(codes)
+	checked, locked := 0, 0
+	for code := range codes {
+		switch code {
+		case http.StatusUnauthorized:
+			checked++
+		case http.StatusTooManyRequests:
+			locked++
+		}
+	}
+	if checked > srv.cfg.OTPMaxAttempts {
+		t.Fatalf("%d codes were checked, cap is %d", checked, srv.cfg.OTPMaxAttempts)
+	}
+	if checked+locked != n {
+		t.Errorf("checked %d + locked %d != %d submissions", checked, locked, n)
 	}
 }

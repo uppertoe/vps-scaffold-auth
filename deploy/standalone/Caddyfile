@@ -67,12 +67,14 @@
 # Each guard declares its requirement in ONE header, X-Auth-Policy, set with
 # header_up -- which REPLACES any client-sent value, so a client can't inject or
 # widen it. No per-guard "delete the rest" list to keep in sync: new policy
-# fields go inside X-Auth-Policy. Grammar: ";"-separated key=value fields;
-# "domains"/"groups" hold space/comma-separated lists; a bare "any" is the
-# plain-protected sentinel. Label + alt-login are UX only (alt is re-validated
-# server-side to be within the domain) and ride in their own plain headers. A
-# custom guard that omits X-Auth-Policy is refused: every signed-in user is sent
-# to the "no access" page.
+# fields go inside X-Auth-Policy. Grammar: ";"-separated fields;
+# "domains=<list>"/"groups=<list>" hold NON-EMPTY space/comma-separated lists;
+# a bare "any" on its own is the plain-protected sentinel; "guests=allow" is
+# the only other field. The gateway parses this strictly: an empty list, a
+# misspelled or unknown field, "any" combined with a list, or a missing header
+# is refused, and every signed-in user is sent to the "no access" page. Label +
+# alt-login are UX only (alt is re-validated server-side to be within the
+# domain) and ride in their own plain headers.
 # The auth gate every guard imports. It is the expanded form of Caddy's
 # forward_auth (method GET, rewrite to /verify, the two X-Forwarded-* headers
 # and the Remote-* copy on a 2xx) with one addition forward_auth cannot

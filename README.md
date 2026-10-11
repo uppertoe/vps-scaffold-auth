@@ -149,10 +149,13 @@ Always use these snippets rather than hand-rolling `forward_auth`: each one
 declares its requirement in a single `X-Auth-Policy` header set with `header_up`,
 which **replaces** any client-sent value — so a client can't inject or widen it,
 and there's no per-guard "delete the rest" list to keep in sync as features are
-added. A custom guard that omits `X-Auth-Policy` is refused: the gateway sends
-every signed-in user to the "no access" page rather than guessing, and logs a
-warning if the guard still sends the old `X-Auth-Require-*` headers, so an
-unmigrated guard is caught loudly rather than silently failing open. Each guard also owns the `reverse_proxy` to
+added. The gateway parses the policy strictly: a guard that omits
+`X-Auth-Policy`, sends an empty allow-list (`domains=`), misspells a field
+(`gruops=admin`) or combines `any` with a list is refused, and the gateway sends
+every signed-in user to the "no access" page rather than guessing. It logs the
+refused value, and warns if the guard still sends the old `X-Auth-Require-*`
+headers, so an unmigrated or mistyped guard is caught loudly rather than
+silently failing open. Each guard also owns the `reverse_proxy` to
 the upstream and strips the session cookie there (see the trust-model note
 above), so neither is something an app author can forget; an app that genuinely
 needs custom proxy options imports `auth_gate "<policy>"` (or the labeled or

@@ -470,6 +470,37 @@ func (s *SQLite) RecordTOTPFailure(ctx context.Context, email string, window tim
 	return count, nil
 }
 
+// ReserveTOTPAttempt increments the per-account attempt counter inside one
+// transaction and returns the new count. See the Store interface for why the
+// reservation precedes the check. The connection pool holds a single
+// connection, so concurrent reservations serialise.
+func (s *SQLite) ReserveTOTPAttempt(ctx context.Context, email string, window time.Duration, now time.Time) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var count int
+	var start int64
+	err = tx.QueryRowContext(ctx,
+		`SELECT fail_count, window_start FROM totp_failures WHERE email = ?`, email).Scan(&count, &start)
+	switch {
+	case err == sql.ErrNoRows || now.Sub(time.Unix(start, 0)) >= window:
+		count, start = 1, now.Unix()
+	case err != nil:
+		return 0, err
+	default:
+		count++
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO totp_failures (email, fail_count, window_start) VALUES (?, ?, ?)
+		 ON CONFLICT(email) DO UPDATE SET fail_count = excluded.fail_count, window_start = excluded.window_start`,
+		email, count, start); err != nil {
+		return 0, err
+	}
+	return count, tx.Commit()
+}
+
 // ClearTOTPFailures resets the failure counter after a successful verification.
 func (s *SQLite) ClearTOTPFailures(ctx context.Context, email string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM totp_failures WHERE email = ?`, email)

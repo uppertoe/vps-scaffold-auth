@@ -961,3 +961,38 @@ func TestRemovedAdminLosesAdminUI(t *testing.T) {
 		t.Error("/welcome still offers the Admin link after removal")
 	}
 }
+
+// The sign-in forms accept a browser submission only from the auth host's own
+// origin. A form posted from another origin, including a sibling host on the
+// same site, is refused, so no app on the domain can drive a visitor's
+// browser through the sign-in flow on their behalf. A client that sends
+// neither header is not a browser and is unaffected.
+func TestLoginFormsRequireSameOrigin(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	post := func(path string, hdr map[string]string) int {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader("email=user@example.com&code=000000"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		return c.do(req).Code
+	}
+	for _, path := range []string{"/request", "/verify-code", "/totp", "/logout"} {
+		if code := post(path, map[string]string{"Origin": "https://app.example.com"}); code != http.StatusForbidden {
+			t.Errorf("%s from a sibling origin = %d, want 403", path, code)
+		}
+		if code := post(path, map[string]string{"Origin": "https://evil.example.org"}); code != http.StatusForbidden {
+			t.Errorf("%s from a foreign origin = %d, want 403", path, code)
+		}
+		if code := post(path, map[string]string{"Sec-Fetch-Site": "same-site"}); code != http.StatusForbidden {
+			t.Errorf("%s with Sec-Fetch-Site same-site = %d, want 403", path, code)
+		}
+		if code := post(path, map[string]string{"Origin": "https://auth.example.com", "Sec-Fetch-Site": "same-origin"}); code == http.StatusForbidden {
+			t.Errorf("%s from the auth origin was refused", path)
+		}
+		if code := post(path, nil); code == http.StatusForbidden {
+			t.Errorf("%s without browser headers was refused", path)
+		}
+	}
+}

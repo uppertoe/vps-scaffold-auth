@@ -78,12 +78,17 @@ auth.{$DOMAIN} {
 # refused (every signed-in user is sent to the "no access" page), and the auth
 # service logs a warning if it still sends the old X-Auth-Require-* headers.
 #
-# X-Auth-Policy grammar: ";"-separated key=value fields. "domains" and "groups"
-# each hold a space/comma-separated allow-list; a bare "any" (no fields) is the
-# plain-protected sentinel. "guests=allow" additionally admits guest sessions;
-# only the exact value "allow" counts, and it affects guests alone. The hint label and alt-login link are UX only (the
-# alt URL is re-validated server-side to be within the domain), so they ride in
-# their own plain headers.
+# X-Auth-Policy grammar: ";"-separated fields. "domains=<list>" and
+# "groups=<list>" each hold a NON-EMPTY space/comma-separated allow-list; a
+# bare "any" (on its own) is the plain-protected sentinel; "guests=allow"
+# additionally admits guest sessions, and only that exact value counts. The
+# gateway parses this strictly and REFUSES anything else -- an empty list
+# ("domains="), a misspelled or unknown field ("gruops=admin"), "any" combined
+# with a list, or no header at all -- by sending every signed-in user to the
+# "no access" page. A typo in a guard can therefore never widen it to "any
+# signed-in user". The hint label and alt-login link are UX only (the alt URL
+# is re-validated server-side to be within the domain), so they ride in their
+# own plain headers.
 
 # The auth gate every guard imports. It is the expanded form of Caddy's
 # forward_auth (method GET, rewrite to /verify, the two X-Forwarded-* headers
