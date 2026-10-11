@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1045,5 +1046,53 @@ func TestResendTransitionsMatchForDecoy(t *testing.T) {
 	}
 	if dw != pw || da != pa {
 		t.Fatalf("resend transitions differ: permitted within/after = %s/%s, decoy = %s/%s", pw, pa, dw, da)
+	}
+}
+
+// recentCheckFails is a store whose cooldown read always errors.
+type recentCheckFails struct{ store.Store }
+
+func (recentCheckFails) HasRecentCode(context.Context, string, time.Time) (bool, error) {
+	return false, errors.New("disk read error")
+}
+
+// A failed cooldown read is treated as "within the cooldown": the live code
+// and its attempt counters survive, so a transient error cannot hand a
+// guesser a fresh budget.
+func TestRecentCodeReadErrorKeepsCounters(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.cfg.OTPMaxAttempts = 2
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	for i := 0; i < srv.cfg.OTPMaxAttempts; i++ {
+		c.postForm("/verify-code", url.Values{"code": {"nope"}})
+	}
+	srv.store = recentCheckFails{srv.store}
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	rec := c.postForm("/verify-code", url.Values{"code": {"nope"}})
+	if !strings.Contains(rec.Body.String(), "Too many incorrect attempts") {
+		t.Fatalf("counters were reset by a re-request during a read error; got %d:\n%s", rec.Code, rec.Body.String())
+	}
+}
+
+// An explicit default port in AUTH_PUBLIC_URL does not make a browser's
+// portless Origin look foreign.
+func TestSameOriginToleratesExplicitDefaultPort(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.cfg.PublicURL = "https://auth.example.com:443"
+	c := newClient(t, srv.Handler())
+	req := httptest.NewRequest(http.MethodPost, "/request", strings.NewReader("email=user@example.com"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://auth.example.com")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if code := c.do(req).Code; code == http.StatusForbidden {
+		t.Fatal("a same-origin post was refused because the public URL carries :443")
+	}
+	srv.cfg.PublicURL = "https://auth.example.com"
+	req = httptest.NewRequest(http.MethodPost, "/request", strings.NewReader("email=user@example.com"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://auth.example.com:8443")
+	if code := c.do(req).Code; code != http.StatusForbidden {
+		t.Fatalf("a post from a different port was accepted (%d)", code)
 	}
 }

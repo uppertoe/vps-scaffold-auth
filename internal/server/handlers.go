@@ -398,7 +398,14 @@ func (s *Server) publicOrigin() string {
 	if err != nil || u.Host == "" {
 		return s.cfg.PublicURL
 	}
-	return u.Scheme + "://" + u.Host
+	// A browser's Origin omits the scheme's default port, so an explicit
+	// ":443" or ":80" in AUTH_PUBLIC_URL must not make every sign-in post
+	// look cross-origin.
+	host := u.Host
+	if p := u.Port(); (u.Scheme == "https" && p == "443") || (u.Scheme == "http" && p == "80") {
+		host = u.Hostname()
+	}
+	return u.Scheme + "://" + host
 }
 
 func (s *Server) refuseCrossOrigin(w http.ResponseWriter) {
@@ -496,7 +503,11 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	minExpiry := now.Add(s.cfg.OTPTTL - s.cfg.OTPResendCooldown)
 	recent, err := s.store.HasRecentCode(r.Context(), emailAddr, minExpiry)
 	if err != nil {
-		log.Printf("recent-code check for %s: %v", emailAddr, err)
+		// Fail on the safe side: an unknown answer is treated as "a live code
+		// was issued within the cooldown", so a transient read error cannot
+		// re-mint the code and hand a guesser fresh attempt counters.
+		log.Printf("recent-code check for %s: %v (treating as within cooldown)", emailAddr, err)
+		recent = true
 	}
 	switch {
 	case recent:
