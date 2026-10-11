@@ -541,11 +541,14 @@ func (s *Server) sendCode(r *http.Request, emailAddr string, now time.Time) erro
 	if err := s.store.SaveCode(r.Context(), emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL)); err != nil {
 		return err
 	}
-	msg := s.buildCodeEmail(r.Context(), emailAddr, code)
 	go func() {
-		// Detached context: the originating request is already answered.
+		// Detached context: the originating request is already answered. The
+		// message is built here too, not before the response: building it reads
+		// branding from the store, and a read that only the permitted path
+		// performed would be a (small) timing difference from the decoy path.
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
+		msg := s.buildCodeEmail(ctx, emailAddr, code)
 		if err := s.sender.Send(ctx, msg); err != nil {
 			log.Printf("send code to %s: %v", emailAddr, err)
 		}

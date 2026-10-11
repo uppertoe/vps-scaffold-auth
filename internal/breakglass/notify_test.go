@@ -57,11 +57,30 @@ func TestWebhookRefusesNameResolvingToBlockedAddress(t *testing.T) {
 	byName := "http://" + strings.Replace(u.Host, "127.0.0.1", "localhost", 1)
 
 	n := NewNotifier(nil, nil, byName, time.Second)
+	// Record what the guard refused, so a resolver that cannot resolve the
+	// name at all does not pass this test by silence.
+	refused := make(chan net.IP, 4)
+	guard := n.blocked
+	n.blocked = func(ip net.IP) bool {
+		b := guard(ip)
+		if b {
+			select {
+			case refused <- ip:
+			default:
+			}
+		}
+		return b
+	}
 	n.Notify(UseEvent{Label: "Lab 1", Time: time.Now()})
 	select {
 	case <-hit:
 		t.Fatal("webhook reached a blocked destination through a hostname")
+	case ip := <-refused:
+		if !ip.IsLoopback() {
+			t.Fatalf("guard refused %s, want a loopback address", ip)
+		}
 	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("neither delivered nor refused: the name may not have resolved, so nothing was proven")
 	}
 }
 
