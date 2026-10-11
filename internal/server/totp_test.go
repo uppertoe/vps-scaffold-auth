@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 	"net/http"
 	"net/http/httptest"
@@ -434,4 +435,55 @@ func TestTOTPRefusesWhenAttemptCannotBeRecorded(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "try again in a moment") {
 		t.Errorf("refusal page lacks the retry message:\n%s", rec.Body.String())
 	}
+}
+
+// An admin demoted or removed between the email step and the second factor
+// does not come out of the TOTP step with the permissions saved at the first
+// step: the role is recomputed from the current policy when the session is
+// issued.
+func TestTOTPCompletionUsesCurrentPolicy(t *testing.T) {
+	t.Run("demoted to user", func(t *testing.T) {
+		srv, sender := testServer(t)
+		srv.cfg.TOTPEnabled = true
+		secret := provisionTOTP(t, srv, "admin@example.com")
+		c := newClient(t, srv.Handler())
+		c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+		if rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}}); rec.Code != http.StatusOK {
+			t.Fatalf("/verify-code = %d, want 200 (TOTP challenge)", rec.Code)
+		}
+		srv.policy = authz.NewPolicy([]string{"example.com"}, nil) // no admins any more
+		totpCode, err := pqtotp.GenerateCode(secret, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec := c.postForm("/totp", url.Values{"code": {totpCode}}); rec.Code != http.StatusFound {
+			t.Fatalf("/totp = %d, want 302 (signed in as a user)", rec.Code)
+		}
+		if rec := c.get("/verify", requireGroups("admin")); rec.Code != http.StatusFound {
+			t.Errorf("admin-only route after demotion = %d, want 302 (denied)", rec.Code)
+		}
+		if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
+			t.Errorf("plain route after demotion = %d groups=%q, want 200 user", rec.Code, rec.Header().Get("Remote-Groups"))
+		}
+	})
+	t.Run("removed entirely", func(t *testing.T) {
+		srv, sender := testServer(t)
+		srv.cfg.TOTPEnabled = true
+		secret := provisionTOTP(t, srv, "admin@example.com")
+		c := newClient(t, srv.Handler())
+		c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+		c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+		srv.policy = authz.NewPolicy([]string{"other.org"}, nil) // address no longer permitted
+		totpCode, err := pqtotp.GenerateCode(secret, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := c.postForm("/totp", url.Values{"code": {totpCode}})
+		if c.cookies[session.SessionCookie] != nil {
+			t.Fatalf("a session was issued to a removed principal (status %d)", rec.Code)
+		}
+		if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusFound {
+			t.Errorf("removed principal reached /verify with %d", rec.Code)
+		}
+	})
 }

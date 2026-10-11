@@ -49,9 +49,19 @@ func NewNotifier(sender email.Sender, recipients []string, webhookURL string, we
 		webhookTimeout: webhookTimeout,
 		blocked:        blockedWebhookIP,
 	}
+	// One notifier is built per event, so its transport is one-shot: keep-
+	// alives are off and the connection is closed once the delivery is done,
+	// otherwise every completed delivery would leave an idle connection (and
+	// its goroutines) behind until the receiver dropped it.
 	n.httpClient = &http.Client{
-		Timeout:   webhookTimeout,
-		Transport: &http.Transport{DialContext: n.dialGuarded, TLSHandshakeTimeout: webhookTimeout},
+		Timeout: webhookTimeout,
+		Transport: &http.Transport{
+			DialContext:         n.dialGuarded,
+			TLSHandshakeTimeout: webhookTimeout,
+			DisableKeepAlives:   true,
+			MaxIdleConns:        1,
+			IdleConnTimeout:     time.Second,
+		},
 		// A redirect could point an otherwise acceptable destination at a
 		// blocked one. The 3xx is returned as the response and logged instead.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -160,6 +170,8 @@ func (n *Notifier) sendWebhook(ctx context.Context, ev UseEvent) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Close = true
+	defer n.httpClient.CloseIdleConnections()
 	resp, err := n.httpClient.Do(req)
 	if err != nil {
 		log.Printf("breakglass notify: webhook POST: %v", err)

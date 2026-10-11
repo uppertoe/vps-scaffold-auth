@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1006,28 +1007,43 @@ func TestResendTransitionsMatchForDecoy(t *testing.T) {
 	srv.cfg.OTPResendCooldown = 30 * time.Second
 	base := time.Now()
 	srv.now = func() time.Time { return base }
-	run := func(addr string) (withinCooldown, afterCooldown int) {
+	// "Incorrect" and "locked out" both answer 401, so the page's state is what
+	// is compared: the wrong-code page offers another try, the locked-out page
+	// asks for a new code. The guess is a letter string, which no minted code
+	// can equal.
+	const wrongGuess = "nope"
+	state := func(rec *httptest.ResponseRecorder) string {
+		body := rec.Body.String()
+		switch {
+		case strings.Contains(body, "Too many incorrect attempts"):
+			return "locked"
+		case strings.Contains(body, "Incorrect code"):
+			return "mismatch"
+		}
+		return fmt.Sprintf("other(%d)", rec.Code)
+	}
+	run := func(addr string) (withinCooldown, afterCooldown string) {
 		c := newClient(t, srv.Handler())
 		c.postForm("/request", url.Values{"email": {addr}})
 		for i := 0; i < srv.cfg.OTPMaxAttempts; i++ {
-			c.postForm("/verify-code", url.Values{"code": {"000000"}})
+			c.postForm("/verify-code", url.Values{"code": {wrongGuess}})
 		}
 		// Re-request inside the cooldown: the counter must survive.
 		c.postForm("/request", url.Values{"email": {addr}})
-		withinCooldown = c.postForm("/verify-code", url.Values{"code": {"000000"}}).Code
+		withinCooldown = state(c.postForm("/verify-code", url.Values{"code": {wrongGuess}}))
 		// Re-request after the cooldown: a fresh code with a fresh counter.
 		srv.now = func() time.Time { return base.Add(srv.cfg.OTPResendCooldown + time.Second) }
 		c.postForm("/request", url.Values{"email": {addr}})
-		afterCooldown = c.postForm("/verify-code", url.Values{"code": {"000000"}}).Code
+		afterCooldown = state(c.postForm("/verify-code", url.Values{"code": {wrongGuess}}))
 		srv.now = func() time.Time { return base }
 		return
 	}
 	pw, pa := run("user@example.com")
 	dw, da := run("stranger@other.org")
-	if pw != dw || pa != da {
-		t.Fatalf("resend transitions differ: permitted within/after = %d/%d, decoy = %d/%d", pw, pa, dw, da)
+	if pw != "locked" || pa != "mismatch" {
+		t.Fatalf("permitted address: within cooldown = %s, after = %s; want locked then mismatch", pw, pa)
 	}
-	if pw != http.StatusUnauthorized || pa != http.StatusUnauthorized {
-		t.Logf("note: statuses within/after = %d/%d", pw, pa)
+	if dw != pw || da != pa {
+		t.Fatalf("resend transitions differ: permitted within/after = %s/%s, decoy = %s/%s", pw, pa, dw, da)
 	}
 }

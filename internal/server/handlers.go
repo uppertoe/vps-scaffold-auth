@@ -822,7 +822,19 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.ClearTOTPFailures(r.Context(), p.Email); err != nil {
 		log.Printf("clear totp failures for %s: %v", p.Email, err)
 	}
-	s.completeLogin(w, r, p.Email, p.Role, rd, p.Remember, true, now)
+	// The role is re-derived from the CURRENT policy, not the one saved in the
+	// pending cookie at the email step: an admin removed or demoted between
+	// the two factors must not be issued an admin session that downstream
+	// admin-only routes would then honour until renewal. A principal the
+	// policy no longer permits at all is refused and sent to sign in again.
+	role := s.policy.LoginRole(p.Email, s.isOpenHost(rd))
+	if role == authz.RoleDeny {
+		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeDenied)
+		s.sessions.ClearPending(w)
+		s.restartLogin(w, r, rd)
+		return
+	}
+	s.completeLogin(w, r, p.Email, role, rd, p.Remember, true, now)
 }
 
 // totpLockoutWindow is the rolling window over which TOTP verification attempts

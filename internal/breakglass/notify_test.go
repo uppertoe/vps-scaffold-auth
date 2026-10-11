@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,5 +86,47 @@ func TestWebhookDoesNotFollowRedirects(t *testing.T) {
 	case p := <-hit:
 		t.Fatalf("redirect was followed to %q", p)
 	case <-time.After(time.Second):
+	}
+}
+
+// A completed delivery leaves no connection behind: the one-shot client sends
+// Connection: close and shuts its transport down once the response is read.
+func TestWebhookLeavesNoIdleConnection(t *testing.T) {
+	var mu sync.Mutex
+	opened, closed := 0, 0
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	srv.Config.ConnState = func(c net.Conn, st http.ConnState) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch st {
+		case http.StateNew:
+			opened++
+		case http.StateClosed:
+			closed++
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	const deliveries = 6
+	for i := 0; i < deliveries; i++ {
+		n := NewNotifier(nil, nil, srv.URL, time.Second)
+		n.blocked = func(net.IP) bool { return false }
+		n.Notify(UseEvent{Label: "Lab 1", Time: time.Now()})
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		o, cl := opened, closed
+		mu.Unlock()
+		if o >= deliveries && cl == o {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("connections opened=%d closed=%d after %d deliveries; idle connections retained", o, cl, deliveries)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
