@@ -481,35 +481,43 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// registration host, any syntactically valid public address is sent a real
 	// code (LoginRole returns RoleGuest). That leaks nothing, since on such a host
 	// everyone is mailed; on every other host the decoy behaviour is unchanged.
-	if s.policy.LoginRole(emailAddr, s.isOpenHost(rd)) != authz.RoleDeny {
-		// Suppress a re-request while the last code is still fresh: a code minted
-		// within the cooldown window has expires_at > now + OTPTTL - cooldown.
-		// Deriving issue time from expiry is exact because SaveCode sets
-		// expires_at = issue + OTPTTL.
-		minExpiry := now.Add(s.cfg.OTPTTL - s.cfg.OTPResendCooldown)
-		recent, err := s.store.HasRecentCode(r.Context(), emailAddr, minExpiry)
-		if err != nil {
-			log.Printf("recent-code check for %s: %v", emailAddr, err)
-		}
-		switch {
-		case recent:
-			// No-op: a live code was issued within the cooldown. Don't mint, don't
-			// email, don't spend a send token. The existing code's attempt counter
-			// stays intact, so a re-request can't reset the brute-force cap — which
-			// is the guard that survives back-button / refresh / new-tab.
-		case s.emailLimiter.Allow(emailAddr):
+	//
+	// Both kinds of address go through the SAME cooldown, send-limit and
+	// counter transitions; the only difference is whether mail is sent. A
+	// decoy that kept its attempt counter across a re-request while a real
+	// code's was reset (or that never spent a send token) would answer the
+	// next wrong guess differently, and that difference is allow-list
+	// membership.
+	permitted := s.policy.LoginRole(emailAddr, s.isOpenHost(rd)) != authz.RoleDeny
+	// Suppress a re-request while the last code is still fresh: a code minted
+	// within the cooldown window has expires_at > now + OTPTTL - cooldown.
+	// Deriving issue time from expiry is exact because SaveCode sets
+	// expires_at = issue + OTPTTL.
+	minExpiry := now.Add(s.cfg.OTPTTL - s.cfg.OTPResendCooldown)
+	recent, err := s.store.HasRecentCode(r.Context(), emailAddr, minExpiry)
+	if err != nil {
+		log.Printf("recent-code check for %s: %v", emailAddr, err)
+	}
+	switch {
+	case recent:
+		// No-op: a live code was issued within the cooldown. Don't mint, don't
+		// email, don't spend a send token. The existing code's attempt counter
+		// stays intact, so a re-request can't reset the brute-force cap — which
+		// is the guard that survives back-button / refresh / new-tab.
+	case s.emailLimiter.Allow(emailAddr):
+		if permitted {
 			if err := s.sendCode(r, emailAddr, now); err != nil { // SaveCode(overwrite) + email
 				log.Printf("send code to %s: %v", emailAddr, err)
 			}
-		default:
-			// Over the send limit: do NOT clobber a possibly-live code we can't
-			// re-deliver. Fall back to the decoy path (EnsureCode is insert-if-absent).
-			if err := s.storeDecoyCode(r.Context(), emailAddr, now); err != nil {
-				log.Printf("store decoy code for %s: %v", emailAddr, err)
-			}
+		} else if err := s.saveDecoyCode(r.Context(), emailAddr, now); err != nil { // SaveCode(overwrite), no email
+			log.Printf("save decoy code for %s: %v", emailAddr, err)
 		}
-	} else if err := s.storeDecoyCode(r.Context(), emailAddr, now); err != nil {
-		log.Printf("store decoy code for %s: %v", emailAddr, err)
+	default:
+		// Over the send limit: do NOT clobber a possibly-live code we can't
+		// re-deliver. Insert-if-absent for both kinds of address.
+		if err := s.storeDecoyCode(r.Context(), emailAddr, now); err != nil {
+			log.Printf("store decoy code for %s: %v", emailAddr, err)
+		}
 	}
 
 	if err := s.sessions.SetState(w, session.State{Email: emailAddr, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
@@ -556,6 +564,18 @@ func (s *Server) storeDecoyCode(ctx context.Context, emailAddr string, now time.
 		return err
 	}
 	return s.store.EnsureCode(ctx, emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL))
+}
+
+// saveDecoyCode is the decoy twin of sendCode: it overwrites any existing code
+// for the address with a fresh unguessable one and resets its attempt
+// counters, exactly as a permitted address's re-request does, but sends no
+// mail. See handleRequest for why the transitions must match.
+func (s *Server) saveDecoyCode(ctx context.Context, emailAddr string, now time.Time) error {
+	code, err := otp.Generate(s.cfg.OTPLength)
+	if err != nil {
+		return err
+	}
+	return s.store.SaveCode(ctx, emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL))
 }
 
 // hashCode hashes an OTP code for storage. It is keyed (HMAC) with the session

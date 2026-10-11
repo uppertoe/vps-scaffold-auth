@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -31,6 +32,8 @@ type Notifier struct {
 	webhookURL     string
 	webhookTimeout time.Duration
 	httpClient     *http.Client
+	// blocked decides which resolved webhook addresses may not be dialled.
+	blocked func(net.IP) bool
 }
 
 // NewNotifier builds a Notifier. sender and recipients may be empty (no email);
@@ -39,13 +42,64 @@ func NewNotifier(sender email.Sender, recipients []string, webhookURL string, we
 	if webhookTimeout <= 0 {
 		webhookTimeout = 5 * time.Second
 	}
-	return &Notifier{
+	n := &Notifier{
 		sender:         sender,
 		recipients:     recipients,
 		webhookURL:     webhookURL,
 		webhookTimeout: webhookTimeout,
-		httpClient:     &http.Client{Timeout: webhookTimeout},
+		blocked:        blockedWebhookIP,
 	}
+	n.httpClient = &http.Client{
+		Timeout:   webhookTimeout,
+		Transport: &http.Transport{DialContext: n.dialGuarded, TLSHandshakeTimeout: webhookTimeout},
+		// A redirect could point an otherwise acceptable destination at a
+		// blocked one. The 3xx is returned as the response and logged instead.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return n
+}
+
+// blockedWebhookIP reports whether a resolved webhook address must not be
+// connected to: loopback, link-local (cloud metadata), unspecified and
+// multicast. Private ranges are intentionally allowed, since notifications
+// legitimately target internal services on this stack. The admin settings
+// form checks a literal address the same way; this check runs on what the
+// hostname actually resolves to, at connection time, so a name that points
+// at a blocked address is refused as well.
+func blockedWebhookIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() || ip.IsMulticast()
+}
+
+// dialGuarded resolves the host, drops blocked addresses, and dials the first
+// acceptable one. Dialling the resolved address directly means the check and
+// the connection see the same answer.
+func (n *Notifier) dialGuarded(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	d := &net.Dialer{Timeout: n.webhookTimeout}
+	var lastErr error
+	for _, ip := range ips {
+		if n.blocked(ip.IP) {
+			lastErr = fmt.Errorf("webhook host %s resolves to a blocked address %s", host, ip.IP)
+			continue
+		}
+		conn, err := d.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("webhook host %s has no address", host)
+	}
+	return nil, lastErr
 }
 
 // Notify delivers ev asynchronously. It returns immediately; failures are

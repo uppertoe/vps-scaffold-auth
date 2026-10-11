@@ -129,8 +129,8 @@ func TestBuildMIMEResistsBoundaryInjection(t *testing.T) {
 }
 
 func TestRandomBoundaryIsPerMessage(t *testing.T) {
-	a := string(buildMIME("auth@example.com", Message{To: "x@example.com", Subject: "s", Text: "t"}))
-	b := string(buildMIME("auth@example.com", Message{To: "x@example.com", Subject: "s", Text: "t"}))
+	a := string(buildMIME("auth@example.com", Message{To: "x@example.com", Subject: "s", Text: "t", HTML: "<p>t</p>"}))
+	b := string(buildMIME("auth@example.com", Message{To: "x@example.com", Subject: "s", Text: "t", HTML: "<p>t</p>"}))
 	if boundaryOf(a) == "" || boundaryOf(a) == boundaryOf(b) {
 		t.Fatalf("boundary should be random per message: %q vs %q", boundaryOf(a), boundaryOf(b))
 	}
@@ -205,5 +205,23 @@ func TestSMTPSendHonoursContextDeadline(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Fatalf("Send took %v, want to return at the context deadline", elapsed)
+	}
+}
+
+// A text-only message is sent as plain text, so a client that prefers HTML
+// does not pick an empty alternative over the incident details.
+func TestBuildMIMETextOnlyIsPlainText(t *testing.T) {
+	raw := buildMIME("auth@example.com", Message{To: "oncall@example.com", Subject: "Break-glass used", Text: "Location: Lab 1"})
+	m, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct, _, err := mime.ParseMediaType(m.Header.Get("Content-Type"))
+	if err != nil || ct != "text/plain" {
+		t.Fatalf("Content-Type = %q (%v), want text/plain", m.Header.Get("Content-Type"), err)
+	}
+	body, _ := io.ReadAll(m.Body)
+	if !strings.Contains(string(body), "Location: Lab 1") {
+		t.Fatalf("body lacks the text: %q", body)
 	}
 }

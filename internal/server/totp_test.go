@@ -262,10 +262,15 @@ func TestEnablingTOTPReChallengesExistingAdminSession(t *testing.T) {
 			rec.Code, rec.Header().Get("Location"))
 	}
 
-	// Re-authenticating with the second factor restores admin access.
+	// Re-authenticating with the second factor restores admin access. Drop the
+	// first login's captured message first, so code() waits for this login's
+	// mail rather than reusing the earlier (already consumed) code.
 	secret := provisionTOTP(t, srv, "admin@example.com")
+	sender.reset()
 	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
-	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	if rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}}); rec.Code != http.StatusOK {
+		t.Fatalf("/verify-code on re-auth = %d, want 200 (TOTP challenge)", rec.Code)
+	}
 	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
 	if err != nil {
 		t.Fatal(err)

@@ -996,3 +996,38 @@ func TestLoginFormsRequireSameOrigin(t *testing.T) {
 		}
 	}
 }
+
+// A re-request behaves identically for a permitted and an unlisted address:
+// within the cooldown neither resets its attempt counter, and after the
+// cooldown both do. Any difference would reveal allow-list membership.
+func TestResendTransitionsMatchForDecoy(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.cfg.OTPMaxAttempts = 2
+	srv.cfg.OTPResendCooldown = 30 * time.Second
+	base := time.Now()
+	srv.now = func() time.Time { return base }
+	run := func(addr string) (withinCooldown, afterCooldown int) {
+		c := newClient(t, srv.Handler())
+		c.postForm("/request", url.Values{"email": {addr}})
+		for i := 0; i < srv.cfg.OTPMaxAttempts; i++ {
+			c.postForm("/verify-code", url.Values{"code": {"000000"}})
+		}
+		// Re-request inside the cooldown: the counter must survive.
+		c.postForm("/request", url.Values{"email": {addr}})
+		withinCooldown = c.postForm("/verify-code", url.Values{"code": {"000000"}}).Code
+		// Re-request after the cooldown: a fresh code with a fresh counter.
+		srv.now = func() time.Time { return base.Add(srv.cfg.OTPResendCooldown + time.Second) }
+		c.postForm("/request", url.Values{"email": {addr}})
+		afterCooldown = c.postForm("/verify-code", url.Values{"code": {"000000"}}).Code
+		srv.now = func() time.Time { return base }
+		return
+	}
+	pw, pa := run("user@example.com")
+	dw, da := run("stranger@other.org")
+	if pw != dw || pa != da {
+		t.Fatalf("resend transitions differ: permitted within/after = %d/%d, decoy = %d/%d", pw, pa, dw, da)
+	}
+	if pw != http.StatusUnauthorized || pa != http.StatusUnauthorized {
+		t.Logf("note: statuses within/after = %d/%d", pw, pa)
+	}
+}

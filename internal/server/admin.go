@@ -464,7 +464,10 @@ func (s *Server) handleAdminSaveSettings(w http.ResponseWriter, r *http.Request)
 		// POST at: cloud metadata (link-local 169.254/16, fe80::/10) and loopback.
 		// Private ranges (10/8, 192.168/16, 172.16/12) are intentionally allowed —
 		// notifications legitimately target internal services on this stack.
-		if ip := net.ParseIP(u.Hostname()); ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()) {
+		// The notifier re-checks the RESOLVED address at connection time (and
+		// follows no redirects), so a hostname pointing at one of these is
+		// refused there; this literal check only gives the admin an early answer.
+		if ip := net.ParseIP(u.Hostname()); ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()) {
 			s.settingsError(w, r, "The webhook host may not be a loopback or link-local address.")
 			return
 		}

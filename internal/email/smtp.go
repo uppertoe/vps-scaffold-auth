@@ -119,13 +119,23 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 // extra MIME part. (Header injection is separately prevented by sanitizeHeader;
 // the body parts are written verbatim, so the unguessable boundary is what keeps
 // body content from breaking the MIME structure.)
+//
+// A message with no HTML part (a break-glass notification carries text only)
+// is sent as plain text, not as a multipart whose HTML alternative is empty:
+// a client that prefers HTML would otherwise show an empty incident notice.
 func buildMIME(from string, msg Message) []byte {
-	boundary := randomBoundary()
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", sanitizeHeader(from))
 	fmt.Fprintf(&b, "To: %s\r\n", sanitizeHeader(msg.To))
 	fmt.Fprintf(&b, "Subject: %s\r\n", sanitizeHeader(msg.Subject))
 	b.WriteString("MIME-Version: 1.0\r\n")
+	if msg.HTML == "" {
+		b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
+		b.WriteString(msg.Text)
+		b.WriteString("\r\n")
+		return []byte(b.String())
+	}
+	boundary := randomBoundary()
 	fmt.Fprintf(&b, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
 
 	fmt.Fprintf(&b, "--%s\r\n", boundary)
