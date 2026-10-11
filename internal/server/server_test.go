@@ -1096,3 +1096,21 @@ func TestSameOriginToleratesExplicitDefaultPort(t *testing.T) {
 		t.Fatalf("a post from a different port was accepted (%d)", code)
 	}
 }
+
+// publicOrigin matches what a browser sends as Origin for the public URL.
+func TestPublicOriginForms(t *testing.T) {
+	srv, _ := testServer(t)
+	for in, want := range map[string]string{
+		"https://auth.example.com":      "https://auth.example.com",
+		"https://auth.example.com:443":  "https://auth.example.com",
+		"https://auth.example.com:8443": "https://auth.example.com:8443",
+		"http://auth.example.com:80":    "http://auth.example.com",
+		"https://[::1]:443":             "https://[::1]",
+		"https://[::1]:8443":            "https://[::1]:8443",
+	} {
+		srv.cfg.PublicURL = in
+		if got := srv.publicOrigin(); got != want {
+			t.Errorf("publicOrigin(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

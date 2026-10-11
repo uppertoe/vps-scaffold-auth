@@ -403,7 +403,7 @@ func (s *Server) publicOrigin() string {
 	// look cross-origin.
 	host := u.Host
 	if p := u.Port(); (u.Scheme == "https" && p == "443") || (u.Scheme == "http" && p == "80") {
-		host = u.Hostname()
+		host = strings.TrimSuffix(u.Host, ":"+p) // keeps an IPv6 literal's brackets
 	}
 	return u.Scheme + "://" + host
 }
