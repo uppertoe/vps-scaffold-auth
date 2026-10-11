@@ -257,9 +257,29 @@ func (m *Manager) IssueSessionTTL(w http.ResponseWriter, email, groups, kind str
 }
 
 // ReadSession returns the identity from a valid session cookie.
+//
+// The session cookie is scoped to the shared cookie domain so one login serves
+// every app, which also means any host on that domain can set a cookie of the
+// same name (host-only, or on a narrower path) that the browser sends alongside
+// the real one. r.Cookie would silently return whichever came first. More than
+// one cookie by this name is therefore treated as no session at all: the
+// request fails closed and the person signs in again, rather than the gateway
+// guessing which identity to honour. A sibling that overwrites the shared
+// cookie outright is indistinguishable from a fresh login and cannot be
+// detected here; every app on the cookie domain must be trusted equally (see
+// the README's security notes).
 func (m *Manager) ReadSession(r *http.Request, now time.Time) (*Identity, bool) {
-	c, err := r.Cookie(SessionCookie)
-	if err != nil {
+	var c *http.Cookie
+	for _, ck := range r.Cookies() {
+		if ck.Name != SessionCookie {
+			continue
+		}
+		if c != nil {
+			return nil, false // ambiguous: two cookies by this name
+		}
+		c = ck
+	}
+	if c == nil {
 		return nil, false
 	}
 	var id Identity

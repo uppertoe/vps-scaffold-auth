@@ -115,28 +115,25 @@ type Config struct {
 // Load reads configuration from the environment and validates it.
 func Load() (*Config, error) {
 	c := &Config{
-		PublicURL:         strings.TrimRight(getenv("AUTH_PUBLIC_URL", ""), "/"),
-		Domain:            strings.ToLower(getenv("DOMAIN", "")),
-		BrandName:         strings.TrimSpace(getenv("BRAND_NAME", "")),
-		LoginNotice:       strings.TrimSpace(getenv("LOGIN_NOTICE", "")),
-		OTPEmailSubject:   strings.TrimSpace(getenv("OTP_EMAIL_SUBJECT", "")),
-		AllowedDomains:    splitLowerCSV(getenv("ALLOWED_EMAIL_DOMAINS", "")),
-		AdminEmails:       splitLowerCSV(getenv("ADMIN_EMAILS", "")),
-		DefaultRedirect:   getenv("DEFAULT_REDIRECT", ""),
-		AllowApexRedirect: getbool("ALLOW_APEX_REDIRECT", false),
-		SessionSecret:     []byte(getenv("SESSION_SECRET", "")),
-		CookieDomain:      getenv("COOKIE_DOMAIN", ""),
-		CookieInsecure:    getbool("COOKIE_INSECURE", false),
-		EmailBackend:      strings.ToLower(getenv("EMAIL_BACKEND", "log")),
-		EmailFrom:         getenv("EMAIL_FROM", ""),
-		SMTPHost:          getenv("SMTP_HOST", ""),
-		SMTPUsername:      getenv("SMTP_USERNAME", ""),
-		SMTPPassword:      getenv("SMTP_PASSWORD", ""),
-		ResendAPIKey:      getenv("RESEND_API_KEY", ""),
-		TOTPEnabled:       getbool("TOTP_ENABLED", false),
-		TOTPIssuer:        getenv("TOTP_ISSUER", ""),
-		SQLitePath:        getenv("SQLITE_PATH", "/data/auth.db"),
-		ListenAddr:        getenv("LISTEN_ADDR", ":8080"),
+		PublicURL:       strings.TrimRight(getenv("AUTH_PUBLIC_URL", ""), "/"),
+		Domain:          strings.ToLower(getenv("DOMAIN", "")),
+		BrandName:       strings.TrimSpace(getenv("BRAND_NAME", "")),
+		LoginNotice:     strings.TrimSpace(getenv("LOGIN_NOTICE", "")),
+		OTPEmailSubject: strings.TrimSpace(getenv("OTP_EMAIL_SUBJECT", "")),
+		AllowedDomains:  splitLowerCSV(getenv("ALLOWED_EMAIL_DOMAINS", "")),
+		AdminEmails:     splitLowerCSV(getenv("ADMIN_EMAILS", "")),
+		DefaultRedirect: getenv("DEFAULT_REDIRECT", ""),
+		SessionSecret:   []byte(getenv("SESSION_SECRET", "")),
+		CookieDomain:    getenv("COOKIE_DOMAIN", ""),
+		EmailBackend:    strings.ToLower(getenv("EMAIL_BACKEND", "log")),
+		EmailFrom:       getenv("EMAIL_FROM", ""),
+		SMTPHost:        getenv("SMTP_HOST", ""),
+		SMTPUsername:    getenv("SMTP_USERNAME", ""),
+		SMTPPassword:    getenv("SMTP_PASSWORD", ""),
+		ResendAPIKey:    getenv("RESEND_API_KEY", ""),
+		TOTPIssuer:      getenv("TOTP_ISSUER", ""),
+		SQLitePath:      getenv("SQLITE_PATH", "/data/auth.db"),
+		ListenAddr:      getenv("LISTEN_ADDR", ":8080"),
 
 		BreakGlassRedirect:     getenv("BREAKGLASS_REDIRECT", ""),
 		BreakGlassWebhookURL:   getenv("BREAKGLASS_WEBHOOK_URL", ""),
@@ -148,6 +145,15 @@ func Load() (*Config, error) {
 	c.OpenRegistrationHosts = splitLowerCSV(getenv("OPEN_REGISTRATION_HOSTS", ""))
 
 	var err error
+	if c.AllowApexRedirect, err = getbool("ALLOW_APEX_REDIRECT", false); err != nil {
+		return nil, err
+	}
+	if c.CookieInsecure, err = getbool("COOKIE_INSECURE", false); err != nil {
+		return nil, err
+	}
+	if c.TOTPEnabled, err = getbool("TOTP_ENABLED", false); err != nil {
+		return nil, err
+	}
 	if c.SessionTTL, err = getdur("SESSION_TTL", 2*time.Hour); err != nil {
 		return nil, err
 	}
@@ -401,16 +407,20 @@ func distinctBytes(b []byte) int {
 	return n
 }
 
-func getbool(key string, def bool) bool {
+// getbool reads a boolean setting. An unset or empty value yields def; a value
+// that is not one strconv.ParseBool accepts (true/false, 1/0, t/f, in any
+// case) is an error, never the default. TOTP_ENABLED=yes starting the service
+// with TOTP silently off is exactly the failure this prevents.
+func getbool(key string, def bool) (bool, error) {
 	v, ok := os.LookupEnv(key)
-	if !ok || v == "" {
-		return def
+	if !ok || strings.TrimSpace(v) == "" {
+		return def, nil
 	}
 	b, err := strconv.ParseBool(strings.TrimSpace(v))
 	if err != nil {
-		return def
+		return def, fmt.Errorf("%s: %q is not a boolean (use true or false)", key, v)
 	}
-	return b
+	return b, nil
 }
 
 func getint(key string, def int) (int, error) {

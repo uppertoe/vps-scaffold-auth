@@ -55,15 +55,25 @@ func (n *Notifier) Notify(ev UseEvent) {
 	if n == nil {
 		return
 	}
+	// Each channel runs on its own goroutine with its own deadline, so a slow
+	// mail relay cannot consume the webhook's time (or the reverse): the
+	// webhook is the channel that pages someone, and it must not wait behind
+	// email. Contexts are detached from the request, which has already been
+	// answered.
 	go func() {
-		// Detached context: the request that triggered this has already been
-		// answered, so r.Context() would be canceled.
-		ctx, cancel := context.WithTimeout(context.Background(), n.webhookTimeout+2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), emailTimeout)
 		defer cancel()
 		n.sendEmails(ctx, ev)
+	}()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), n.webhookTimeout+2*time.Second)
+		defer cancel()
 		n.sendWebhook(ctx, ev)
 	}()
 }
+
+// emailTimeout bounds the whole email fan-out for one event.
+const emailTimeout = 30 * time.Second
 
 func (n *Notifier) sendEmails(ctx context.Context, ev UseEvent) {
 	if n.sender == nil || len(n.recipients) == 0 {

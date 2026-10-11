@@ -184,3 +184,29 @@ func TestLegacyUntypedTokenRejected(t *testing.T) {
 		t.Fatal("an untyped legacy token was accepted as a session")
 	}
 }
+
+// Two cookies by the session's name (one of them planted by another host on
+// the cookie domain) are refused rather than the first one being honoured.
+func TestDuplicateSessionCookieIsRefused(t *testing.T) {
+	m := NewManager([]byte("0123456789abcdef0123456789abcdef"), time.Hour, 30*time.Minute, "", false)
+	now := time.Unix(1_700_000_000, 0)
+	mint := func(email string) string {
+		rec := httptest.NewRecorder()
+		if err := m.IssueSession(rec, email, "user", now); err != nil {
+			t.Fatal(err)
+		}
+		return rec.Result().Cookies()[0].Value
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: mint("planted@example.com")})
+	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: mint("real@example.com")})
+	if id, ok := m.ReadSession(req, now); ok {
+		t.Fatalf("ambiguous cookie set was honoured as %s", id.Email)
+	}
+	// A single cookie still reads.
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: mint("real@example.com")})
+	if _, ok := m.ReadSession(req, now); !ok {
+		t.Fatal("a single genuine session cookie no longer reads")
+	}
+}

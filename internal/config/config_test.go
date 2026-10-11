@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -291,5 +292,25 @@ func TestLoadOpenRegistrationHostsRejectsOutsideDomain(t *testing.T) {
 				t.Errorf("expected OPEN_REGISTRATION_HOSTS=%q to be refused", h)
 			}
 		})
+	}
+}
+
+// A boolean setting that is not a boolean refuses to start rather than
+// silently taking its default: TOTP_ENABLED=yes must not run with TOTP off.
+func TestMalformedBooleanRefused(t *testing.T) {
+	for _, key := range []string{"TOTP_ENABLED", "COOKIE_INSECURE", "ALLOW_APEX_REDIRECT"} {
+		t.Run(key, func(t *testing.T) {
+			setValid(t)
+			t.Setenv(key, "yes")
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("Load with %s=yes: err = %v, want an error naming %s", key, err, key)
+			}
+		})
+	}
+	setValid(t)
+	t.Setenv("TOTP_ENABLED", " True ")
+	c, err := Load()
+	if err != nil || !c.TOTPEnabled {
+		t.Fatalf("TOTP_ENABLED=' True ': cfg=%v err=%v, want enabled", c != nil && c.TOTPEnabled, err)
 	}
 }

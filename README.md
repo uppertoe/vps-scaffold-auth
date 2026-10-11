@@ -463,6 +463,14 @@ still reach an app during a time-critical event (e.g. a code stroke).
 
 ## Security notes
 
+- **Every app on the cookie domain is trusted equally.** The session cookie is
+  scoped to `.<domain>` so one login serves every app, which also means any
+  host on that domain can set, overwrite or shadow a cookie of the same name in
+  a visitor's browser. The gateway refuses a request that carries more than one
+  session cookie rather than honouring whichever came first, but a sibling that
+  overwrites the shared cookie outright looks like a fresh login. Do not put an
+  app you would not trust with your users' sessions on the same domain; give it
+  its own domain and its own gateway.
 - One-time codes are single-use, short-lived, attempt-capped, and stored only
   as a **keyed HMAC-SHA256** (so a stolen `auth.db` can't brute-force the small
   numeric code space offline); comparison is constant-time.

@@ -61,6 +61,14 @@ func (a *accessAudit) record(ctx context.Context, email, host, kind string, now 
 		Email: email, Host: host, Kind: kind, Bucket: bucket, CreatedAt: now,
 	}); err != nil {
 		log.Printf("record app access %s -> %s: %v", email, host, err)
+		// Un-mark so the next sighting retries; otherwise one failed write
+		// would hide this principal's visits to this app for the rest of the
+		// hour. Only clear it if the hour has not rolled over meanwhile.
+		a.mu.Lock()
+		if a.hour == bucket {
+			delete(a.seen, key)
+		}
+		a.mu.Unlock()
 	}
 }
 
