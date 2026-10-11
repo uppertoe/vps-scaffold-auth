@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -390,5 +392,41 @@ func TestTOTPAttemptCapHoldsUnderConcurrency(t *testing.T) {
 	}
 	if checked+locked != n {
 		t.Errorf("checked %d + locked %d != %d submissions", checked, locked, n)
+	}
+}
+
+// reserveFails is a store whose attempt reservation always errors, standing in
+// for a database that cannot be written to.
+type reserveFails struct{ store.Store }
+
+func (reserveFails) ReserveTOTPAttempt(context.Context, string, time.Duration, time.Time) (int, error) {
+	return 0, errors.New("disk full")
+}
+
+// When an attempt cannot be recorded the code is not checked at all: the cap
+// must not switch off during a store outage. The admin gets a temporary
+// refusal and no session, even with the correct code.
+func TestTOTPRefusesWhenAttemptCannotBeRecorded(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+
+	srv.store = reserveFails{srv.store}
+	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := c.postForm("/totp", url.Values{"code": {totpCode}})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/totp with a failing store = %d, want 503", rec.Code)
+	}
+	if c.cookies[session.SessionCookie] != nil {
+		t.Fatal("a session was issued although the attempt could not be recorded")
+	}
+	if !strings.Contains(rec.Body.String(), "try again in a moment") {
+		t.Errorf("refusal page lacks the retry message:\n%s", rec.Body.String())
 	}
 }

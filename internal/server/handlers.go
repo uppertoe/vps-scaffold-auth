@@ -752,12 +752,20 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	// attacker (who already controls the admin's inbox) grind the 10^6 TOTP
 	// space. The attempt is reserved BEFORE the code is checked, so the cap
 	// bounds how many codes are ever checked within the window no matter how
-	// many submissions arrive together; a successful login clears it. A store
-	// error fails open here (the per-IP limiter still applies) so an
-	// infrastructure hiccup cannot lock a legitimate admin out.
-	if n, err := s.store.ReserveTOTPAttempt(r.Context(), p.Email, totpLockoutWindow, now); err != nil {
+	// many submissions arrive together; a successful login clears it. If the
+	// attempt cannot be recorded, the code is NOT checked: an unrecorded check
+	// would be an uncounted guess, so a store outage would otherwise switch
+	// the cap off exactly when guesses cannot be bounded. The admin is asked
+	// to try again shortly instead.
+	n, err := s.store.ReserveTOTPAttempt(r.Context(), p.Email, totpLockoutWindow, now)
+	if err != nil {
 		log.Printf("reserve totp attempt for %s: %v", p.Email, err)
-	} else if n > s.cfg.OTPMaxAttempts {
+		s.render(w, http.StatusServiceUnavailable, "totp", pageData{
+			Error: "The code could not be checked just now. Please try again in a moment.", Redirect: rd,
+		})
+		return
+	}
+	if n > s.cfg.OTPMaxAttempts {
 		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeLockedOut)
 		s.render(w, http.StatusTooManyRequests, "totp", pageData{
 			Error: "Too many incorrect codes. This account is temporarily locked; try again shortly.", Redirect: rd,
