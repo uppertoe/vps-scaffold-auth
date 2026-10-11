@@ -116,6 +116,16 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A session cookie that is present but unreadable (expired, minted by an
+	// earlier build, or a stray duplicate) is cleared on the way to login.
+	// Otherwise it lingers, and an app route that treats "has a session
+	// cookie" as "signed in" (p.stonn.org sends such visitors from / to the
+	// gated schedule) keeps bouncing a returning visitor to login instead of
+	// showing them the landing page. The clearing Set-Cookie rides on this
+	// 302, which the Caddy gate copies to the browser unchanged.
+	if _, err := r.Cookie(session.SessionCookie); err == nil {
+		s.sessions.ClearSession(w)
+	}
 	s.redirectToLogin(w, r)
 }
 

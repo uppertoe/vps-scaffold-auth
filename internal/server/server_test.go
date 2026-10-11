@@ -1128,3 +1128,29 @@ func TestPublicOriginForms(t *testing.T) {
 		}
 	}
 }
+
+// An unreadable session cookie is cleared on the redirect to login, so an app
+// route that keys on the cookie's presence stops bouncing the visitor.
+func TestVerifyClearsUnreadableSessionCookie(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.cookies[session.SessionCookie] = &http.Cookie{Name: session.SessionCookie, Value: "stale.garbage"}
+	rec := c.get("/verify", protectedAny())
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+		t.Fatalf("/verify with a stale cookie = %d %q, want 302 to login", rec.Code, rec.Header().Get("Location"))
+	}
+	cleared := false
+	for _, ck := range rec.Result().Cookies() {
+		if ck.Name == session.SessionCookie && ck.MaxAge < 0 && ck.Value == "" {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Fatalf("stale session cookie was not cleared; Set-Cookie=%v", rec.Header()["Set-Cookie"])
+	}
+	// No cookie at all: nothing to clear, no Set-Cookie emitted.
+	c2 := newClient(t, srv.Handler())
+	if sc := c2.get("/verify", protectedAny()).Header()["Set-Cookie"]; len(sc) != 0 {
+		t.Errorf("Set-Cookie emitted with no cookie present: %v", sc)
+	}
+}
