@@ -21,6 +21,7 @@ const (
 	SessionCookie = "vps_auth_session"
 	StateCookie   = "vps_auth_state"
 	PendingCookie = "vps_auth_pending"
+	OfferCookie   = "vps_auth_bg_offer"
 	CSRFCookie    = "vps_auth_csrf"
 )
 
@@ -75,16 +76,37 @@ func (s Signer) mac(payload []byte) []byte {
 	return h.Sum(nil)
 }
 
-// envelope wraps an arbitrary payload with an absolute expiry.
+// envelope wraps an arbitrary payload with an absolute expiry and the purpose
+// it was minted for. Every cookie this package issues is signed with the same
+// key, so without Typ a token minted for one purpose would verify as any
+// other: the login-progress state cookie (set for anyone who merely requests a
+// code) decoded as an Identity, yielding the claimed email with no groups and a
+// zero issue time, which the renewal path would then turn into a real session.
+// decode refuses a token whose Typ is not the one the caller expects, and a
+// token with no Typ at all (minted before this field existed).
 type envelope struct {
+	Typ  string          `json:"typ"`
 	Exp  int64           `json:"exp"`
 	Data json.RawMessage `json:"data"`
 }
 
+// Token purposes. Each cookie reads and writes exactly one of these.
+const (
+	typSession = "session"
+	typState   = "state"
+	typPending = "pending"
+	typOffer   = "offer"
+	typCSRF    = "csrf"
+)
+
 // Session kinds. The empty string is a normal email-OTP login; KindBreakGlass
-// marks a session granted by scanning a break-glass QR code.
+// marks a session granted by scanning a break-glass QR code; KindGuest marks an
+// email-OTP login for an address the allow-list does not permit, reached from an
+// open-registration host. A guest renews like a normal session, but is admitted
+// only by routes that opt in (see authz.CanAccessApp) and is never an admin.
 const (
 	KindBreakGlass = "break_glass"
+	KindGuest      = "guest"
 )
 
 // Identity is the authenticated principal carried by the session cookie.
@@ -92,7 +114,8 @@ type Identity struct {
 	Email  string `json:"email"`
 	Groups string `json:"groups"`
 	Iat    int64  `json:"iat"`
-	// Kind distinguishes break-glass sessions, which must not be renewed.
+	// Kind distinguishes break-glass sessions, which must not be renewed, and
+	// guest sessions, which renew but keep their kind.
 	Kind string `json:"kind,omitempty"`
 	// TTL is the session's chosen lifetime in seconds, so a renewal re-issues
 	// with the same lifetime (e.g. a 30-day "remember me" session).
@@ -121,6 +144,17 @@ type Pending struct {
 	Remember bool   `json:"rem,omitempty"`
 }
 
+// Offer records a scanned-but-not-yet-activated break-glass card, held while an
+// already-signed-in user is redirected to the resource on their normal session
+// first. If that identity is denied, the denial page uses the offer to grant
+// emergency access in one tap without a re-scan. It carries the code's id (the
+// grant re-looks it up, re-checks it is still active, and re-derives the redirect
+// from the card), never the raw token and never the group.
+type Offer struct {
+	CodeID int64  `json:"cid"`
+	Label  string `json:"lbl"`
+}
+
 // Manager issues and reads the typed cookies.
 type Manager struct {
 	signer       Signer
@@ -142,19 +176,19 @@ func NewManager(secret []byte, ttl, renew time.Duration, cookieDomain string, se
 	}
 }
 
-func (m *Manager) encode(v any, exp time.Time) (string, error) {
+func (m *Manager) encode(typ string, v any, exp time.Time) (string, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return "", err
 	}
-	env, err := json.Marshal(envelope{Exp: exp.Unix(), Data: data})
+	env, err := json.Marshal(envelope{Typ: typ, Exp: exp.Unix(), Data: data})
 	if err != nil {
 		return "", err
 	}
 	return m.signer.Sign(env), nil
 }
 
-func (m *Manager) decode(token string, now time.Time, v any) error {
+func (m *Manager) decode(typ string, token string, now time.Time, v any) error {
 	raw, err := m.signer.Verify(token)
 	if err != nil {
 		return err
@@ -162,6 +196,9 @@ func (m *Manager) decode(token string, now time.Time, v any) error {
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return ErrInvalid
+	}
+	if env.Typ == "" || env.Typ != typ {
+		return ErrInvalid // wrong purpose, or a legacy untyped token
 	}
 	if now.Unix() > env.Exp {
 		return ErrInvalid
@@ -211,7 +248,7 @@ func (m *Manager) IssueSessionTTL(w http.ResponseWriter, email, groups, kind str
 		ttl = m.ttl
 	}
 	id := Identity{Email: email, Groups: groups, Iat: now.Unix(), Kind: kind, TTL: int64(ttl.Seconds()), TOTP: totp}
-	tok, err := m.encode(id, now.Add(ttl))
+	tok, err := m.encode(typSession, id, now.Add(ttl))
 	if err != nil {
 		return err
 	}
@@ -220,13 +257,33 @@ func (m *Manager) IssueSessionTTL(w http.ResponseWriter, email, groups, kind str
 }
 
 // ReadSession returns the identity from a valid session cookie.
+//
+// The session cookie is scoped to the shared cookie domain so one login serves
+// every app, which also means any host on that domain can set a cookie of the
+// same name (host-only, or on a narrower path) that the browser sends alongside
+// the real one. r.Cookie would silently return whichever came first. More than
+// one cookie by this name is therefore treated as no session at all: the
+// request fails closed and the person signs in again, rather than the gateway
+// guessing which identity to honour. A sibling that overwrites the shared
+// cookie outright is indistinguishable from a fresh login and cannot be
+// detected here; every app on the cookie domain must be trusted equally (see
+// the README's security notes).
 func (m *Manager) ReadSession(r *http.Request, now time.Time) (*Identity, bool) {
-	c, err := r.Cookie(SessionCookie)
-	if err != nil {
+	var c *http.Cookie
+	for _, ck := range r.Cookies() {
+		if ck.Name != SessionCookie {
+			continue
+		}
+		if c != nil {
+			return nil, false // ambiguous: two cookies by this name
+		}
+		c = ck
+	}
+	if c == nil {
 		return nil, false
 	}
 	var id Identity
-	if err := m.decode(c.Value, now, &id); err != nil {
+	if err := m.decode(typSession, c.Value, now, &id); err != nil {
 		return nil, false
 	}
 	return &id, true
@@ -260,7 +317,7 @@ func (m *Manager) ClearSession(w http.ResponseWriter) {
 
 // SetState writes the login-progress cookie, valid for ttl.
 func (m *Manager) SetState(w http.ResponseWriter, st State, ttl time.Duration, now time.Time) error {
-	tok, err := m.encode(st, now.Add(ttl))
+	tok, err := m.encode(typState, st, now.Add(ttl))
 	if err != nil {
 		return err
 	}
@@ -275,7 +332,7 @@ func (m *Manager) ReadState(r *http.Request, now time.Time) (*State, bool) {
 		return nil, false
 	}
 	var st State
-	if err := m.decode(c.Value, now, &st); err != nil {
+	if err := m.decode(typState, c.Value, now, &st); err != nil {
 		return nil, false
 	}
 	return &st, true
@@ -290,7 +347,7 @@ func (m *Manager) ClearState(w http.ResponseWriter) {
 
 // SetPending writes the pending-TOTP cookie, valid for ttl.
 func (m *Manager) SetPending(w http.ResponseWriter, p Pending, ttl time.Duration, now time.Time) error {
-	tok, err := m.encode(p, now.Add(ttl))
+	tok, err := m.encode(typPending, p, now.Add(ttl))
 	if err != nil {
 		return err
 	}
@@ -305,7 +362,7 @@ func (m *Manager) ReadPending(r *http.Request, now time.Time) (*Pending, bool) {
 		return nil, false
 	}
 	var p Pending
-	if err := m.decode(c.Value, now, &p); err != nil {
+	if err := m.decode(typPending, c.Value, now, &p); err != nil {
 		return nil, false
 	}
 	return &p, true
@@ -314,6 +371,38 @@ func (m *Manager) ReadPending(r *http.Request, now time.Time) (*Pending, bool) {
 // ClearPending expires the pending-TOTP cookie.
 func (m *Manager) ClearPending(w http.ResponseWriter) {
 	m.clearCookie(w, PendingCookie, "")
+}
+
+// --- Break-glass offer (host-only cookie) ---
+
+// SetOffer writes the break-glass offer cookie, valid for ttl. Host-only (like
+// State/Pending) so it is scoped to the auth host, where both the denial page
+// and the activation endpoint live.
+func (m *Manager) SetOffer(w http.ResponseWriter, o Offer, ttl time.Duration, now time.Time) error {
+	tok, err := m.encode(typOffer, o, now.Add(ttl))
+	if err != nil {
+		return err
+	}
+	m.setCookie(w, OfferCookie, tok, "", ttl)
+	return nil
+}
+
+// ReadOffer returns the break-glass offer cookie if present and valid.
+func (m *Manager) ReadOffer(r *http.Request, now time.Time) (*Offer, bool) {
+	c, err := r.Cookie(OfferCookie)
+	if err != nil {
+		return nil, false
+	}
+	var o Offer
+	if err := m.decode(typOffer, c.Value, now, &o); err != nil {
+		return nil, false
+	}
+	return &o, true
+}
+
+// ClearOffer expires the break-glass offer cookie.
+func (m *Manager) ClearOffer(w http.ResponseWriter) {
+	m.clearCookie(w, OfferCookie, "")
 }
 
 // --- CSRF (host-only, signed double-submit token) ---
@@ -343,7 +432,7 @@ func (m *Manager) EnsureCSRF(w http.ResponseWriter, r *http.Request, ttl time.Du
 	sub := m.csrfSub(r, now)
 	if c, err := r.Cookie(CSRFCookie); err == nil {
 		var p csrfPayload
-		if err := m.decode(c.Value, now, &p); err == nil && p.Sub == sub {
+		if err := m.decode(typCSRF, c.Value, now, &p); err == nil && p.Sub == sub {
 			return c.Value, nil // still valid and bound to this session
 		}
 	}
@@ -351,7 +440,7 @@ func (m *Manager) EnsureCSRF(w http.ResponseWriter, r *http.Request, ttl time.Du
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
-	token, err := m.encode(csrfPayload{Nonce: nonce, Sub: sub}, now.Add(ttl))
+	token, err := m.encode(typCSRF, csrfPayload{Nonce: nonce, Sub: sub}, now.Add(ttl))
 	if err != nil {
 		return "", err
 	}
@@ -373,7 +462,7 @@ func (m *Manager) VerifyCSRF(r *http.Request, submitted string, now time.Time) b
 		return false
 	}
 	var p csrfPayload
-	if err := m.decode(c.Value, now, &p); err != nil { // signature + expiry
+	if err := m.decode(typCSRF, c.Value, now, &p); err != nil { // signature + expiry
 		return false
 	}
 	return p.Sub == m.csrfSub(r, now)

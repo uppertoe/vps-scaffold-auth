@@ -36,6 +36,10 @@ const (
 	OutcomeGranted = "granted"
 	OutcomeRevoked = "revoked"
 	OutcomeUnknown = "unknown"
+	// OutcomeRedirected records a scan by someone who already had a normal
+	// session: no emergency session was minted; they were sent to the resource on
+	// their own identity (which may still be offered emergency access if denied).
+	OutcomeRedirected = "redirected"
 )
 
 // Human-login audit event types, recorded in auth_events.
@@ -230,7 +234,14 @@ type Store interface {
 	// code on a successful match. Exhausting the cap returns ConsumeTooManyAttempts
 	// for that clientIP only and leaves the code intact for other clients, so a
 	// third party cannot burn a code the legitimate holder still has.
-	ConsumeCode(ctx context.Context, email, clientIP, candidateHash string, maxAttempts int, now time.Time) (ConsumeResult, error)
+	//
+	// maxAttempts caps wrong guesses per (email, client IP); maxTotalAttempts caps
+	// wrong guesses for the code as a whole, across every IP. Reaching the total
+	// deletes the code: a guesser who rotates source addresses gets at most
+	// maxTotalAttempts tries at any one code, and the real owner simply requests
+	// another. The per-IP cap is what stops one stranger burning a victim's code
+	// cheaply; the total is what stops a distributed guess.
+	ConsumeCode(ctx context.Context, email, clientIP, candidateHash string, maxAttempts, maxTotalAttempts int, now time.Time) (ConsumeResult, error)
 
 	// DeleteExpiredCodes removes code rows whose expiry has passed. Called
 	// opportunistically so decoys for never-verified addresses cannot accumulate
@@ -250,6 +261,13 @@ type Store interface {
 	// RecordTOTPFailure registers one failed TOTP verification and returns the
 	// resulting count within the rolling window.
 	RecordTOTPFailure(ctx context.Context, email string, window time.Duration, now time.Time) (int, error)
+	// ReserveTOTPAttempt counts one TOTP verification attempt BEFORE the code is
+	// checked and returns the attempt's ordinal within the rolling window, in a
+	// single transaction. Reserving first means the cap bounds how many codes
+	// are ever checked, however many submissions arrive at once; a check-then-
+	// record sequence would let every concurrent submission pass the check
+	// before any failure was recorded. A successful login clears the counter.
+	ReserveTOTPAttempt(ctx context.Context, email string, window time.Duration, now time.Time) (int, error)
 	// ClearTOTPFailures resets the counter after a success.
 	ClearTOTPFailures(ctx context.Context, email string) error
 	// DeleteTOTPSecret removes the TOTP secret for an admin email (no-op if

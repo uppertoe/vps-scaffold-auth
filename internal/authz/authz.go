@@ -14,29 +14,56 @@ const (
 	RoleAdmin = "admin"
 	RoleUser  = "user"
 	RoleDeny  = ""
+	// RoleGuest is the base role of a guest session: an address the allow-list
+	// does not permit, signed in through a host listed in OPEN_REGISTRATION_HOSTS.
+	// It is never returned by Role (which answers "is this address permitted?");
+	// LoginRole confers it, and only a route whose policy says guests=allow (or
+	// names a DB group the guest was explicitly placed in) admits it.
+	RoleGuest = "guest"
 )
+
+// Wildcard is the ALLOWED_EMAIL_DOMAINS entry that opts the WHOLE instance into
+// open registration (the global form; prefer per-host OPEN_REGISTRATION_HOSTS
+// guest sessions on a shared server, which leave every other app closed): any email at a syntactically valid domain becomes a regular
+// user. Safe only because login is email-verified (OTP) — the code proves the
+// visitor controls that mailbox — so a wildcard grants no access to an address
+// the visitor cannot actually receive mail at. Admin remains an exact allow-list
+// regardless, and per-app gates (CanAccessApp / protected_groups) are unchanged:
+// with a wildcard, a plain `import protected` route admits any verified email,
+// so private apps behind the same auth must gate by group or domain.
+const Wildcard = "*"
 
 // Policy captures the access rules. Domains and emails are stored lowercased.
 type Policy struct {
 	allowedDomains map[string]struct{}
 	adminEmails    map[string]struct{}
+	openReg        bool // ALLOWED_EMAIL_DOMAINS contained "*": any valid domain is a user
 }
 
 // NewPolicy builds a Policy from the configured allowed domains and admin
-// emails.
+// emails. A "*" entry in allowedDomains enables open registration (see Wildcard).
 func NewPolicy(allowedDomains, adminEmails []string) *Policy {
 	p := &Policy{
 		allowedDomains: make(map[string]struct{}, len(allowedDomains)),
 		adminEmails:    make(map[string]struct{}, len(adminEmails)),
 	}
 	for _, d := range allowedDomains {
-		p.allowedDomains[strings.ToLower(strings.TrimSpace(d))] = struct{}{}
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d == Wildcard {
+			p.openReg = true
+			continue // not a literal domain; never store "*" in the exact set
+		}
+		p.allowedDomains[d] = struct{}{}
 	}
 	for _, e := range adminEmails {
 		p.adminEmails[strings.ToLower(strings.TrimSpace(e))] = struct{}{}
 	}
 	return p
 }
+
+// OpenRegistration reports whether any verified email is accepted as a user
+// (the "*" wildcard). Callers use it to suppress domain-specific login hints.
+func (p *Policy) OpenRegistration() bool { return p.openReg }
 
 // Role returns the role for an email address: RoleAdmin, RoleUser, or RoleDeny
 // (empty string) if the email is not permitted.
@@ -56,7 +83,75 @@ func (p *Policy) Role(email string) string {
 	if _, ok := p.allowedDomains[domain]; ok {
 		return RoleUser
 	}
+	// Open registration: any address at a syntactically valid, deliverable-looking
+	// domain is a user. The dot requirement rejects bare hosts like "localhost" or
+	// "internal" that can't receive public mail; real security rests on OTP, which
+	// only lets in someone who can read the code at that address.
+	if p.openReg && validPublicDomain(domain) {
+		return RoleUser
+	}
 	return RoleDeny
+}
+
+// GuestEligible reports whether email may be signed in as a guest: it has a
+// local part and its domain passes validPublicDomain. This is the same sanity
+// gate as the wildcard path — not a trust decision. What makes a guest safe is
+// that OTP proves mailbox control and CanAccessApp admits a guest only where a
+// route has opted in.
+func GuestEligible(email string) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+	at := strings.LastIndex(email, "@")
+	if at <= 0 || at == len(email)-1 {
+		return false
+	}
+	return validPublicDomain(email[at+1:])
+}
+
+// LoginRole is the role a completed email-code login confers. It is Role(email)
+// whenever that permits the address, so an admin or an allow-listed user is
+// never downgraded to a guest. Only when Role denies, and the login was reached
+// from an open-registration host, does a syntactically valid public address
+// become RoleGuest; otherwise the answer stays RoleDeny. openHost is derived by
+// the caller from the (validated) post-login destination.
+func (p *Policy) LoginRole(email string, openHost bool) string {
+	if role := p.Role(email); role != RoleDeny {
+		return role
+	}
+	if openHost && GuestEligible(email) {
+		return RoleGuest
+	}
+	return RoleDeny
+}
+
+// validPublicDomain reports whether domain is plausibly a public, mail-carrying
+// domain: at least one dot, no empty labels, and a non-numeric TLD. It is a
+// sanity gate for the open-registration path, not a substitute for OTP delivery.
+func validPublicDomain(domain string) bool {
+	if domain == "" || len(domain) > 253 {
+		return false
+	}
+	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return false // needs a TLD, so "localhost" is rejected
+	}
+	for _, l := range labels {
+		if l == "" {
+			return false // no empty label (rejects "a..b")
+		}
+	}
+	tld := labels[len(labels)-1]
+	if len(tld) < 2 {
+		return false
+	}
+	for _, r := range tld {
+		if r < 'a' || r > 'z' { // TLDs are alphabetic (a-z after lowercasing)
+			return false
+		}
+	}
+	return true
 }
 
 // Allowed reports whether the email may authenticate at all.
@@ -94,9 +189,14 @@ func BuildGroups(role string, dbGroups []string) string {
 // a break-glass target group with such a name would be indistinguishable from
 // the role in the Remote-Groups set, silently conferring admin/user privilege,
 // so callers must reject these names.
+//
+// "guest" is reserved for the same reason in the other direction: apps may read
+// a leading "guest" in Remote-Groups as "this is a stranger", so a DB group of
+// that name must not be able to stamp it onto a regular user, nor a break-glass
+// card make itself look like one.
 func IsReservedGroup(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case RoleAdmin, RoleUser:
+	case RoleAdmin, RoleUser, RoleGuest:
 		return true
 	}
 	return false
@@ -165,15 +265,42 @@ func splitList(s string) []string {
 // CanAccessApp decides whether a principal may reach a specific app, given that
 // app's declared requirements (the comma/space-separated allow-lists a Caddy
 // snippet passes in the single X-Auth-Policy header, parsed by the server into
-// reqDomains/reqGroups). email and groups come from the validated session;
-// breakGlass marks an emergency QR session.
+// reqDomains/reqGroups/allowGuests). email and groups come from the validated
+// session; breakGlass marks an emergency QR session and guest an open-
+// registration guest session.
 //
 //   - No requirement declared: a normal session is allowed (status quo), but a
 //     break-glass session is DENIED — emergency access must be explicitly opted
 //     into by group, so it can never reach a plain `import protected` app.
 //   - Requirement declared: allowed when the email's domain is in reqDomains OR
 //     the session's groups intersect reqGroups (an OR across the two lists).
-func CanAccessApp(email, groups string, breakGlass bool, reqDomains, reqGroups string) bool {
+//   - Guests are deny-by-default, like break-glass: a guest passes only when the
+//     route says guests=allow, or when reqGroups names a group the guest has
+//     been placed in. A guest never satisfies a domain requirement (its address
+//     is by definition one the allow-list does not cover). This is the fail-safe
+//     property of per-host open registration: a forgotten bare `import protected`
+//     on any other app stays closed to strangers, because "any" does not carry
+//     guests=allow.
+//
+// allowGuests affects guest sessions only; it never widens or narrows what a
+// normal or break-glass session may reach.
+func CanAccessApp(email, groups string, breakGlass, guest bool, reqDomains, reqGroups string, allowGuests bool) bool {
+	if guest {
+		if allowGuests {
+			return true
+		}
+		// Explicit opt-in by group only, mirroring break-glass. No domain check:
+		// a guest's address could otherwise match a route's domain list only if
+		// the allow-list changed under a live session, and even then the session
+		// was minted as a stranger and should sign in again to be treated as one
+		// of the department.
+		for _, want := range splitList(reqGroups) {
+			if HasGroup(groups, want) {
+				return true
+			}
+		}
+		return false
+	}
 	if strings.TrimSpace(reqDomains) == "" && strings.TrimSpace(reqGroups) == "" {
 		return !breakGlass
 	}

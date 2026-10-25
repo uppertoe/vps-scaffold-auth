@@ -51,8 +51,9 @@ type appAccessView struct {
 	Time       string
 	Email      string
 	Host       string
-	Kind       string // "login" or "break-glass"
+	Kind       string // "login", "break-glass" or "guest"
 	BreakGlass bool
+	Guest      bool
 }
 
 // stamp renders t in the configured display timezone (default UTC). The "MST"
@@ -93,8 +94,11 @@ func (s *Server) toAppAccessViews(as []store.AppAccess) []appAccessView {
 			Host:  a.Host,
 			Kind:  "login",
 		}
-		if a.Kind == session.KindBreakGlass {
+		switch a.Kind {
+		case session.KindBreakGlass:
 			v.Kind, v.BreakGlass = "break-glass", true
+		case session.KindGuest:
+			v.Kind, v.Guest = "guest", true
 		}
 		out = append(out, v)
 	}
@@ -156,7 +160,19 @@ type settingsView struct {
 type groupView struct {
 	Name    string
 	Label   string
-	Members []string
+	Members []memberView
+}
+
+// memberView is one row of a group's member list. Permitted reports whether the
+// allow-list (ALLOWED_EMAIL_DOMAINS / ADMIN_EMAILS) still admits the address.
+// A membership for an address it does not admit used to be inert, because that
+// address could never sign in; once any host is listed in
+// OPEN_REGISTRATION_HOSTS the same address can sign in as a guest and the
+// membership admits it to every group guard naming this group. The page marks
+// such rows so an admin can see which memberships are live doors for strangers.
+type memberView struct {
+	Email     string
+	Permitted bool
 }
 
 type codeView struct {

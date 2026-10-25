@@ -1,7 +1,10 @@
 {{define "title"}}Two-factor authentication{{end}}
 {{define "content"}}
-<h1>Admin verification</h1>
-<p class="sub">Enter the 6-digit code from your authenticator app.</p>
+<div class="ok">Email confirmed &check; &mdash; one more step to finish signing in.</div>
+<h1>Enter your authenticator code</h1>
+<p class="sub">Admin sign-in needs a second step. Open your <strong>authenticator app</strong>
+   (the one set up for your admin account) and enter the 6-digit code it shows.
+   This is <strong>not</strong> the code we emailed you.</p>
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 <form method="post" action="/totp" autocomplete="off">
   <input type="hidden" name="rd" value="{{.Redirect}}">
