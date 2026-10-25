@@ -22,10 +22,30 @@ type pageData struct {
 	Message  string
 	Remember bool
 	LogoURL  string
-	// Identity / LoginURL / BreakGlass drive the access-denied page.
+	// LoginNotice is an optional operator-set instruction line rendered on the
+	// sign-in page (from the LOGIN_NOTICE env var). Rendered auto-escaped as
+	// plain text by html/template — never as template.HTML.
+	LoginNotice string
+	// Identity / LoginURL / BreakGlass / Guest drive the access-denied page.
+	// LogoutURL is the sign-out link offered to a guest there, who must sign out
+	// before signing in again with an approved address.
 	Identity   string
 	LoginURL   string
+	LogoutURL  string
 	BreakGlass bool
+	Guest      bool
+	// EmergencyOffer drives the one-tap "Use emergency access" button on the
+	// denial page: it appears only when the visitor arrived carrying a valid
+	// break-glass offer cookie (they scanned a card while already signed in and
+	// their normal identity was then refused). EmergencyLabel names the card; the
+	// button POSTs to /break/activate, which mints the emergency session.
+	EmergencyOffer bool
+	EmergencyLabel string
+	// CSRF is the double-submit token embedded in the emergency-access form on
+	// the denial page; /break/activate verifies it. Necessary because the offer
+	// cookie is SameSite=Lax, which is site- not origin-scoped: a sibling app on
+	// the same registrable domain could otherwise forge the activation POST.
+	CSRF string
 	// IsAdmin surfaces an Admin link on the signed-in /welcome landing for a
 	// real (non-break-glass) admin session.
 	IsAdmin bool
@@ -35,6 +55,15 @@ type pageData struct {
 	HintDomains        string
 	RequireDomains     string
 	RequireDomainLabel string
+	// RequireGroups marks a group-gated route (admin/collaborator door) carried
+	// through to the login page. It suppresses the configured-domain fallback
+	// hint/placeholder: that door is deliberately for people who can't match the
+	// domain, so it must neither hint a domain nor presume one in the example.
+	RequireGroups string
+	// EmailPlaceholder is the login field's example address, derived from the
+	// effective domain (the route requirement, else the configured allow-list)
+	// as you@<domain>; empty falls back to a generic example in the template.
+	EmailPlaceholder string
 	// AltLoginURL/AltLoginLabel offer a small "sign in another way" link for
 	// people who can't match the domain (e.g. admins via a separate route). The
 	// URL is validated to be within the server domain before it's ever rendered.
@@ -87,6 +116,12 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 		if b, ok, err := s.store.GetBranding(context.Background()); err == nil && ok && len(b.Logo) > 0 {
 			data.LogoURL = "/logo.img"
 		}
+	}
+	// Fill domain-derived UX fields on the login page (hint line + email
+	// placeholder), so even a direct visit tells the user which domain to use.
+	if page == "login" {
+		data.LoginNotice = s.cfg.LoginNotice
+		s.applyLoginBranding(&data)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)

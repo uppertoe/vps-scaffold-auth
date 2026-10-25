@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"strings"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
@@ -54,11 +55,18 @@ func (s *Server) buildCodeEmail(ctx context.Context, to, code string) email.Mess
 		"If you didn't request it, you can safely ignore this email — no one can sign in without it.",
 		s.cfg.BrandName, code, mins, plural(mins))
 
-	// Lead the subject with the code so it's visible in the inbox list and
+	// Subject from the configured template (default "{code} is your sign-in
+	// code"). Leading with the code keeps it visible in the inbox list and
 	// notification preview (and offered by one-time-code autofill) without opening
-	// the mail. The code is a server-generated numeric string, so it's safe in the
-	// header; sanitizeHeader strips CRLF as defence-in-depth.
-	subject := fmt.Sprintf("%s is your sign-in code", code)
+	// the mail; a deployment that overrides OTP_EMAIL_SUBJECT to a branded string
+	// with no {code} trades that away. Both substituted values are safe in the
+	// header — code is a server-generated numeric string and brand is operator-set
+	// config — and the email package's sanitizeHeader strips CRLF as defence in depth.
+	subject := strings.ReplaceAll(s.cfg.OTPEmailSubject, "{code}", code)
+	subject = strings.ReplaceAll(subject, "{brand}", s.cfg.BrandName)
+	if strings.TrimSpace(subject) == "" {
+		subject = fmt.Sprintf("%s is your sign-in code", code)
+	}
 	return email.Message{To: to, Subject: subject, Text: text, HTML: htmlBody}
 }
 

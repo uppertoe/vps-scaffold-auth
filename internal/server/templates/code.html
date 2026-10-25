@@ -1,7 +1,7 @@
 {{define "title"}}Enter your code{{end}}
 {{define "content"}}
 <h1>Check your email</h1>
-<p class="sub">If {{if .Email}}<strong>{{.Email}}</strong>{{else}}that address{{end}} can sign in, we've sent it a code. Enter it below.</p>
+<p class="sub">If {{if .Email}}<strong>{{.Email}}</strong>{{else}}that address{{end}} can sign in, we've sent you a code. Enter it below.</p>
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 <form method="post" action="/verify-code" autocomplete="one-time-code">
   <input type="hidden" name="rd" value="{{.Redirect}}">

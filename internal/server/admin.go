@@ -14,7 +14,6 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
-	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 	"github.com/uppertoe/vps-scaffold-auth/internal/totp"
 )
@@ -465,7 +464,10 @@ func (s *Server) handleAdminSaveSettings(w http.ResponseWriter, r *http.Request)
 		// POST at: cloud metadata (link-local 169.254/16, fe80::/10) and loopback.
 		// Private ranges (10/8, 192.168/16, 172.16/12) are intentionally allowed —
 		// notifications legitimately target internal services on this stack.
-		if ip := net.ParseIP(u.Hostname()); ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()) {
+		// The notifier re-checks the RESOLVED address at connection time (and
+		// follows no redirects), so a hostname pointing at one of these is
+		// refused there; this literal check only gives the admin an early answer.
+		if ip := net.ParseIP(u.Hostname()); ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()) {
 			s.settingsError(w, r, "The webhook host may not be a loopback or link-local address.")
 			return
 		}
@@ -520,10 +522,15 @@ func (s *Server) handleAdminBrandingImage(w http.ResponseWriter, r *http.Request
 func (s *Server) requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := s.sessions.ReadSession(r, s.now())
-		// A break-glass session must never reach the admin UI, even if its
-		// target group is somehow "admin": the admin tier requires a real login
-		// (and TOTP when enabled), not a bearer QR scan.
-		admin := ok && id.Kind != session.KindBreakGlass && authz.HasGroup(id.Groups, authz.RoleAdmin)
+		// A break-glass or guest session must never reach the admin UI, even if
+		// its groups somehow include "admin": the admin tier requires a real
+		// login (and TOTP when enabled), not a bearer QR scan or a stranger's
+		// sign-in. isAdminSession admits only the normal session kind.
+		// The cookie's groups were true when it was minted; the admin UI never
+		// passes through /verify, where renewal re-checks policy, so an admin
+		// removed from ADMIN_EMAILS would otherwise keep this door until the
+		// cookie expired. Re-check the current policy on every admin request.
+		admin := ok && isAdminSession(id) && s.policy.Role(id.Email) == authz.RoleAdmin
 		// A first-factor-only admin session (minted before TOTP was enabled) is
 		// bounced to a fresh login so the TOTP step runs, rather than being
 		// honoured here. needsAdminStepUp is only evaluated once admin is true, so
@@ -637,7 +644,11 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 			s.adminError(w, r)
 			return
 		}
-		view = append(view, groupView{Name: g.Name, Label: g.Label, Members: members})
+		mv := make([]memberView, 0, len(members))
+		for _, m := range members {
+			mv = append(mv, memberView{Email: m, Permitted: s.policy.Allowed(m)})
+		}
+		view = append(view, groupView{Name: g.Name, Label: g.Label, Members: mv})
 	}
 	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{Title: "Groups", Groups: view})
 }
@@ -650,7 +661,7 @@ func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) 
 	if authz.IsReservedGroup(name) {
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title:   "Reserved group name",
-			Message: "The names \"admin\" and \"user\" are reserved roles and cannot be used as group names.",
+			Message: "The names \"admin\", \"user\" and \"guest\" are reserved roles and cannot be used as group names.",
 		})
 		return
 	}
@@ -741,7 +752,7 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 	if authz.IsReservedGroup(group) {
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title:   "Reserved target group",
-			Message: "A break-glass code cannot target the reserved roles \"admin\" or \"user\". Use a dedicated group instead.",
+			Message: "A break-glass code cannot target the reserved roles \"admin\", \"user\" or \"guest\". Use a dedicated group instead.",
 		})
 		return
 	}

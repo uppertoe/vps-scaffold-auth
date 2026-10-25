@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func TestConsumeCodeHappyPath(t *testing.T) {
 	if err := s.SaveCode(ctx, "a@example.com", "hash1", now.Add(10*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	res, err := s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "hash1", 5, now)
+	res, err := s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "hash1", 5, 50, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,7 @@ func TestConsumeCodeHappyPath(t *testing.T) {
 		t.Fatalf("res = %v, want ConsumeOK", res)
 	}
 	// Single use: a second consume finds nothing.
-	res, _ = s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "hash1", 5, now)
+	res, _ = s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "hash1", 5, 50, now)
 	if res != ConsumeNoCode {
 		t.Errorf("replay res = %v, want ConsumeNoCode", res)
 	}
@@ -74,12 +75,12 @@ func TestConsumeCodeExpired(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1_700_000_000, 0)
 	_ = s.SaveCode(ctx, "a@example.com", "hash1", now.Add(time.Minute))
-	res, _ := s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "hash1", 5, now.Add(2*time.Minute))
+	res, _ := s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "hash1", 5, 50, now.Add(2*time.Minute))
 	if res != ConsumeExpired {
 		t.Errorf("res = %v, want ConsumeExpired", res)
 	}
 	// Expired code is cleared.
-	res, _ = s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "hash1", 5, now)
+	res, _ = s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "hash1", 5, 50, now)
 	if res != ConsumeNoCode {
 		t.Errorf("res = %v, want ConsumeNoCode after expiry cleanup", res)
 	}
@@ -93,29 +94,29 @@ func TestConsumeCodeAttemptCapPerIP(t *testing.T) {
 
 	// maxAttempts=3 for the attacker IP: two mismatches, third hits the cap.
 	const attacker = "9.9.9.9"
-	if res, _ := s.ConsumeCode(ctx, "a@example.com", attacker, "wrong", 3, now); res != ConsumeMismatch {
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", attacker, "wrong", 3, 50, now); res != ConsumeMismatch {
 		t.Fatalf("attempt1 = %v, want ConsumeMismatch", res)
 	}
-	if res, _ := s.ConsumeCode(ctx, "a@example.com", attacker, "wrong", 3, now); res != ConsumeMismatch {
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", attacker, "wrong", 3, 50, now); res != ConsumeMismatch {
 		t.Fatalf("attempt2 = %v, want ConsumeMismatch", res)
 	}
-	if res, _ := s.ConsumeCode(ctx, "a@example.com", attacker, "wrong", 3, now); res != ConsumeTooManyAttempts {
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", attacker, "wrong", 3, 50, now); res != ConsumeTooManyAttempts {
 		t.Fatalf("attempt3 = %v, want ConsumeTooManyAttempts", res)
 	}
 	// The attacker's IP is now blocked — even a correct guess from it is refused.
-	if res, _ := s.ConsumeCode(ctx, "a@example.com", attacker, "right", 3, now); res != ConsumeTooManyAttempts {
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", attacker, "right", 3, 50, now); res != ConsumeTooManyAttempts {
 		t.Errorf("attacker after cap = %v, want ConsumeTooManyAttempts", res)
 	}
 	// Burn resistance: the legitimate user (a different, non-spoofable IP) still
 	// has a working code — the attacker's wrong guesses did NOT delete it.
-	if res, _ := s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "right", 3, now); res != ConsumeOK {
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "right", 3, 50, now); res != ConsumeOK {
 		t.Errorf("victim = %v, want ConsumeOK (code must survive an attacker's burn)", res)
 	}
 }
 
 func TestConsumeCodeNoCode(t *testing.T) {
 	s := newTestStore(t)
-	res, err := s.ConsumeCode(context.Background(), "nobody@example.com", "1.1.1.1", "x", 5, time.Now())
+	res, err := s.ConsumeCode(context.Background(), "nobody@example.com", "1.1.1.1", "x", 5, 50, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,10 +130,10 @@ func TestSaveCodeResetsAttempts(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1_700_000_000, 0)
 	_ = s.SaveCode(ctx, "a@example.com", "old", now.Add(10*time.Minute))
-	_, _ = s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "wrong", 5, now) // attempts=1
+	_, _ = s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "wrong", 5, 50, now) // attempts=1
 	// Re-issue resets attempts and replaces the hash.
 	_ = s.SaveCode(ctx, "a@example.com", "new", now.Add(10*time.Minute))
-	if res, _ := s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "new", 5, now); res != ConsumeOK {
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "new", 5, 50, now); res != ConsumeOK {
 		t.Errorf("res = %v, want ConsumeOK after re-issue", res)
 	}
 }
@@ -166,5 +167,35 @@ func TestTOTPSecretRoundTrip(t *testing.T) {
 	}
 	if err := s.DeleteTOTPSecret(ctx, "admin@example.com"); err != nil {
 		t.Errorf("delete of absent secret should be a no-op, got %v", err)
+	}
+}
+
+// The per-IP cap alone lets a guesser who rotates source addresses keep going
+// against one code. The aggregate cap bounds the code as a whole and burns it
+// when spent, so the owner must request a fresh one and the guesser starts over.
+func TestConsumeCodeAggregateCapAcrossIPs(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_700_000_000, 0)
+	_ = s.SaveCode(ctx, "a@example.com", "right", now.Add(10*time.Minute))
+
+	// Per-IP cap 3, total cap 5: five different addresses, one wrong guess each.
+	for i := 1; i <= 4; i++ {
+		ip := fmt.Sprintf("10.0.0.%d", i)
+		if res, _ := s.ConsumeCode(ctx, "a@example.com", ip, "wrong", 3, 5, now); res != ConsumeMismatch {
+			t.Fatalf("guess %d from %s = %v, want ConsumeMismatch", i, ip, res)
+		}
+	}
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", "10.0.0.5", "wrong", 3, 5, now); res != ConsumeTooManyAttempts {
+		t.Fatalf("fifth wrong guess = %v, want ConsumeTooManyAttempts", res)
+	}
+	// The code is gone: even the right value from a fresh address finds nothing.
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", "10.0.0.6", "right", 3, 5, now); res != ConsumeNoCode {
+		t.Errorf("after the total is spent = %v, want ConsumeNoCode (code burned)", res)
+	}
+	// A fresh code starts with a clean total.
+	_ = s.SaveCode(ctx, "a@example.com", "right2", now.Add(10*time.Minute))
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", "10.0.0.7", "right2", 3, 5, now); res != ConsumeOK {
+		t.Errorf("fresh code = %v, want ConsumeOK", res)
 	}
 }

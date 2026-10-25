@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"testing"
@@ -123,5 +124,38 @@ func TestPruneAuditBefore(t *testing.T) {
 	}
 	if ac, _ := srv.store.ListAppAccess(ctx, "", 100, 0); len(ac) != 1 {
 		t.Fatalf("app_access after prune = %d, want 1", len(ac))
+	}
+}
+
+// recordFailsOnce is a store whose first app-access write fails.
+type recordFailsOnce struct {
+	store.Store
+	calls int
+}
+
+func (f *recordFailsOnce) RecordAppAccess(ctx context.Context, a store.AppAccess) error {
+	f.calls++
+	if f.calls == 1 {
+		return errors.New("disk full")
+	}
+	return f.Store.RecordAppAccess(ctx, a)
+}
+
+// A failed audit write must not suppress the rest of the hour: the next
+// sighting of the same principal on the same app writes again.
+func TestAccessAuditRetriesAfterFailedWrite(t *testing.T) {
+	srv, _ := testServer(t)
+	st := &recordFailsOnce{Store: srv.store}
+	a := newAccessAudit(st, 0)
+	now := time.Unix(1_700_000_000, 0)
+	a.record(context.Background(), "user@example.com", "app.example.com", "", now)
+	a.record(context.Background(), "user@example.com", "app.example.com", "", now.Add(time.Minute))
+	if st.calls != 2 {
+		t.Fatalf("store calls = %d, want 2 (retry after the failed write)", st.calls)
+	}
+	// Once written, the hour is deduplicated again.
+	a.record(context.Background(), "user@example.com", "app.example.com", "", now.Add(2*time.Minute))
+	if st.calls != 2 {
+		t.Errorf("store calls = %d after a successful write, want still 2", st.calls)
 	}
 }
