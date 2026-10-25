@@ -16,12 +16,19 @@
 {{if .BreakGlass}}
 <p class="sub">You're signed in for emergency access (<strong>{{.Identity}}</strong>). That emergency code only opens its own page.</p>
 <p class="sub">To open the page you just tried to reach, sign in below — or scan the emergency code kept at this location.</p>
+{{else if .Guest}}
+<p class="sub">You are signed in as a guest with <strong>{{.Identity}}</strong>. This page is only available to people with approved email addresses.</p>
+<p class="sub">If you have an approved email address, sign out, then sign in again with it.</p>
 {{else if .Identity}}
 <p class="sub">You're signed in as <strong>{{.Identity}}</strong>, but this account isn't allowed to open this page.</p>
 <p class="sub">If you have another account that should have access, sign in with it below.</p>
 {{else}}
 <p class="sub">This account isn't allowed to open this page. You can sign in with a different account below.</p>
 {{end}}
+{{if .Guest}}
+<a class="btn" href="{{.LogoutURL}}">Sign out</a>
+{{else}}
 <a class="btn" href="{{.LoginURL}}">Sign in to continue</a>
+{{end}}
 {{end}}
 {{end}}

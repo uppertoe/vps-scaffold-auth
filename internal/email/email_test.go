@@ -6,9 +6,13 @@ import (
 	"io"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/mail"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestNewBackendSelection(t *testing.T) {
@@ -125,8 +129,8 @@ func TestBuildMIMEResistsBoundaryInjection(t *testing.T) {
 }
 
 func TestRandomBoundaryIsPerMessage(t *testing.T) {
-	a := string(buildMIME("auth@example.com", Message{To: "x@example.com", Subject: "s", Text: "t"}))
-	b := string(buildMIME("auth@example.com", Message{To: "x@example.com", Subject: "s", Text: "t"}))
+	a := string(buildMIME("auth@example.com", Message{To: "x@example.com", Subject: "s", Text: "t", HTML: "<p>t</p>"}))
+	b := string(buildMIME("auth@example.com", Message{To: "x@example.com", Subject: "s", Text: "t", HTML: "<p>t</p>"}))
 	if boundaryOf(a) == "" || boundaryOf(a) == boundaryOf(b) {
 		t.Fatalf("boundary should be random per message: %q vs %q", boundaryOf(a), boundaryOf(b))
 	}
@@ -157,5 +161,67 @@ func TestExtractAddr(t *testing.T) {
 		if got := extractAddr(in); got != want {
 			t.Errorf("extractAddr(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A relay that accepts the connection and then says nothing must not hold
+// Send past its context: the dial, greeting and every later step are bounded.
+func TestSMTPSendHonoursContextDeadline(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var mu sync.Mutex
+	var held []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, c) // accept and stall: never send the 220 greeting
+			mu.Unlock()
+		}
+	}()
+	defer func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range held {
+			c.Close()
+		}
+	}()
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	s := &SMTPSender{Host: host, Port: port, From: "a@b"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = s.Send(ctx, Message{To: "x@y", Subject: "s", Text: "t"})
+	if err == nil {
+		t.Fatal("Send returned nil against a stalled relay")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Send took %v, want to return at the context deadline", elapsed)
+	}
+}
+
+// A text-only message is sent as plain text, so a client that prefers HTML
+// does not pick an empty alternative over the incident details.
+func TestBuildMIMETextOnlyIsPlainText(t *testing.T) {
+	raw := buildMIME("auth@example.com", Message{To: "oncall@example.com", Subject: "Break-glass used", Text: "Location: Lab 1"})
+	m, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct, _, err := mime.ParseMediaType(m.Header.Get("Content-Type"))
+	if err != nil || ct != "text/plain" {
+		t.Fatalf("Content-Type = %q (%v), want text/plain", m.Header.Get("Content-Type"), err)
+	}
+	body, _ := io.ReadAll(m.Body)
+	if !strings.Contains(string(body), "Location: Lab 1") {
+		t.Fatalf("body lacks the text: %q", body)
 	}
 }

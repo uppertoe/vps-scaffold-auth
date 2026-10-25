@@ -27,7 +27,7 @@
         <td class="muted">{{.Time}}</td>
         <td>{{.Email}}</td>
         <td><code class="mono">{{.Host}}</code></td>
-        <td>{{if .BreakGlass}}<span class="pill off">break-glass</span>{{else}}<span class="pill ok">login</span>{{end}}</td>
+        <td>{{if .BreakGlass}}<span class="pill off">break-glass</span>{{else if .Guest}}<span class="pill guest">guest</span>{{else}}<span class="pill ok">login</span>{{end}}</td>
       </tr>
     {{end}}
     </tbody>

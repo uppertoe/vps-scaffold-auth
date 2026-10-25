@@ -31,6 +31,21 @@ type Config struct {
 	AdminEmails     []string
 	DefaultRedirect string
 
+	// OpenRegistrationHosts lists the hosts (DOMAIN or a subdomain of it) whose
+	// login admits strangers as guests: an OTP-verified address the allow-list
+	// does not permit is signed in with kind "guest" when the post-login
+	// destination is on one of these hosts. Guests reach only routes whose
+	// policy says guests=allow (the protected_open guard), so openness is a
+	// property of the one app that needs it rather than of the whole server.
+	OpenRegistrationHosts []string
+
+	// AllowApexRedirect permits the bare server domain as a post-login
+	// destination. Default off: on a subdomain-only deployment the apex
+	// commonly has no TLS certificate, and sending a freshly signed-in user
+	// there strands them on a browser security error. Enable when the apex is
+	// a real site behind this gateway (e.g. a gated path on a landing page).
+	AllowApexRedirect bool
+
 	SessionSecret  []byte
 	CookieDomain   string
 	CookieInsecure bool // dev only: drop the Secure attribute (no TLS)
@@ -52,6 +67,9 @@ type Config struct {
 	OTPTTL         time.Duration
 	OTPLength      int
 	OTPMaxAttempts int
+	// OTPMaxTotalAttempts caps wrong guesses at one code across every source IP;
+	// reaching it burns the code. Defaults to ten times OTPMaxAttempts.
+	OTPMaxTotalAttempts int
 	// OTPResendCooldown suppresses re-minting a code while a live one is still
 	// fresh: a /request within this window of the last send is a no-op (keeps the
 	// existing code, sends no email). Must be 0 < cooldown < OTPTTL.
@@ -107,14 +125,12 @@ func Load() (*Config, error) {
 		DefaultRedirect: getenv("DEFAULT_REDIRECT", ""),
 		SessionSecret:   []byte(getenv("SESSION_SECRET", "")),
 		CookieDomain:    getenv("COOKIE_DOMAIN", ""),
-		CookieInsecure:  getbool("COOKIE_INSECURE", false),
 		EmailBackend:    strings.ToLower(getenv("EMAIL_BACKEND", "log")),
 		EmailFrom:       getenv("EMAIL_FROM", ""),
 		SMTPHost:        getenv("SMTP_HOST", ""),
 		SMTPUsername:    getenv("SMTP_USERNAME", ""),
 		SMTPPassword:    getenv("SMTP_PASSWORD", ""),
 		ResendAPIKey:    getenv("RESEND_API_KEY", ""),
-		TOTPEnabled:     getbool("TOTP_ENABLED", false),
 		TOTPIssuer:      getenv("TOTP_ISSUER", ""),
 		SQLitePath:      getenv("SQLITE_PATH", "/data/auth.db"),
 		ListenAddr:      getenv("LISTEN_ADDR", ":8080"),
@@ -126,7 +142,18 @@ func Load() (*Config, error) {
 		BreakGlassPDFBody:      getenv("BREAKGLASS_PDF_BODY", "Scan this code to gain temporary emergency access. Every use is logged and an administrator is notified."),
 	}
 
+	c.OpenRegistrationHosts = splitLowerCSV(getenv("OPEN_REGISTRATION_HOSTS", ""))
+
 	var err error
+	if c.AllowApexRedirect, err = getbool("ALLOW_APEX_REDIRECT", false); err != nil {
+		return nil, err
+	}
+	if c.CookieInsecure, err = getbool("COOKIE_INSECURE", false); err != nil {
+		return nil, err
+	}
+	if c.TOTPEnabled, err = getbool("TOTP_ENABLED", false); err != nil {
+		return nil, err
+	}
 	if c.SessionTTL, err = getdur("SESSION_TTL", 2*time.Hour); err != nil {
 		return nil, err
 	}
@@ -164,6 +191,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.OTPMaxAttempts, err = getint("OTP_MAX_ATTEMPTS", 5); err != nil {
+		return nil, err
+	}
+	if c.OTPMaxTotalAttempts, err = getint("OTP_MAX_TOTAL_ATTEMPTS", 10*c.OTPMaxAttempts); err != nil {
 		return nil, err
 	}
 	if c.OTPResendCooldown, err = getdur("OTP_RESEND_COOLDOWN", 60*time.Second); err != nil {
@@ -248,6 +278,19 @@ func (c *Config) validate() error {
 	if c.PublicURL == "" {
 		return fmt.Errorf("AUTH_PUBLIC_URL must be set")
 	}
+	// Each open host must be a bare hostname within DOMAIN. The host is compared
+	// against the post-login destination, which ValidateRedirect already confines
+	// to DOMAIN, so an out-of-domain entry could never match; refusing it at boot
+	// catches the typo (a URL, a port, a sibling domain) instead of leaving the
+	// operator wondering why registration is still closed.
+	for _, h := range c.OpenRegistrationHosts {
+		if !validHostname(h) {
+			return fmt.Errorf("OPEN_REGISTRATION_HOSTS: %q is not a bare hostname (no scheme, port, path, or wildcard)", h)
+		}
+		if h != c.Domain && !strings.HasSuffix(h, "."+c.Domain) {
+			return fmt.Errorf("OPEN_REGISTRATION_HOSTS: %q is not %s or a subdomain of it", h, c.Domain)
+		}
+	}
 	switch c.EmailBackend {
 	case "log":
 		// The log backend writes every OTP code to the process log (see
@@ -278,6 +321,9 @@ func (c *Config) validate() error {
 	if c.OTPMaxAttempts < 1 {
 		return fmt.Errorf("OTP_MAX_ATTEMPTS must be >= 1 (got %d)", c.OTPMaxAttempts)
 	}
+	if c.OTPMaxTotalAttempts < c.OTPMaxAttempts {
+		return fmt.Errorf("OTP_MAX_TOTAL_ATTEMPTS must be >= OTP_MAX_ATTEMPTS (got %d < %d)", c.OTPMaxTotalAttempts, c.OTPMaxAttempts)
+	}
 	// A cooldown >= TTL means a code always expires before its resend unlocks, so
 	// the user could never legitimately resend; a non-positive one disables the
 	// no-op guard entirely.
@@ -300,6 +346,26 @@ func (c *Config) validate() error {
 		}
 	}
 	return nil
+}
+
+// validHostname reports whether h is a plain lowercase DNS hostname: dot-
+// separated labels of a-z, 0-9 and hyphen, none empty, none starting or ending
+// with a hyphen. It rejects anything with a scheme, port, path, or "*".
+func validHostname(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	for _, l := range strings.Split(h, ".") {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for _, r := range l {
+			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // gethexkey decodes an optional hex-encoded key. Empty yields a nil key; a
@@ -341,16 +407,20 @@ func distinctBytes(b []byte) int {
 	return n
 }
 
-func getbool(key string, def bool) bool {
+// getbool reads a boolean setting. An unset or empty value yields def; a value
+// that is not one strconv.ParseBool accepts (true/false, 1/0, t/f, in any
+// case) is an error, never the default. TOTP_ENABLED=yes starting the service
+// with TOTP silently off is exactly the failure this prevents.
+func getbool(key string, def bool) (bool, error) {
 	v, ok := os.LookupEnv(key)
-	if !ok || v == "" {
-		return def
+	if !ok || strings.TrimSpace(v) == "" {
+		return def, nil
 	}
 	b, err := strconv.ParseBool(strings.TrimSpace(v))
 	if err != nil {
-		return def
+		return def, fmt.Errorf("%s: %q is not a boolean (use true or false)", key, v)
 	}
-	return b
+	return b, nil
 }
 
 func getint(key string, def int) (int, error) {

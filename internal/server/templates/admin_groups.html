@@ -22,11 +22,11 @@
     <tbody>
     {{range .Members}}
       <tr>
-        <td>{{.}}</td>
+        <td>{{.Email}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</td>
         <td style="text-align:right">
           <form class="inline" method="post" action="/admin/groups/{{$group}}/members/delete">
             <input type="hidden" name="csrf" value="{{$csrf}}">
-            <input type="hidden" name="email" value="{{.}}">
+            <input type="hidden" name="email" value="{{.Email}}">
             <button type="submit" class="ghost">Remove</button>
           </form>
         </td>

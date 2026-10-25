@@ -26,10 +26,14 @@ type pageData struct {
 	// sign-in page (from the LOGIN_NOTICE env var). Rendered auto-escaped as
 	// plain text by html/template — never as template.HTML.
 	LoginNotice string
-	// Identity / LoginURL / BreakGlass drive the access-denied page.
+	// Identity / LoginURL / BreakGlass / Guest drive the access-denied page.
+	// LogoutURL is the sign-out link offered to a guest there, who must sign out
+	// before signing in again with an approved address.
 	Identity   string
 	LoginURL   string
+	LogoutURL  string
 	BreakGlass bool
+	Guest      bool
 	// EmergencyOffer drives the one-tap "Use emergency access" button on the
 	// denial page: it appears only when the visitor arrived carrying a valid
 	// break-glass offer cookie (they scanned a card while already signed in and

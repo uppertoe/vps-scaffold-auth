@@ -2,9 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
+	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
+	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -258,10 +263,15 @@ func TestEnablingTOTPReChallengesExistingAdminSession(t *testing.T) {
 			rec.Code, rec.Header().Get("Location"))
 	}
 
-	// Re-authenticating with the second factor restores admin access.
+	// Re-authenticating with the second factor restores admin access. Drop the
+	// first login's captured message first, so code() waits for this login's
+	// mail rather than reusing the earlier (already consumed) code.
 	secret := provisionTOTP(t, srv, "admin@example.com")
+	sender.reset()
 	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
-	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	if rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}}); rec.Code != http.StatusOK {
+		t.Fatalf("/verify-code on re-auth = %d, want 200 (TOTP challenge)", rec.Code)
+	}
 	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -334,4 +344,146 @@ func TestAdminTOTPGenerateGuards(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("generate without CSRF = %d, want 403", rec.Code)
 	}
+}
+
+// The per-account TOTP cap holds under concurrency: however many submissions
+// arrive together, at most OTP_MAX_ATTEMPTS codes are checked within the
+// window and the rest are refused as locked out. The attempt is reserved
+// before the check, so there is no window in which every submission passes a
+// not-yet-updated counter.
+func TestTOTPAttemptCapHoldsUnderConcurrency(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	pending := c.cookies[session.PendingCookie]
+	if pending == nil {
+		t.Fatal("no pending cookie after the email step")
+	}
+
+	const n = 60
+	start := make(chan struct{})
+	codes := make(chan int, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest(http.MethodPost, "/totp", strings.NewReader("code=000000"))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.RemoteAddr = "192.0.2.1:1234"
+			req.AddCookie(pending)
+			rr := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rr, req)
+			codes <- rr.Code
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(codes)
+	checked, locked := 0, 0
+	for code := range codes {
+		switch code {
+		case http.StatusUnauthorized:
+			checked++
+		case http.StatusTooManyRequests:
+			locked++
+		}
+	}
+	if checked > srv.cfg.OTPMaxAttempts {
+		t.Fatalf("%d codes were checked, cap is %d", checked, srv.cfg.OTPMaxAttempts)
+	}
+	if checked+locked != n {
+		t.Errorf("checked %d + locked %d != %d submissions", checked, locked, n)
+	}
+}
+
+// reserveFails is a store whose attempt reservation always errors, standing in
+// for a database that cannot be written to.
+type reserveFails struct{ store.Store }
+
+func (reserveFails) ReserveTOTPAttempt(context.Context, string, time.Duration, time.Time) (int, error) {
+	return 0, errors.New("disk full")
+}
+
+// When an attempt cannot be recorded the code is not checked at all: the cap
+// must not switch off during a store outage. The admin gets a temporary
+// refusal and no session, even with the correct code.
+func TestTOTPRefusesWhenAttemptCannotBeRecorded(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+
+	srv.store = reserveFails{srv.store}
+	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := c.postForm("/totp", url.Values{"code": {totpCode}})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/totp with a failing store = %d, want 503", rec.Code)
+	}
+	if c.cookies[session.SessionCookie] != nil {
+		t.Fatal("a session was issued although the attempt could not be recorded")
+	}
+	if !strings.Contains(rec.Body.String(), "try again in a moment") {
+		t.Errorf("refusal page lacks the retry message:\n%s", rec.Body.String())
+	}
+}
+
+// An admin demoted or removed between the email step and the second factor
+// does not come out of the TOTP step with the permissions saved at the first
+// step: the role is recomputed from the current policy when the session is
+// issued.
+func TestTOTPCompletionUsesCurrentPolicy(t *testing.T) {
+	t.Run("demoted to user", func(t *testing.T) {
+		srv, sender := testServer(t)
+		srv.cfg.TOTPEnabled = true
+		secret := provisionTOTP(t, srv, "admin@example.com")
+		c := newClient(t, srv.Handler())
+		c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+		if rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}}); rec.Code != http.StatusOK {
+			t.Fatalf("/verify-code = %d, want 200 (TOTP challenge)", rec.Code)
+		}
+		srv.policy = authz.NewPolicy([]string{"example.com"}, nil) // no admins any more
+		totpCode, err := pqtotp.GenerateCode(secret, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec := c.postForm("/totp", url.Values{"code": {totpCode}}); rec.Code != http.StatusFound {
+			t.Fatalf("/totp = %d, want 302 (signed in as a user)", rec.Code)
+		}
+		if rec := c.get("/verify", requireGroups("admin")); rec.Code != http.StatusFound {
+			t.Errorf("admin-only route after demotion = %d, want 302 (denied)", rec.Code)
+		}
+		if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
+			t.Errorf("plain route after demotion = %d groups=%q, want 200 user", rec.Code, rec.Header().Get("Remote-Groups"))
+		}
+	})
+	t.Run("removed entirely", func(t *testing.T) {
+		srv, sender := testServer(t)
+		srv.cfg.TOTPEnabled = true
+		secret := provisionTOTP(t, srv, "admin@example.com")
+		c := newClient(t, srv.Handler())
+		c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+		c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+		srv.policy = authz.NewPolicy([]string{"other.org"}, nil) // address no longer permitted
+		totpCode, err := pqtotp.GenerateCode(secret, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := c.postForm("/totp", url.Values{"code": {totpCode}})
+		if c.cookies[session.SessionCookie] != nil {
+			t.Fatalf("a session was issued to a removed principal (status %d)", rec.Code)
+		}
+		if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusFound {
+			t.Errorf("removed principal reached /verify with %d", rec.Code)
+		}
+	})
 }
