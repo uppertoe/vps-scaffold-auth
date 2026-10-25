@@ -32,7 +32,10 @@ auth.{$DOMAIN} {
 # run-caddy.sh counts braces when assembling the Caddyfile.
 #
 # Usage (domains and groups are space/comma-separated; UPSTREAM is host:port):
-#   import protected UPSTREAM                       -- any signed-in user; NOT break-glass
+#   import protected UPSTREAM                       -- any signed-in user; NOT break-glass, NOT guests
+#   import protected_open UPSTREAM                  -- any signed-in user AND guests: strangers who
+#                                                      signed in through a host listed in
+#                                                      OPEN_REGISTRATION_HOSTS. For the one public app.
 #   import protected_domains "rch.org.au" UPSTREAM  -- signed-in user at a listed email domain.
 #                                                      The login page hints the domain and a
 #                                                      wrong-domain address is declined early.
@@ -59,29 +62,115 @@ auth.{$DOMAIN} {
 # group list names the card's target group, so an emergency card is scoped to
 # its location. `import protected` deliberately excludes them.
 #
+# Guest sessions are deny-by-default in the same way. A guest is an address the
+# allow-list does not cover, signed in through an open-registration host. It
+# reaches only a route that says guests=allow, which is protected_open, or a
+# route whose group list names a group an admin has placed that guest in. Every
+# other guard, the bare `import protected` included, keeps guests out, so an app
+# that forgets to gate itself stays closed to strangers.
+#
 # Each guard declares its requirement in ONE header, X-Auth-Policy, set with
 # header_up. Because header_up REPLACES the header, a client can't inject or
 # widen it -- whatever it sends is overwritten. There is no per-guard "delete the
 # rest" list to keep in sync: new policy fields go inside X-Auth-Policy, so a
 # forgotten strip can't silently widen access. Always use these snippets rather
 # than hand-rolling forward_auth; a custom guard that omits X-Auth-Policy is
-# treated as a plain `protected` (any signed-in user), and the auth service logs
-# a warning if it still sends the old X-Auth-Require-* headers.
+# refused (every signed-in user is sent to the "no access" page), and the auth
+# service logs a warning if it still sends the old X-Auth-Require-* headers.
 #
-# X-Auth-Policy grammar: ";"-separated key=value fields. "domains" and "groups"
-# each hold a space/comma-separated allow-list; a bare "any" (no fields) is the
-# plain-protected sentinel. The hint label and alt-login link are UX only (the
-# alt URL is re-validated server-side to be within the domain), so they ride in
-# their own plain headers.
+# X-Auth-Policy grammar: ";"-separated fields. "domains=<list>" and
+# "groups=<list>" each hold a NON-EMPTY space/comma-separated allow-list; a
+# bare "any" (on its own) is the plain-protected sentinel; "guests=allow"
+# additionally admits guest sessions, and only that exact value counts. The
+# gateway parses this strictly and REFUSES anything else -- an empty list
+# ("domains="), a misspelled or unknown field ("gruops=admin"), "any" combined
+# with a list, or no header at all -- by sending every signed-in user to the
+# "no access" page. A typo in a guard can therefore never widen it to "any
+# signed-in user". The hint label and alt-login link are UX only (the alt URL
+# is re-validated server-side to be within the domain), so they ride in their
+# own plain headers.
+
+# The auth gate every guard imports. It is the expanded form of Caddy's
+# forward_auth (method GET, rewrite to /verify, the two X-Forwarded-* headers
+# and the Remote-* copy on a 2xx) with one addition forward_auth cannot
+# express: when /verify answers 2xx AND sets a renewed session cookie, that
+# Set-Cookie is added to the response the browser receives. forward_auth's
+# copy_headers only copies into the upstream request, so a sliding renewal
+# issued at /verify never reached the browser and every session simply ran
+# out at its original expiry. Only the gateway's own cookie is forwarded
+# (matched by name), and it is ADDED, so an app's own Set-Cookie survives.
+# Args: policy. The labeled and alt variants add their UX header.
+(auth_gate) {
+	reverse_proxy auth:8080 {
+		import auth_gate_common
+		header_up X-Auth-Policy "{args[0]}"
+	}
+}
+
+# Args: policy, display label.
+(auth_gate_labeled) {
+	reverse_proxy auth:8080 {
+		import auth_gate_common
+		header_up X-Auth-Policy "{args[0]}"
+		header_up X-Auth-Domain-Label "{args[1]}"
+	}
+}
+
+# Args: policy, alt-login URL, alt-login label.
+(auth_gate_alt) {
+	reverse_proxy auth:8080 {
+		import auth_gate_common
+		header_up X-Auth-Policy "{args[0]}"
+		header_up X-Auth-Alt-Login "{args[1]}"
+		header_up X-Auth-Alt-Label "{args[2]}"
+	}
+}
+
+# Shared body of the gate: see auth_gate. The renewed branch is listed first
+# because the first matching handle_response wins.
+(auth_gate_common) {
+	method GET
+	rewrite /verify
+	header_up X-Forwarded-Method {method}
+	header_up X-Forwarded-Uri {uri}
+	@renewed {
+		status 2xx
+		header Set-Cookie vps_auth_session=*
+	}
+	handle_response @renewed {
+		request_header Remote-User {http.reverse_proxy.header.Remote-User}
+		request_header Remote-Email {http.reverse_proxy.header.Remote-Email}
+		request_header Remote-Groups {http.reverse_proxy.header.Remote-Groups}
+		header +Set-Cookie {http.reverse_proxy.header.Set-Cookie}
+	}
+	@allowed status 2xx
+	handle_response @allowed {
+		request_header Remote-User {http.reverse_proxy.header.Remote-User}
+		request_header Remote-Email {http.reverse_proxy.header.Remote-Email}
+		request_header Remote-Groups {http.reverse_proxy.header.Remote-Groups}
+	}
+}
 
 (protected) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "any"
+		import auth_gate "any"
+		reverse_proxy {args[0]} {
+			import strip_auth_cookie
 		}
+	}
+}
+
+# Like protected, but also admits guests. Use it for the one app that is meant
+# for the public -- an application form, a sign-up page -- and list that app's
+# host in OPEN_REGISTRATION_HOSTS so strangers can sign in there. Leave every
+# other app on protected or a narrower guard. The app sees Remote-Groups
+# beginning "guest" for a guest and "user" or "admin" for everyone else, and
+# should treat the two accordingly.
+(protected_open) {
+	route {
+		import strip_client_identity
+		import auth_gate "any;guests=allow"
 		reverse_proxy {args[0]} {
 			import strip_auth_cookie
 		}
@@ -91,11 +180,7 @@ auth.{$DOMAIN} {
 (protected_domains) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "domains={args[0]}"
-		}
+		import auth_gate "domains={args[0]}"
 		reverse_proxy {args[1]} {
 			import strip_auth_cookie
 		}
@@ -111,12 +196,7 @@ auth.{$DOMAIN} {
 (protected_domains_labeled) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "domains={args[0]}"
-			header_up X-Auth-Domain-Label "{args[1]}"
-		}
+		import auth_gate_labeled "domains={args[0]}" "{args[1]}"
 		reverse_proxy {args[2]} {
 			import strip_auth_cookie
 		}
@@ -131,13 +211,7 @@ auth.{$DOMAIN} {
 (protected_domains_alt) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "domains={args[0]}"
-			header_up X-Auth-Alt-Login "{args[1]}"
-			header_up X-Auth-Alt-Label "{args[2]}"
-		}
+		import auth_gate_alt "domains={args[0]}" "{args[1]}" "{args[2]}"
 		reverse_proxy {args[3]} {
 			import strip_auth_cookie
 		}
@@ -147,11 +221,7 @@ auth.{$DOMAIN} {
 (protected_groups) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "groups={args[0]}"
-		}
+		import auth_gate "groups={args[0]}"
 		reverse_proxy {args[1]} {
 			import strip_auth_cookie
 		}
@@ -163,11 +233,7 @@ auth.{$DOMAIN} {
 (protected_admin) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "groups=admin"
-		}
+		import auth_gate "groups=admin"
 		reverse_proxy {args[0]} {
 			import strip_auth_cookie
 		}
@@ -177,11 +243,7 @@ auth.{$DOMAIN} {
 (protected_access) {
 	route {
 		import strip_client_identity
-		forward_auth auth:8080 {
-			uri /verify
-			copy_headers Remote-User Remote-Email Remote-Groups
-			header_up X-Auth-Policy "domains={args[0]};groups={args[1]}"
-		}
+		import auth_gate "domains={args[0]};groups={args[1]}"
 		reverse_proxy {args[2]} {
 			import strip_auth_cookie
 		}

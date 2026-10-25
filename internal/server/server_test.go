@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
@@ -119,6 +122,13 @@ func (c *client) postForm(target string, form url.Values) *httptest.ResponseReco
 
 func testServer(t *testing.T) (*Server, *captureSender) {
 	t.Helper()
+	return testServerWith(t, nil)
+}
+
+// testServerWith builds the standard test server, letting the caller adjust
+// the config before construction (some settings, like the CSP, are precomputed).
+func testServerWith(t *testing.T, adjust func(*config.Config)) (*Server, *captureSender) {
+	t.Helper()
 	st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "auth.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +153,9 @@ func testServer(t *testing.T) (*Server, *captureSender) {
 		EmailFrom:         "auth@example.com",
 		RateLimitPerEmail: config.RateLimit{Count: 100, Window: time.Minute},
 		RateLimitPerIP:    config.RateLimit{Count: 100, Window: time.Minute},
+	}
+	if adjust != nil {
+		adjust(cfg)
 	}
 	sender := newCaptureSender()
 	srv, err := New(cfg, st, sender)
@@ -521,6 +534,19 @@ func TestApexRedirectFallsToWelcome(t *testing.T) {
 	}
 }
 
+func TestApexRedirectFollowedWhenAllowed(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.AllowApexRedirect = true
+	c := newClient(t, srv.Handler())
+	// Deployments whose apex is a real gated site (ALLOW_APEX_REDIRECT=true)
+	// get sent back to it after login, like any subdomain destination.
+	c.postForm("/request", url.Values{"email": {"user@example.com"}, "rd": {"https://example.com/useful-numbers/"}})
+	rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	if loc := rec.Header().Get("Location"); loc != "https://example.com/useful-numbers/" {
+		t.Fatalf("apex redirect should be followed when allowed; got %q", loc)
+	}
+}
+
 func TestRootRedirectsBySession(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
@@ -595,6 +621,41 @@ func TestLogoutGetConfirmsThenPostSignsOut(t *testing.T) {
 	}
 	if rec := c.get("/verify", nil); rec.Code == http.StatusOK {
 		t.Error("POST /logout should have cleared the session")
+	}
+}
+
+// An app's sign-out link may carry rd; it survives the confirmation form and
+// reaches the login page, so the person returns to the app they left. Anything
+// off-domain or not https is dropped, as on the login page.
+func TestLogoutCarriesRedirectToLogin(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+
+	rec := c.get("/logout?rd=https%3A%2F%2Fapp.example.com%2F", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `name="rd" value="https://app.example.com/"`) {
+		t.Fatalf("GET /logout?rd should carry rd into the form: %d %q", rec.Code, rec.Body.String())
+	}
+	rec = c.postForm("/logout", url.Values{"rd": {"https://app.example.com/"}})
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusFound || loc != "https://auth.example.com/login?rd=https%3A%2F%2Fapp.example.com%2F" {
+		t.Errorf("POST /logout with rd should land on login with the same rd; got %d %q", rec.Code, loc)
+	}
+
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	rec = c.get("/logout?rd=https%3A%2F%2Fevil.example.org%2F", nil)
+	if strings.Contains(rec.Body.String(), `name="rd"`) {
+		t.Errorf("an off-domain rd must be dropped from the confirmation form")
+	}
+	rec = c.postForm("/logout", url.Values{"rd": {"http://app.example.com/"}})
+	if loc := rec.Header().Get("Location"); strings.Contains(loc, "rd=") {
+		t.Errorf("a non-https rd must be dropped: %q", loc)
+	}
+	// Signed out, GET /logout?rd goes to the login page with rd intact.
+	rec = c.get("/logout?rd=https%3A%2F%2Fapp.example.com%2F", nil)
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusFound || !strings.Contains(loc, "/login?rd=https%3A%2F%2Fapp.example.com%2F") {
+		t.Errorf("signed-out GET /logout?rd should keep rd on the way to login: %d %q", rec.Code, loc)
 	}
 }
 
@@ -759,11 +820,361 @@ func TestLoginCSPAllowsAppSubdomainRedirects(t *testing.T) {
 	}
 }
 
+// With ALLOW_APEX_REDIRECT the bare domain is also a post-login destination,
+// and https://*.example.com does not match https://example.com. Safari enforces
+// form-action on the post-submission redirect, so the apex must be listed
+// explicitly or an apex sign-in silently goes nowhere there.
+func TestLoginCSPAllowsApexRedirectWhenEnabled(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		csp := cspPolicy("example.com", allow)
+		hasApex := strings.Contains(csp, "form-action 'self' https://example.com https://*.example.com")
+		if allow && !hasApex {
+			t.Fatalf("apex allowed but CSP form-action omits it; got %q", csp)
+		}
+		if !allow && strings.Contains(csp, " https://example.com") {
+			t.Fatalf("apex not allowed but CSP form-action lists it; got %q", csp)
+		}
+	}
+}
+
+// formActionAllows reports whether the CSP's form-action source list permits a
+// navigation to target from a document on self, using the host-source forms the
+// policy actually emits ('self', https://host, https://*.host). Browsers apply
+// form-action to the redirect that follows a form submission (Safari still
+// does), so this is the check that decides whether a sign-in lands.
+func formActionAllows(t *testing.T, csp, self, target string) bool {
+	t.Helper()
+	var sources []string
+	for _, d := range strings.Split(csp, ";") {
+		f := strings.Fields(d)
+		if len(f) > 0 && f[0] == "form-action" {
+			sources = f[1:]
+		}
+	}
+	if sources == nil {
+		t.Fatalf("CSP has no form-action directive: %q", csp)
+	}
+	tu, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	su, _ := url.Parse(self)
+	for _, src := range sources {
+		switch {
+		case src == "'self'":
+			if tu.Scheme == su.Scheme && tu.Host == su.Host {
+				return true
+			}
+		case strings.HasPrefix(src, "https://*."):
+			if tu.Scheme == "https" && strings.HasSuffix(tu.Hostname(), strings.TrimPrefix(src, "https://*")) {
+				return true
+			}
+		case strings.HasPrefix(src, "https://"):
+			if tu.Scheme == "https" && tu.Hostname() == strings.TrimPrefix(src, "https://") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Wherever a completed sign-in redirects, the login page's own CSP must let the
+// browser follow it. This drives the real flow (request → code → verify) and
+// checks the resulting Location against the policy, for both apex settings —
+// the header-only tests above cannot catch the policy and servedTarget
+// disagreeing, which is exactly how apex sign-ins broke on Safari.
+func TestPostLoginRedirectIsAllowedByCSP(t *testing.T) {
+	for _, allowApex := range []bool{false, true} {
+		for _, rd := range []string{
+			"https://app.example.com/secret",
+			"https://example.com/gated/",
+			"https://example.com/",
+		} {
+			srv, sender := testServerWith(t, func(cfg *config.Config) { cfg.AllowApexRedirect = allowApex })
+			c := newClient(t, srv.Handler())
+			rec := c.postForm("/request", url.Values{"email": {"user@example.com"}, "rd": {rd}})
+			csp := rec.Header().Get("Content-Security-Policy")
+			rec = c.postForm("/verify-code", url.Values{"code": {sender.code()}, "rd": {rd}})
+			if rec.Code != http.StatusFound {
+				t.Fatalf("apex=%v rd=%s: /verify-code = %d, want 302", allowApex, rd, rec.Code)
+			}
+			loc := rec.Header().Get("Location")
+			if !formActionAllows(t, csp, "https://auth.example.com", loc) {
+				t.Errorf("apex=%v rd=%s: sign-in redirects to %s but form-action forbids it: %q", allowApex, rd, loc, csp)
+			}
+			if allowApex && !strings.HasPrefix(loc, rd) {
+				t.Errorf("apex=%v rd=%s: expected redirect to the destination, got %s", allowApex, rd, loc)
+			}
+		}
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	srv, _ := testServer(t)
 	c := newClient(t, srv.Handler())
 	rec := c.get("/healthz", nil)
 	if rec.Code != http.StatusOK {
 		t.Errorf("healthz status = %d", rec.Code)
+	}
+}
+
+// The login-progress cookie is set for anyone who requests a code. Presented
+// under the session cookie's name it must not read as a session, let alone one
+// that renewal would upgrade to the claimed address's real groups.
+func TestStateCookieCannotBecomeSession(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
+	state := c.cookies[session.StateCookie]
+	if state == nil {
+		t.Fatal("no state cookie after /request")
+	}
+	c.cookies[session.SessionCookie] = &http.Cookie{Name: session.SessionCookie, Value: state.Value}
+
+	// Past the renewal threshold, where a decoded identity with iat=0 would be
+	// re-derived from policy.
+	srv.now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+	if rec := c.get("/verify", map[string]string{"X-Auth-Policy": "any"}); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+		t.Fatalf("/verify with a state token as session = %d %q, want 302 to login", rec.Code, rec.Header().Get("Location"))
+	}
+	srv.now = time.Now
+	if rec := c.get("/admin/groups", nil); rec.Code != http.StatusFound {
+		t.Errorf("/admin/groups with a state token as session = %d, want 302", rec.Code)
+	}
+	if rec := c.get("/welcome", nil); rec.Code != http.StatusFound {
+		t.Errorf("/welcome with a state token as session = %d, want 302", rec.Code)
+	}
+}
+
+// An administrator removed from ADMIN_EMAILS loses the admin UI at once, not
+// at cookie expiry: the admin gate re-checks the current policy.
+func TestRemovedAdminLosesAdminUI(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	if rec := c.get("/admin/groups", nil); rec.Code != http.StatusOK {
+		t.Fatalf("admin before removal = %d, want 200", rec.Code)
+	}
+	srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
+	if rec := c.get("/admin/groups", nil); rec.Code != http.StatusFound {
+		t.Errorf("admin after removal = %d, want 302 to login", rec.Code)
+	}
+	if body := c.get("/welcome", nil).Body.String(); strings.Contains(body, `href="/admin`) {
+		t.Error("/welcome still offers the Admin link after removal")
+	}
+}
+
+// The sign-in forms accept a browser submission only from the auth host's own
+// origin. A form posted from another origin, including a sibling host on the
+// same site, is refused, so no app on the domain can drive a visitor's
+// browser through the sign-in flow on their behalf. A client that sends
+// neither header is not a browser and is unaffected.
+func TestLoginFormsRequireSameOrigin(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	post := func(path string, hdr map[string]string) int {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader("email=user@example.com&code=000000"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		return c.do(req).Code
+	}
+	for _, path := range []string{"/request", "/verify-code", "/totp", "/logout"} {
+		if code := post(path, map[string]string{"Origin": "https://app.example.com"}); code != http.StatusForbidden {
+			t.Errorf("%s from a sibling origin = %d, want 403", path, code)
+		}
+		if code := post(path, map[string]string{"Origin": "https://evil.example.org"}); code != http.StatusForbidden {
+			t.Errorf("%s from a foreign origin = %d, want 403", path, code)
+		}
+		if code := post(path, map[string]string{"Sec-Fetch-Site": "same-site"}); code != http.StatusForbidden {
+			t.Errorf("%s with Sec-Fetch-Site same-site = %d, want 403", path, code)
+		}
+		if code := post(path, map[string]string{"Origin": "https://auth.example.com", "Sec-Fetch-Site": "same-origin"}); code == http.StatusForbidden {
+			t.Errorf("%s from the auth origin was refused", path)
+		}
+		// Mobile browsers under a no-referrer policy send the literal "null" for
+		// a same-origin navigation POST; the Sec-Fetch-Site value decides.
+		if code := post(path, map[string]string{"Origin": "null", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate"}); code == http.StatusForbidden {
+			t.Errorf("%s with Origin null and Sec-Fetch-Site same-origin was refused (breaks mobile sign-in)", path)
+		}
+		if code := post(path, map[string]string{"Origin": "null", "Sec-Fetch-Site": "none"}); code == http.StatusForbidden {
+			t.Errorf("%s with Origin null and Sec-Fetch-Site none was refused", path)
+		}
+		if code := post(path, map[string]string{"Origin": "null", "Sec-Fetch-Site": "same-site"}); code != http.StatusForbidden {
+			t.Errorf("%s with Origin null from a sibling host = %d, want 403", path, code)
+		}
+		if code := post(path, map[string]string{"Origin": "null", "Sec-Fetch-Site": "cross-site"}); code != http.StatusForbidden {
+			t.Errorf("%s with Origin null from a foreign site = %d, want 403", path, code)
+		}
+		if code := post(path, nil); code == http.StatusForbidden {
+			t.Errorf("%s without browser headers was refused", path)
+		}
+	}
+}
+
+// A re-request behaves identically for a permitted and an unlisted address:
+// within the cooldown neither resets its attempt counter, and after the
+// cooldown both do. Any difference would reveal allow-list membership.
+func TestResendTransitionsMatchForDecoy(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.cfg.OTPMaxAttempts = 2
+	srv.cfg.OTPResendCooldown = 30 * time.Second
+	base := time.Now()
+	srv.now = func() time.Time { return base }
+	// "Incorrect" and "locked out" both answer 401, so the page's state is what
+	// is compared: the wrong-code page offers another try, the locked-out page
+	// asks for a new code. The guess is a letter string, which no minted code
+	// can equal.
+	const wrongGuess = "nope"
+	state := func(rec *httptest.ResponseRecorder) string {
+		body := rec.Body.String()
+		switch {
+		case strings.Contains(body, "Too many incorrect attempts"):
+			return "locked"
+		case strings.Contains(body, "Incorrect code"):
+			return "mismatch"
+		}
+		return fmt.Sprintf("other(%d)", rec.Code)
+	}
+	run := func(addr string) (withinCooldown, afterCooldown string) {
+		c := newClient(t, srv.Handler())
+		c.postForm("/request", url.Values{"email": {addr}})
+		for i := 0; i < srv.cfg.OTPMaxAttempts; i++ {
+			c.postForm("/verify-code", url.Values{"code": {wrongGuess}})
+		}
+		// Re-request inside the cooldown: the counter must survive.
+		c.postForm("/request", url.Values{"email": {addr}})
+		withinCooldown = state(c.postForm("/verify-code", url.Values{"code": {wrongGuess}}))
+		// Re-request after the cooldown: a fresh code with a fresh counter.
+		srv.now = func() time.Time { return base.Add(srv.cfg.OTPResendCooldown + time.Second) }
+		c.postForm("/request", url.Values{"email": {addr}})
+		afterCooldown = state(c.postForm("/verify-code", url.Values{"code": {wrongGuess}}))
+		srv.now = func() time.Time { return base }
+		return
+	}
+	pw, pa := run("user@example.com")
+	dw, da := run("stranger@other.org")
+	if pw != "locked" || pa != "mismatch" {
+		t.Fatalf("permitted address: within cooldown = %s, after = %s; want locked then mismatch", pw, pa)
+	}
+	if dw != pw || da != pa {
+		t.Fatalf("resend transitions differ: permitted within/after = %s/%s, decoy = %s/%s", pw, pa, dw, da)
+	}
+}
+
+// recentCheckFails is a store whose cooldown read always errors.
+type recentCheckFails struct{ store.Store }
+
+func (recentCheckFails) HasRecentCode(context.Context, string, time.Time) (bool, error) {
+	return false, errors.New("disk read error")
+}
+
+// A failed cooldown read is treated as "within the cooldown": the live code
+// and its attempt counters survive, so a transient error cannot hand a
+// guesser a fresh budget.
+func TestRecentCodeReadErrorKeepsCounters(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.cfg.OTPMaxAttempts = 2
+	c := newClient(t, srv.Handler())
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	for i := 0; i < srv.cfg.OTPMaxAttempts; i++ {
+		c.postForm("/verify-code", url.Values{"code": {"nope"}})
+	}
+	srv.store = recentCheckFails{srv.store}
+	c.postForm("/request", url.Values{"email": {"user@example.com"}})
+	rec := c.postForm("/verify-code", url.Values{"code": {"nope"}})
+	if !strings.Contains(rec.Body.String(), "Too many incorrect attempts") {
+		t.Fatalf("counters were reset by a re-request during a read error; got %d:\n%s", rec.Code, rec.Body.String())
+	}
+}
+
+// An explicit default port in AUTH_PUBLIC_URL does not make a browser's
+// portless Origin look foreign.
+func TestSameOriginToleratesExplicitDefaultPort(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.cfg.PublicURL = "https://auth.example.com:443"
+	c := newClient(t, srv.Handler())
+	req := httptest.NewRequest(http.MethodPost, "/request", strings.NewReader("email=user@example.com"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://auth.example.com")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if code := c.do(req).Code; code == http.StatusForbidden {
+		t.Fatal("a same-origin post was refused because the public URL carries :443")
+	}
+	srv.cfg.PublicURL = "https://auth.example.com"
+	req = httptest.NewRequest(http.MethodPost, "/request", strings.NewReader("email=user@example.com"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://auth.example.com:8443")
+	if code := c.do(req).Code; code != http.StatusForbidden {
+		t.Fatalf("a post from a different port was accepted (%d)", code)
+	}
+}
+
+// publicOrigin matches what a browser sends as Origin for the public URL.
+func TestPublicOriginForms(t *testing.T) {
+	srv, _ := testServer(t)
+	for in, want := range map[string]string{
+		"https://auth.example.com":      "https://auth.example.com",
+		"https://auth.example.com:443":  "https://auth.example.com",
+		"https://auth.example.com:8443": "https://auth.example.com:8443",
+		"http://auth.example.com:80":    "http://auth.example.com",
+		"https://[::1]:443":             "https://[::1]",
+		"https://[::1]:8443":            "https://[::1]:8443",
+	} {
+		srv.cfg.PublicURL = in
+		if got := srv.publicOrigin(); got != want {
+			t.Errorf("publicOrigin(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// An unreadable session cookie is cleared on the redirect to login, so an app
+// route that keys on the cookie's presence stops bouncing the visitor.
+func TestVerifyClearsUnreadableSessionCookie(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	c.cookies[session.SessionCookie] = &http.Cookie{Name: session.SessionCookie, Value: "stale.garbage"}
+	rec := c.get("/verify", protectedAny())
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+		t.Fatalf("/verify with a stale cookie = %d %q, want 302 to login", rec.Code, rec.Header().Get("Location"))
+	}
+	cleared := false
+	for _, ck := range rec.Result().Cookies() {
+		if ck.Name == session.SessionCookie && ck.MaxAge < 0 && ck.Value == "" {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Fatalf("stale session cookie was not cleared; Set-Cookie=%v", rec.Header()["Set-Cookie"])
+	}
+	// No cookie at all: nothing to clear, no Set-Cookie emitted.
+	c2 := newClient(t, srv.Handler())
+	if sc := c2.get("/verify", protectedAny()).Header()["Set-Cookie"]; len(sc) != 0 {
+		t.Errorf("Set-Cookie emitted with no cookie present: %v", sc)
+	}
+}
+
+// Two cookies by the session's name are refused but NOT cleared: the clear
+// would carry the shared Domain and delete the real cookie while leaving the
+// planted one.
+func TestVerifyDoesNotClearAmbiguousSessionCookies(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "user@example.com", nil)
+	real := c.cookies[session.SessionCookie]
+	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
+	req.Header.Set("X-Auth-Policy", "any")
+	req.AddCookie(&http.Cookie{Name: session.SessionCookie, Value: "planted.garbage"})
+	req.AddCookie(real)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("ambiguous cookies = %d, want 302 (refused)", rec.Code)
+	}
+	for _, ck := range rec.Result().Cookies() {
+		if ck.Name == session.SessionCookie {
+			t.Fatalf("ambiguous cookie set triggered a clear: %v", ck)
+		}
 	}
 }

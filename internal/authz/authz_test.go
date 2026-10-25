@@ -27,6 +27,51 @@ func TestRole(t *testing.T) {
 	}
 }
 
+func TestRoleWildcard(t *testing.T) {
+	// Open registration: "*" plus an explicit admin whitelist and an incidental
+	// literal domain (which is now redundant but must not break anything).
+	p := NewPolicy([]string{"*", "example.org"}, []string{"Admin@Example.com"})
+	if !p.OpenRegistration() {
+		t.Fatal("expected OpenRegistration() true when \"*\" is configured")
+	}
+
+	cases := []struct {
+		email string
+		want  string
+	}{
+		{"admin@example.com", RoleAdmin}, // whitelist still wins over wildcard
+		{"user@example.org", RoleUser},   // explicit domain still works
+		{"anyone@gmail.com", RoleUser},   // wildcard: any real domain
+		{"person@some.co.uk", RoleUser},  // multi-label domain
+		{"a@b.io", RoleUser},             // short but valid
+		{"", RoleDeny},                   // empty
+		{"nobody", RoleDeny},             // no @
+		{"trailing@", RoleDeny},          // empty domain
+		{"x@localhost", RoleDeny},        // no TLD: not a public mail domain
+		{"x@internal", RoleDeny},         // bare host rejected
+		{"x@a..b.com", RoleDeny},         // empty label rejected
+		{"x@example.c", RoleDeny},        // one-char TLD rejected
+		{"x@example.123", RoleDeny},      // numeric TLD rejected
+		{"x@example.com.", RoleDeny},     // trailing dot rejected
+		{"x@.example.com", RoleDeny},     // leading dot rejected
+	}
+	for _, c := range cases {
+		if got := p.Role(c.email); got != c.want {
+			t.Errorf("Role(%q) = %q, want %q", c.email, got, c.want)
+		}
+	}
+}
+
+func TestOpenRegistrationDefaultOff(t *testing.T) {
+	p := NewPolicy([]string{"example.com"}, nil)
+	if p.OpenRegistration() {
+		t.Error("expected OpenRegistration() false without \"*\"")
+	}
+	if p.Role("anyone@gmail.com") != RoleDeny {
+		t.Error("non-wildcard policy must still deny unlisted domains")
+	}
+}
+
 func TestAllowed(t *testing.T) {
 	p := NewPolicy([]string{"example.com"}, nil)
 	if !p.Allowed("a@example.com") {
@@ -80,7 +125,7 @@ func TestCanAccessApp(t *testing.T) {
 		{"admin via explicit group", "admin@elsewhere.com", "admin", false, "rch.org.au", "admin", true},
 	}
 	for _, c := range cases {
-		if got := CanAccessApp(c.email, c.groups, c.breakGlass, c.reqDomains, c.reqGroups); got != c.want {
+		if got := CanAccessApp(c.email, c.groups, c.breakGlass, false, c.reqDomains, c.reqGroups, false); got != c.want {
 			t.Errorf("%s: CanAccessApp(%q,%q,bg=%v,d=%q,g=%q) = %v, want %v",
 				c.name, c.email, c.groups, c.breakGlass, c.reqDomains, c.reqGroups, got, c.want)
 		}
@@ -157,5 +202,93 @@ func TestSafeRedirect(t *testing.T) {
 	}
 	if got := SafeRedirect("https://app.example.com/x", domain, fallback); got != "https://app.example.com/x" {
 		t.Errorf("SafeRedirect(good) = %q", got)
+	}
+}
+
+func TestGuestEligible(t *testing.T) {
+	cases := map[string]bool{
+		"stranger@gmail.com":       true,
+		"Someone@Uni.Edu.Au":       true,
+		"x@localhost":              false, // no TLD
+		"x@10.0.0.1":               false, // numeric TLD
+		"@gmail.com":               false, // no local part
+		"x@":                       false,
+		"no-at-sign":               false,
+		"breakglass:ops@rch.org.a": false, // one-letter TLD
+	}
+	for in, want := range cases {
+		if got := GuestEligible(in); got != want {
+			t.Errorf("GuestEligible(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// LoginRole confers a guest only for an address the allow-list denies, and only
+// from an open host. A permitted address keeps its real role on an open host, so
+// an admin or a department user is never downgraded to a guest.
+func TestLoginRoleGuest(t *testing.T) {
+	p := NewPolicy([]string{"rch.org.au"}, []string{"boss@elsewhere.com"})
+	cases := []struct {
+		email    string
+		openHost bool
+		want     string
+	}{
+		{"stranger@gmail.com", true, RoleGuest},
+		{"stranger@gmail.com", false, RoleDeny},
+		{"x@localhost", true, RoleDeny}, // not a plausible public address
+		{"u@rch.org.au", true, RoleUser},
+		{"u@rch.org.au", false, RoleUser},
+		{"boss@elsewhere.com", true, RoleAdmin},
+	}
+	for _, c := range cases {
+		if got := p.LoginRole(c.email, c.openHost); got != c.want {
+			t.Errorf("LoginRole(%q, open=%v) = %q, want %q", c.email, c.openHost, got, c.want)
+		}
+	}
+	// Role itself never answers "guest": that would make every stranger allowed.
+	if got := p.Role("stranger@gmail.com"); got != RoleDeny {
+		t.Errorf("Role(stranger) = %q, want deny", got)
+	}
+}
+
+// Guests are deny-by-default: only guests=allow or an explicit group opens a
+// route to them, and a domain list never does, even one naming their domain.
+func TestCanAccessAppGuest(t *testing.T) {
+	cases := []struct {
+		name        string
+		groups      string
+		reqDomains  string
+		reqGroups   string
+		allowGuests bool
+		want        bool
+	}{
+		{"bare any denies guest", "guest", "", "", false, false},
+		{"guests=allow admits", "guest", "", "", true, true},
+		{"domain naming the guest's own domain denies", "guest", "gmail.com", "", false, false},
+		{"group not held denies", "guest", "", "reports", false, false},
+		{"group held admits", "guest,reports", "", "reports", false, true},
+		{"domain or group: via group", "guest,reports", "rch.org.au", "reports", false, true},
+		{"guests=allow on a domain route admits the guest", "guest", "rch.org.au", "", true, true},
+	}
+	for _, c := range cases {
+		if got := CanAccessApp("stranger@gmail.com", c.groups, false, true, c.reqDomains, c.reqGroups, c.allowGuests); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+	// guests=allow changes nothing for the other kinds.
+	if !CanAccessApp("u@rch.org.au", "user", false, false, "", "", true) {
+		t.Error("normal session denied on any;guests=allow")
+	}
+	if CanAccessApp("breakglass:Lab", "bg", true, false, "", "", true) {
+		t.Error("break-glass admitted by guests=allow")
+	}
+	if CanAccessApp("u@partner.com", "user", false, false, "rch.org.au", "", true) {
+		t.Error("guests=allow widened a domain route for a normal off-domain session")
+	}
+}
+
+func TestGuestIsReservedGroup(t *testing.T) {
+	if !IsReservedGroup("guest") || !IsReservedGroup(" Guest ") {
+		t.Error(`"guest" must be reserved so a DB group or card cannot pose as a guest`)
 	}
 }

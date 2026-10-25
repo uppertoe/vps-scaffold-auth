@@ -38,9 +38,10 @@ browser ──▶ Caddy (app.example.com)
 5. `/verify` now returns 200 plus `Remote-User`, `Remote-Email`, and
    `Remote-Groups`, which Caddy forwards to the app.
 
-`Remote-Groups` is a **comma-separated set**: the base role (`admin` or `user`)
-followed by any DB-managed groups the user belongs to (e.g.
-`user,whitelisted`). The role is always present, so existing role-equality
+`Remote-Groups` is a **comma-separated set**: the base role (`admin`, `user`, or
+`guest` for a stranger admitted by [open registration for one
+app](#open-registration-for-one-app)) followed by any DB-managed groups the user
+belongs to (e.g. `user,whitelisted`). The role is always present, so existing role-equality
 matchers keep working — but matchers that want the richer groups should test for
 membership in the list. The group set is computed at login and re-computed when a
 session renews, so membership changes take effect within `SESSION_RENEW_AFTER`.
@@ -73,8 +74,9 @@ The `server-instance-template` ships the wiring under `apps/auth/`
 ### Protecting an app
 
 Add one `import` line to the app's Caddy snippet — the last argument is the
-app's upstream address. The guard runs `forward_auth` **and** proxies to the
-upstream, so there's no separate `reverse_proxy` line:
+app's upstream address. The guard runs the auth gate (the expanded form of
+`forward_auth`) **and** proxies to the upstream, so there's no separate
+`reverse_proxy` line:
 
 ```caddyfile
 # apps/dashboard/dashboard.caddy
@@ -110,6 +112,11 @@ particular people, the access rule lives in **that app's own `.caddy` snippet**
 stays global (`ALLOWED_EMAIL_DOMAINS` is the superset of who can sign in *at
 all*); each app then narrows to its own subset (the upstream is the last arg):
 
+> **Opening one app to the public.** An app that strangers must be able to sign
+> in to (an application form, say) does not need the allow-list widened. List its
+> host in `OPEN_REGISTRATION_HOSTS` and guard it with `protected_open`; see
+> [Open registration for one app](#open-registration-for-one-app).
+
 ```caddyfile
 # only @rch.org.au may open this one
 clinical.{$DOMAIN}  { import protected_domains "rch.org.au" clinical:3000 }
@@ -126,7 +133,8 @@ upstream `host:port`, always the **last** argument):
 
 | Snippet | Grants access to | Login hint + early decline? |
 |---|---|---|
-| `import protected <up>` | any signed-in user (**not** break-glass) | no |
+| `import protected <up>` | any signed-in user (**not** break-glass, **not** guests) | no |
+| `import protected_open <up>` | any signed-in user **and** guests from an open-registration host | no |
 | `import protected_domains "<domains>" <up>` | signed-in users at a listed email domain | **yes** |
 | `import protected_domains_labeled "<domains>" "<label>" <up>` | same, but the hint/decline shows `<label>` instead of listing the domains | **yes** |
 | `import protected_domains_alt "<domains>" "<url>" "<label>" <up>` | same, plus a "sign in another way" link to `<url>` for non-domain users | **yes** |
@@ -141,14 +149,24 @@ Always use these snippets rather than hand-rolling `forward_auth`: each one
 declares its requirement in a single `X-Auth-Policy` header set with `header_up`,
 which **replaces** any client-sent value — so a client can't inject or widen it,
 and there's no per-guard "delete the rest" list to keep in sync as features are
-added. A custom guard that omits `X-Auth-Policy` is treated as a plain
-`protected` (any signed-in user), and the gateway logs a warning if it still
-sends the old `X-Auth-Require-*` headers, so an unmigrated guard is caught loudly
-rather than silently failing open. Each guard also owns the `reverse_proxy` to
+added. The gateway parses the policy strictly: a guard that omits
+`X-Auth-Policy`, sends an empty allow-list (`domains=`), misspells a field
+(`gruops=admin`) or combines `any` with a list is refused, and the gateway sends
+every signed-in user to the "no access" page rather than guessing. It logs the
+refused value, and warns if the guard still sends the old `X-Auth-Require-*`
+headers, so an unmigrated or mistyped guard is caught loudly rather than
+silently failing open. Each guard also owns the `reverse_proxy` to
 the upstream and strips the session cookie there (see the trust-model note
 above), so neither is something an app author can forget; an app that genuinely
-needs custom proxy options hand-rolls `forward_auth` + `reverse_proxy` and adds
-`import strip_auth_cookie` itself.
+needs custom proxy options imports `auth_gate "<policy>"` (or the labeled or
+alt variant) inside its own `route`, then its own `reverse_proxy` with
+`import strip_auth_cookie`. The gate is written out in full rather than as
+`forward_auth` because of one thing `forward_auth` cannot do: when `/verify`
+renews the session it answers 2xx with a `Set-Cookie`, and `forward_auth`'s
+`copy_headers` only copies into the upstream request, so the renewed cookie
+never reached the browser and every session ran out at its original expiry.
+The gate adds the gateway's own cookie (matched by name) to the response the
+browser receives, alongside any cookie the app sets.
 
 **Early hint + decline (any route with a domain).** Whenever a route declares a
 required domain (`protected_domains`, or the domain side of `protected_access`),
@@ -200,6 +218,67 @@ Per-route is just per-route Caddy: put a guard inside a `handle @path { … }`
 block so one app can have, say, a staff entrance and a separate emergency one
 (see the worked example in [`deploy/standalone/Caddyfile`](deploy/standalone/Caddyfile)).
 
+##### Open registration for one app
+
+Some apps are meant for people the department does not yet know, such as an
+applicant portal. Set `OPEN_REGISTRATION_HOSTS` to that app's host and guard the
+app with `protected_open`:
+
+```caddyfile
+# .env:  OPEN_REGISTRATION_HOSTS=apply.example.com
+apply.{$DOMAIN} { import protected_open apply:3000 }
+```
+
+When someone signs in on the way to a listed host and their address is not on
+the allow-list, the gateway sends them a code as usual and, once they enter it,
+signs them in as a **guest**. Their `Remote-Groups` begins with `guest`, followed
+by any groups an admin has placed them in, so the app can tell a stranger from a
+member of staff. Someone whose address is on the allow-list, or who is an admin,
+signs in with their usual role on the open host as anywhere else.
+
+A guest is admitted only where a route opts in. `protected_open` (policy
+`any;guests=allow`) admits guests, and a group guard admits a guest whom an admin
+has placed in one of its groups. Every other guard keeps guests out: the bare
+`import protected`, every domain guard (even one naming the guest's own domain),
+and every group guard whose groups the guest is not in. This is deliberate. If an
+app elsewhere on the server is left with a bare `import protected`, it stays
+closed to strangers. A guest is never an admin and never sees the TOTP step.
+
+Guest sessions renew like ordinary ones, keeping their guest kind, but a guest
+never receives the remember-me lifetime: sessions are stateless, so a stranger
+is kept on the short lifetime to bound how long an unwanted guest can hold a
+cookie before renewal re-checks it. If a guest reaches a page they cannot open,
+the "no access" page tells them they are signed in as a guest and offers to sign
+them out, so they can sign in again with an approved address. Guest visits
+appear as `guest` in the admin access log.
+
+The host check decides only where the gateway offers a guest sign-in; it is not
+the boundary. The destination rides in the login URL, so anyone who can receive
+mail can obtain a guest session once any host is listed. What keeps guests
+contained is that only routes which opt in will admit them.
+
+Listing a host also gives effect to group memberships that were previously
+inert. A membership for an address the allow-list does not permit used to do
+nothing, because that address could never sign in. Once any host is open, the
+same address can sign in as a guest, and the membership admits it to every app
+guarded by that group. Before listing a host, review the admin groups page,
+which marks each member the allow-list no longer admits, and remove any
+membership that should have ended with the person's access. Removing a domain
+from `ALLOWED_EMAIL_DOMAINS` does not remove group memberships.
+
+`OPEN_REGISTRATION_HOSTS` takes a comma-separated list of bare hostnames, each
+either `DOMAIN` or a subdomain of it. The gateway refuses to start if an entry is
+anything else, such as a URL, a host with a port, or a sibling domain.
+
+**The global form, `ALLOWED_EMAIL_DOMAINS=*`.** This older switch still works: any
+email verified by a one-time code becomes an ordinary `user`, on every host. Login
+is still email-verified, but every bare `import protected` app then admits any
+signed-in stranger, so each private app must gate itself with
+`protected_groups` or `protected_domains`. We discourage it on a shared server,
+where one app that forgets to gate itself is open to everyone; use
+`OPEN_REGISTRATION_HOSTS` instead. Admin stays an exact `ADMIN_EMAILS` allow-list
+either way.
+
 #### Mixing public and protected routes
 
 Not every route needs a login. A webhook receiver, a health check, or a public
@@ -243,7 +322,8 @@ for the annotated list. Key ones:
 | Variable | Purpose |
 |---|---|
 | `AUTH_PUBLIC_URL` | Base URL of the `auth.<domain>` site |
-| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose users may sign in |
+| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose users may sign in; `*` = open registration on every host (discouraged on a shared server) |
+| `OPEN_REGISTRATION_HOSTS` | CSV of hosts (`DOMAIN` or a subdomain) where other addresses may sign in as guests; see [Open registration for one app](#open-registration-for-one-app) |
 | `ADMIN_EMAILS` | CSV of explicit admin addresses |
 | `SESSION_SECRET` | 32+ random bytes (`openssl rand -hex 32`) |
 | `COOKIE_DOMAIN` | Leading-dot domain for the shared session cookie |
@@ -293,13 +373,23 @@ secrets are issued out of band:
 instant-grant break-glass credentials, so the admin tier should carry a second
 factor.
 
+### Signing out
+
+`GET /logout` on the auth host shows a confirmation; `POST /logout` ends the
+session for every app on the domain. An app's "Sign out" link may add
+`?rd=<https URL on the domain>`; it is validated like the login page's `rd`,
+carried through the confirmation form, and handed to the login page, so the
+person returns to that app's sign-in rather than the bare login page.
+
 ### Staying signed in
 
 The login page has a **"Keep me signed in"** checkbox. Unchecked, a session
 lasts `SESSION_TTL` (default 2h); checked, it lasts `SESSION_REMEMBER_TTL`
 (default 24h). Both are still stateless cookies, and both slide on activity
 (renewing every `SESSION_RENEW_AFTER`, default 1h, which is also where policy
-revocation and group changes take effect).
+revocation and group changes take effect). The renewal is issued by `/verify`
+and carried to the browser by the guard's auth gate; a hand-rolled
+`forward_auth` would drop it (see the note under "Protecting an app").
 
 ### Groups and the admin UI
 
@@ -373,6 +463,14 @@ still reach an app during a time-critical event (e.g. a code stroke).
 
 ## Security notes
 
+- **Every app on the cookie domain is trusted equally.** The session cookie is
+  scoped to `.<domain>` so one login serves every app, which also means any
+  host on that domain can set, overwrite or shadow a cookie of the same name in
+  a visitor's browser. The gateway refuses a request that carries more than one
+  session cookie rather than honouring whichever came first, but a sibling that
+  overwrites the shared cookie outright looks like a fresh login. Do not put an
+  app you would not trust with your users' sessions on the same domain; give it
+  its own domain and its own gateway.
 - One-time codes are single-use, short-lived, attempt-capped, and stored only
   as a **keyed HMAC-SHA256** (so a stolen `auth.db` can't brute-force the small
   numeric code space offline); comparison is constant-time.
@@ -402,7 +500,8 @@ still reach an app during a time-critical event (e.g. a code stroke).
   Break-glass sessions use a short, non-renewable TTL so revoking a code bounds
   exposure tightly, and are never accepted by the admin UI.
 - Break-glass target groups and DB group names cannot be the reserved roles
-  `admin`/`user`, so emergency access can never silently confer the admin tier.
+  `admin`/`user`/`guest`, so emergency access can never silently confer the admin
+  tier, and no group can make a member of staff look like a guest.
 
 ## Local development
 

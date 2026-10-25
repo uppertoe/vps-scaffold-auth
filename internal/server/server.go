@@ -4,6 +4,7 @@
 package server
 
 import (
+	"log"
 	"net/http"
 	"strings"
 	texttemplate "text/template"
@@ -73,7 +74,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
 		breakLimiter: newBreakLimiter(cfg),
 		access:       newAccessAudit(st, cfg.AuditRetention),
-		csp:          cspPolicy(cfg.Domain),
+		csp:          cspPolicy(cfg.Domain, cfg.AllowApexRedirect),
 		pages:        tmpls,
 		adminPages:   adminTmpls,
 		emailTmpl:    emailTmpl,
@@ -83,6 +84,12 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	// Anti-replay reads the clock through s.now so tests sharing a fake clock stay
 	// consistent with the rest of the server.
 	s.totpReplay = newTOTPReplay(func() time.Time { return s.now() })
+	if s.policy.OpenRegistration() {
+		log.Printf("authz: OPEN REGISTRATION enabled (ALLOWED_EMAIL_DOMAINS contains %q): any email verified by one-time code is admitted as a user. Private apps behind this auth must gate by group or domain, not a bare `import protected`. On a shared server prefer OPEN_REGISTRATION_HOSTS, which opens one app only.", authz.Wildcard)
+	}
+	if len(cfg.OpenRegistrationHosts) > 0 {
+		log.Printf("authz: guest sign-in open for %s: an OTP-verified address outside the allow-list becomes a guest, admitted only by guards that set guests=allow (protected_open).", strings.Join(cfg.OpenRegistrationHosts, ", "))
+	}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -146,11 +153,17 @@ func (s *Server) routes() http.Handler {
 // Safari, and newer Firefox silently refuse to follow a form-submission redirect
 // whose target isn't listed in form-action, stranding a freshly-authenticated
 // user on the auth host. The permitted set mirrors exactly what servedTarget
-// already allows as a post-login destination (subdomains of cfg.Domain); an
+// already allows as a post-login destination: subdomains of cfg.Domain, plus
+// the bare apex when ALLOW_APEX_REDIRECT is on — https://*.<domain> does not
+// match <domain> itself, and Safari enforces form-action on the redirect, so
+// an apex destination the policy omits fails silently there (2026-09-21). An
 // off-domain form post stays blocked.
-func cspPolicy(domain string) string {
+func cspPolicy(domain string, allowApex bool) string {
 	formAction := "'self'"
 	if d := strings.TrimPrefix(domain, "."); d != "" {
+		if allowApex {
+			formAction += " https://" + d
+		}
 		formAction += " https://*." + d
 	}
 	return "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action " + formAction + "; base-uri 'none'; frame-ancestors 'none'"

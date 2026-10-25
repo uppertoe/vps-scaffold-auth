@@ -22,10 +22,18 @@ type pageData struct {
 	Message  string
 	Remember bool
 	LogoURL  string
-	// Identity / LoginURL / BreakGlass drive the access-denied page.
+	// LoginNotice is an optional operator-set instruction line rendered on the
+	// sign-in page (from the LOGIN_NOTICE env var). Rendered auto-escaped as
+	// plain text by html/template — never as template.HTML.
+	LoginNotice string
+	// Identity / LoginURL / BreakGlass / Guest drive the access-denied page.
+	// LogoutURL is the sign-out link offered to a guest there, who must sign out
+	// before signing in again with an approved address.
 	Identity   string
 	LoginURL   string
+	LogoutURL  string
 	BreakGlass bool
+	Guest      bool
 	// EmergencyOffer drives the one-tap "Use emergency access" button on the
 	// denial page: it appears only when the visitor arrived carrying a valid
 	// break-glass offer cookie (they scanned a card while already signed in and
@@ -112,6 +120,7 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 	// Fill domain-derived UX fields on the login page (hint line + email
 	// placeholder), so even a direct visit tells the user which domain to use.
 	if page == "login" {
+		data.LoginNotice = s.cfg.LoginNotice
 		s.applyLoginBranding(&data)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
