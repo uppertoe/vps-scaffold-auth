@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -252,9 +255,10 @@ func TestBrandingColorsPersistAndLogoServed(t *testing.T) {
 		t.Fatalf("logo route: status=%d type=%q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 
-	// Login page references the logo.
-	if body := c.get("/login", nil).Body.String(); !strings.Contains(body, `src="/logo.img"`) {
-		t.Error("login page does not show the branding logo")
+	// Login page references the logo at its versioned address.
+	logoSrc := `src="/logo.img?v=` + logoVersion([]byte{0x89, 'P', 'N', 'G', 1, 2}) + `"`
+	if body := c.get("/login", nil).Body.String(); !strings.Contains(body, logoSrc) {
+		t.Errorf("login page does not show the branding logo at %s", logoSrc)
 	}
 
 	// Admin branding page reflects saved colours.
@@ -368,4 +372,77 @@ func extractCSRF(t *testing.T, body string) string {
 	rest := body[i+len(marker):]
 	j := strings.IndexByte(rest, '"')
 	return rest[:j]
+}
+
+// The logo's versioned URL is cached for a year; any other request revalidates
+// by ETag, so a stale or invented version never pins an old logo.
+func TestLogoCacheHeaders(t *testing.T) {
+	srv, _ := testServer(t)
+	ctx := context.Background()
+	logo := []byte{0x89, 'P', 'N', 'G', 7, 8, 9}
+	if err := srv.store.SetBrandingImage(ctx, store.BrandingLogo, logo, "image/png"); err != nil {
+		t.Fatal(err)
+	}
+	v := logoVersion(logo)
+	c := newClient(t, srv.Handler())
+
+	rec := c.get("/logo.img?v="+v, nil)
+	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("versioned logo Cache-Control = %q", got)
+	}
+	if got := rec.Header().Get("ETag"); got != `"`+v+`"` {
+		t.Errorf("ETag = %q", got)
+	}
+	if got := rec.Header().Get("Content-Security-Policy"); got != "default-src 'none'; sandbox" {
+		t.Errorf("logo CSP = %q, want the sandboxed image policy", got)
+	}
+
+	for _, target := range []string{"/logo.img", "/logo.img?v=0000000000000000"} {
+		if got := c.get(target, nil).Header().Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("%s Cache-Control = %q, want no-cache", target, got)
+		}
+	}
+
+	rec = c.get("/logo.img", map[string]string{"If-None-Match": `"` + v + `"`})
+	if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
+		t.Errorf("If-None-Match: status=%d body=%d bytes, want 304 and no body", rec.Code, rec.Body.Len())
+	}
+	if got := rec.Header().Get("Content-Security-Policy"); got != "default-src 'none'; sandbox" {
+		t.Errorf("304 CSP = %q, want the sandboxed image policy", got)
+	}
+
+	// Pages keep no-store.
+	if got := c.get("/login", nil).Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("login page Cache-Control = %q, want no-store", got)
+	}
+}
+
+// A logo saved in the admin UI reaches the sign-in page at once, despite the
+// logo cache.
+func TestLogoCacheClearedOnBrandingSave(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	upload := func(logo []byte) {
+		tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		mw.WriteField("csrf", tok)
+		fw, _ := mw.CreateFormFile("logo", "logo.png")
+		fw.Write(logo)
+		mw.Close()
+		req := httptest.NewRequest(http.MethodPost, "/admin/branding", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		if rec := c.do(req); rec.Code >= 400 {
+			t.Fatalf("branding upload: status %d", rec.Code)
+		}
+	}
+	anon := newClient(t, srv.Handler())
+	for _, logo := range [][]byte{[]byte("\x89PNG\r\n\x1a\nfirst"), []byte("\x89PNG\r\n\x1a\nsecond")} {
+		upload(logo)
+		want := `src="/logo.img?v=` + logoVersion(logo) + `"`
+		if body := anon.get("/login", nil).Body.String(); !strings.Contains(body, want) {
+			t.Errorf("login page does not show %s after the save", want)
+		}
+	}
 }

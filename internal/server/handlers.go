@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -1356,16 +1358,42 @@ func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request
 // handleLogo serves the global branding logo for the public login pages.
 // Returns 404 when no logo is configured.
 func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
-	b, ok, err := s.store.GetBranding(r.Context())
+	logo, mime, v, err := s.siteLogo(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if !ok || len(b.Logo) == 0 {
+	if len(logo) == 0 {
 		http.NotFound(w, r)
 		return
 	}
-	writeImage(w, b.LogoType, b.Logo)
+	// The sign-in pages link the logo as /logo.img?v=<version of its bytes>,
+	// so that URL names one exact image and can be cached for a year without a
+	// round trip. Any other request (no v, or a v from a replaced logo)
+	// revalidates by ETag, so an out-of-date or invented v can never pin a
+	// stale logo. The logo is shown to anyone on the public sign-in pages, so
+	// shared caches may keep it.
+	etag := `"` + v + `"`
+	w.Header().Set("ETag", etag)
+	if r.URL.Query().Get("v") == v {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	// The image headers go on the 304 too: a browser refreshes its stored
+	// copy's headers from a 304, which must not drop the sandbox policy.
+	setImageHeaders(w, mime)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Write(logo)
+}
+
+// logoVersion names one exact logo: the first 16 hex digits of its SHA-256.
+func logoVersion(logo []byte) string {
+	sum := sha256.Sum256(logo)
+	return hex.EncodeToString(sum[:8])
 }
 
 // writeImage serves stored image bytes (logos, glyphs, QR PNGs). It overrides
@@ -1373,6 +1401,13 @@ func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
 // SVG served inline can never execute script or act as an active document,
 // independent of its declared content type.
 func writeImage(w http.ResponseWriter, mime string, data []byte) {
+	setImageHeaders(w, mime)
+	w.Write(data)
+}
+
+// setImageHeaders sets the headers writeImage sends, for a handler that may
+// answer 304 instead of writing the bytes.
+func setImageHeaders(w http.ResponseWriter, mime string) {
 	if mime == "" {
 		mime = "application/octet-stream"
 	}
@@ -1380,7 +1415,6 @@ func writeImage(w http.ResponseWriter, mime string, data []byte) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	w.Header().Set("Content-Disposition", "inline")
-	w.Write(data)
 }
 
 // handleHealthz is a liveness probe. It never touches the mail backend so a
