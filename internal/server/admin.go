@@ -438,12 +438,16 @@ func readUploadedImage(r *http.Request, field string) (data []byte, mime string,
 	if kind == "" {
 		return nil, "", false, errUnsupportedImage
 	}
-	if mime == "" || mime == "application/octet-stream" {
-		mime = "image/" + kind
-	}
+	// The stored type follows what the bytes are, not what the browser said,
+	// so /logo.img always serves the right Content-Type.
+	mime = map[string]string{"png": "image/png", "jpeg": "image/jpeg", "svg": "image/svg+xml"}[kind]
 	// Raster images are checked for dimensions and bit depth before they are
 	// stored (see breakglass.CheckRaster).
-	if kind != "svg" {
+	if kind == "svg" {
+		if err := breakglass.CheckSVG(data); err != nil {
+			return nil, "", false, errUnsupportedImage
+		}
+	} else {
 		if err := breakglass.CheckRaster(data); errors.Is(err, breakglass.ErrImageTooLarge) {
 			return nil, "", false, errImageTooLarge
 		} else if err != nil {

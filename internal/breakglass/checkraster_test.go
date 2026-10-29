@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"image"
 	"image/png"
+	"strings"
 	"testing"
 )
 
@@ -133,5 +134,36 @@ func TestPDFImageReencodesPNG(t *testing.T) {
 	canon, err := CanonicalPNG(bomb)
 	if err != nil || !bytes.Equal(canon, out) {
 		t.Errorf("CanonicalPNG and pdfImage disagree (err %v)", err)
+	}
+}
+
+// SVGs that make the SVG library expand or recurse without bound are refused
+// before it parses them; an ordinary logo passes.
+func TestCheckSVG(t *testing.T) {
+	logo := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs><linearGradient id="g"><stop offset="0"/><stop offset="1"/></linearGradient></defs><g><rect width="10" height="10" fill="url(#g)"/></g></svg>`)
+	if err := CheckSVG(logo); err != nil {
+		t.Fatalf("an ordinary SVG was refused: %v", err)
+	}
+	use := []byte(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><defs><path id="a" d="M0 0h1"/></defs><use xlink:href="#a"/></svg>`)
+	doctype := []byte(`<!DOCTYPE svg [<!ENTITY a "aaaa">]><svg xmlns="http://www.w3.org/2000/svg"><text>&a;</text></svg>`)
+	deep := []byte(`<svg xmlns="http://www.w3.org/2000/svg">` + strings.Repeat("<g>", maxSVGDepth+1) + strings.Repeat("</g>", maxSVGDepth+1) + `</svg>`)
+	many := []byte(`<svg xmlns="http://www.w3.org/2000/svg">` + strings.Repeat(`<rect width="1" height="1"/>`, maxSVGElements+1) + `</svg>`)
+	stops := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><linearGradient>` + strings.Repeat(`<stop/>`, maxSVGStops+1) + `</linearGradient></svg>`)
+	for name, data := range map[string][]byte{"use": use, "doctype": doctype, "deep": deep, "many": many, "stops": stops} {
+		if err := CheckSVG(data); err == nil {
+			t.Errorf("%s SVG passed CheckSVG", name)
+		}
+		if _, _, err := pdfImage(data, "image/svg+xml", 256); err == nil {
+			t.Errorf("%s SVG was rasterised for a card", name)
+		}
+	}
+}
+
+// The bytes decide an image's kind before the declared type, so a PNG labelled
+// as a JPEG is still re-encoded.
+func TestDetectImageSniffsFirst(t *testing.T) {
+	data := encodePNG(t, image.NewNRGBA(image.Rect(0, 0, 2, 2)))
+	if k := detectImage(data, "image/jpeg"); k != "png" {
+		t.Errorf("PNG bytes declared as JPEG classified %q", k)
 	}
 }
