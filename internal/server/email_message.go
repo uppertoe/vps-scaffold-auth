@@ -7,6 +7,7 @@ import (
 	"html"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
@@ -29,6 +30,12 @@ type codeEmailData struct {
 // HTML uses the embedded, accent-branded template; the colours come from the
 // admin branding (falling back to the default palette), matching the login page.
 func (s *Server) buildCodeEmail(ctx context.Context, to, code string) email.Message {
+	return s.buildCodeEmailAt(ctx, to, code, s.now())
+}
+
+// buildCodeEmailAt is buildCodeEmail at a given time, for the detached sender
+// goroutine, which must not read s.now (see publicBrandingAt).
+func (s *Server) buildCodeEmailAt(ctx context.Context, to, code string, now time.Time) email.Message {
 	mins := int(s.cfg.OTPTTL.Minutes())
 	if mins < 1 {
 		mins = 1
@@ -36,7 +43,7 @@ func (s *Server) buildCodeEmail(ctx context.Context, to, code string) email.Mess
 
 	header := breakglass.DefaultPalette.Header
 	accent := breakglass.DefaultPalette.Accent
-	if b, err := s.publicBranding(ctx); err == nil {
+	if b, err := s.publicBrandingAt(ctx, now); err == nil {
 		header = hexOrDefault(b.headerColor, header)
 		accent = hexOrDefault(b.accentColor, accent)
 	}

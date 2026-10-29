@@ -35,10 +35,17 @@ type brandingCache struct {
 // and served for another TTL, so a slow or failing store is not retried by
 // every waiting request; with no previous snapshot the error is returned.
 func (s *Server) publicBranding(ctx context.Context) (brandingSnapshot, error) {
+	return s.publicBrandingAt(ctx, s.now())
+}
+
+// publicBrandingAt is publicBranding at a given time, for a goroutine that
+// must not read s.now itself (the detached code-email sender: tests swap the
+// clock between requests, and production code never reads it off the request
+// goroutine).
+func (s *Server) publicBrandingAt(ctx context.Context, now time.Time) (brandingSnapshot, error) {
 	c := &s.branding
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := s.now()
 	if c.loaded && now.Sub(c.at) < brandingCacheTTL {
 		return c.snap, nil
 	}

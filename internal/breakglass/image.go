@@ -2,12 +2,14 @@ package breakglass
 
 import (
 	"bytes"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/jpeg" // registers JPEG for image.DecodeConfig
 	"image/png"
+	"io"
 	"math"
 	"strings"
 
@@ -22,6 +24,9 @@ import (
 func pdfImage(data []byte, mime string, size int) ([]byte, string, error) {
 	switch detectImage(data, mime) {
 	case "svg":
+		if err := CheckSVG(data); err != nil {
+			return nil, "", err
+		}
 		png, err := rasterizeSVG(data, size)
 		return png, "PNG", err
 	case "png":
@@ -93,6 +98,56 @@ func CanonicalPNG(data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// SVG limits. The SVG library expands <use> references while parsing and has
+// no bound on nesting or element count, so a 1 KB file of nested <use> copies
+// reached gigabytes, enough to kill the service and with it forward_auth for
+// every gated site. A logo or glyph needs none of these at scale.
+const (
+	maxSVGDepth    = 32
+	maxSVGElements = 4000
+	maxSVGStops    = 256
+)
+
+// ErrSVGTooComplex reports an SVG refused by CheckSVG.
+var ErrSVGTooComplex = errors.New("breakglass: svg too complex")
+
+// CheckSVG reads an SVG's XML tokens without building anything and refuses
+// <use> elements, DOCTYPE declarations (entities), nesting deeper than
+// maxSVGDepth, more than maxSVGElements elements or more than maxSVGStops
+// gradient stops. It is applied at upload and again before rasterising, so
+// SVGs stored before the limits existed are covered too.
+func CheckSVG(data []byte) error {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	depth, elements, stops := 0, 0, 0
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("breakglass: parse svg: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.Directive:
+			return ErrSVGTooComplex
+		case xml.StartElement:
+			depth++
+			elements++
+			switch strings.ToLower(t.Name.Local) {
+			case "use":
+				return ErrSVGTooComplex
+			case "stop":
+				stops++
+			}
+			if depth > maxSVGDepth || elements > maxSVGElements || stops > maxSVGStops {
+				return ErrSVGTooComplex
+			}
+		case xml.EndElement:
+			depth--
+		}
+	}
+}
+
 // checkHeader reads only the header and refuses oversized or 16-bit images,
 // returning the format ("png" or "jpeg").
 func checkHeader(data []byte) (string, error) {
@@ -118,21 +173,15 @@ func ImageKind(data []byte, mime string) string {
 
 // detectImage classifies an image by MIME hint and content sniffing.
 func detectImage(data []byte, mime string) string {
-	m := strings.ToLower(mime)
+	// The bytes decide before the declared type: a PNG uploaded as image/jpeg
+	// must still be treated (and re-encoded) as a PNG.
 	switch {
-	case strings.Contains(m, "svg"):
-		return "svg"
-	case strings.Contains(m, "png"):
-		return "png"
-	case strings.Contains(m, "jpeg"), strings.Contains(m, "jpg"):
-		return "jpeg"
-	}
-	switch {
-	case len(data) >= 8 && bytes.HasPrefix(data, []byte{0x89, 'P', 'N', 'G'}):
+	case bytes.HasPrefix(data, []byte{0x89, 'P', 'N', 'G'}):
 		return "png"
 	case len(data) >= 2 && data[0] == 0xFF && data[1] == 0xD8:
 		return "jpeg"
-	case bytes.Contains(data[:min(512, len(data))], []byte("<svg")):
+	case strings.Contains(strings.ToLower(mime), "svg"),
+		bytes.Contains(data[:min(512, len(data))], []byte("<svg")):
 		return "svg"
 	}
 	return ""
