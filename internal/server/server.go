@@ -139,7 +139,42 @@ func (s *Server) routes() http.Handler {
 	// Catch-all (all methods) so it doesn't conflict with the /admin/ subtree
 	// pattern under the Go 1.22 mux precedence rules.
 	mux.HandleFunc("/", s.handleRoot)
-	return s.securityHeaders(mux)
+	return s.securityHeaders(limitBodies(mux))
+}
+
+// Request-body ceilings. A sign-in form is a few hundred bytes; the admin
+// subtree's largest form is a branding upload (admin.go caps it at
+// maxBrandingUpload plus room for the other fields).
+const (
+	maxPublicBody = 64 << 10
+	maxAdminBody  = maxBrandingUpload + 64<<10
+)
+
+// limitBodies caps every request body before any handler reads it. Without
+// it, r.PostFormValue on a public form parses a multipart body of any size,
+// holding up to 32 MiB in memory and spooling the rest to /tmp (a tmpfs, so
+// also memory), before the handler has checked anything: a few anonymous
+// requests could exhaust the container and take down forward_auth for every
+// gated site. On a public route, a body that declares a larger size is refused
+// at once with 413; one that grows past the cap while being read fails to
+// parse, and the handler sees empty fields, as for any malformed form. The
+// /admin/ subtree gets the larger ceiling and no early refusal, so an
+// over-size branding upload reaches the handler's own "Upload too large" page;
+// requireAdmin still runs before any admin handler reads.
+func limitBodies(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		limit := int64(maxPublicBody)
+		admin := strings.HasPrefix(r.URL.Path, "/admin/")
+		if admin {
+			limit = maxAdminBody
+		}
+		if !admin && r.ContentLength > limit {
+			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // cspPolicy builds the single Content-Security-Policy applied to every HTML
