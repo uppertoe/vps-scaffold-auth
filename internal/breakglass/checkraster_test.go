@@ -68,22 +68,70 @@ func pngWith(t *testing.T, w, h int, raw []byte, interlace byte) []byte {
 }
 
 // A small file with a truthful header but far more pixel data than the header
-// allows (a decompression bomb for the PDF library), or too little, or an
-// interlaced image the PDF library cannot embed, is refused.
+// allows (a decompression bomb for the PDF library), or too little, is refused.
 func TestCheckRasterRefusesCraftedPNGs(t *testing.T) {
 	row := 1 + 4*MaxRasterSide
 	bomb := pngWith(t, MaxRasterSide, MaxRasterSide, make([]byte, row*MaxRasterSide*8), 0)
 	short := pngWith(t, MaxRasterSide, MaxRasterSide, make([]byte, row*10), 0)
-	interlaced := pngWith(t, 10, 10, make([]byte, 41*10), 1)
 	if len(bomb) > 64<<10 {
 		t.Fatalf("bomb is %d bytes; it should be small", len(bomb))
 	}
-	for name, data := range map[string][]byte{"bomb": bomb, "short": short, "interlaced": interlaced} {
+	for name, data := range map[string][]byte{"bomb": bomb, "short": short} {
 		if err := CheckRaster(data); err == nil {
 			t.Errorf("%s PNG passed CheckRaster", name)
 		}
 	}
 	if err := CheckRaster(pngWith(t, 10, 10, make([]byte, 41*10), 0)); err != nil {
 		t.Errorf("a well-formed PNG was refused: %v", err)
+	}
+}
+
+// hiddenStreamPNG is a valid 1x1 RGBA PNG to Go, whose pHYs chunk is longer
+// than its 9 standard bytes. Go skips the declared length; the PDF library
+// reads 9 bytes and a CRC, then parses the rest of the payload as chunks and
+// finds a hidden IDAT that inflates to `inflated` bytes.
+func hiddenStreamPNG(t *testing.T, inflated int) []byte {
+	t.Helper()
+	chunk := func(typ string, data []byte) []byte {
+		var b bytes.Buffer
+		binary.Write(&b, binary.BigEndian, uint32(len(data)))
+		b.WriteString(typ)
+		b.Write(data)
+		binary.Write(&b, binary.BigEndian, crc32.ChecksumIEEE(append([]byte(typ), data...)))
+		return b.Bytes()
+	}
+	var z bytes.Buffer
+	zw, _ := zlib.NewWriterLevel(&z, zlib.BestCompression)
+	zeros := make([]byte, 1<<20)
+	for n := 0; n < inflated; n += len(zeros) {
+		zw.Write(zeros)
+	}
+	zw.Close()
+	var hidden bytes.Buffer
+	hidden.Write(make([]byte, 9+4))
+	hidden.Write(chunk("IDAT", z.Bytes()))
+	hidden.Write(chunk("IEND", nil))
+	img := image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	img.Pix[3] = 128
+	real := encodePNG(t, img)
+	out := append([]byte{}, real[:33]...) // signature and IHDR
+	out = append(out, chunk("pHYs", hidden.Bytes())...)
+	return append(out, real[33:]...)
+}
+
+// The PDF library never receives an uploaded PNG's own bytes: Go re-encodes it,
+// so a hidden pixel stream that Go skips cannot reach the PDF library.
+func TestPDFImageReencodesPNG(t *testing.T) {
+	bomb := hiddenStreamPNG(t, 64<<20)
+	out, typ, err := pdfImage(bomb, "image/png", 256)
+	if err != nil {
+		t.Fatalf("pdfImage refused a PNG that Go decodes: %v", err)
+	}
+	if typ != "PNG" || len(out) > 1<<10 || bytes.Contains(out, []byte("pHYs")) {
+		t.Errorf("pdfImage passed on %d bytes (type %s); want Go's small re-encoding", len(out), typ)
+	}
+	canon, err := CanonicalPNG(bomb)
+	if err != nil || !bytes.Equal(canon, out) {
+		t.Errorf("CanonicalPNG and pdfImage disagree (err %v)", err)
 	}
 }

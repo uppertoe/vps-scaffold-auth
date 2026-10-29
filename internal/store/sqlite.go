@@ -748,7 +748,7 @@ func (s *SQLite) RecordAuthEvent(ctx context.Context, e AuthEvent) error {
 }
 
 // HasRecentLogin reports whether email signed in successfully from clientIP at
-// or after since. The (email, created_at) index keeps it cheap.
+// or after since. The partial index idx_auth_events_login answers it alone.
 func (s *SQLite) HasRecentLogin(ctx context.Context, email, clientIP string, since time.Time) (bool, error) {
 	var one int
 	err := s.db.QueryRowContext(ctx,

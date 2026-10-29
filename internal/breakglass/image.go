@@ -25,10 +25,13 @@ func pdfImage(data []byte, mime string, size int) ([]byte, string, error) {
 		png, err := rasterizeSVG(data, size)
 		return png, "PNG", err
 	case "png":
-		if err := CheckRaster(data); err != nil {
+		// Never the stored bytes: see CanonicalPNG. This also covers images
+		// stored before uploads were re-encoded.
+		canon, err := CanonicalPNG(data)
+		if err != nil {
 			return nil, "", err
 		}
-		return data, "PNG", nil
+		return canon, "PNG", nil
 	case "jpeg":
 		if err := CheckRaster(data); err != nil {
 			return nil, "", err
@@ -50,37 +53,61 @@ const MaxRasterSide = 1000
 // or bit depth.
 var ErrImageTooLarge = errors.New("breakglass: image too large to embed")
 
-// CheckRaster reads only a PNG or JPEG's header and refuses dimensions over
-// MaxRasterSide or 16-bit colour (which doubles the decoded size). It is
-// applied at upload and again before embedding, so images stored before the
-// limit existed are covered too.
+// CheckRaster refuses a PNG or JPEG whose header declares more than
+// MaxRasterSide on either side or 16-bit colour (which doubles the decoded
+// size), and a PNG whose pixel data Go cannot decode within those bounds. It
+// is applied at upload and again before embedding. On its own it does not make
+// a PNG safe to hand to the PDF library, which parses PNG chunks differently
+// from Go: use CanonicalPNG for that.
 func CheckRaster(data []byte) error {
-	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
+	format, err := checkHeader(data)
+	if err != nil || format != "png" {
+		return err
+	}
+	if _, err := png.Decode(bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("breakglass: unreadable image: %w", err)
 	}
+	return nil
+}
+
+// CanonicalPNG returns the image re-encoded by Go's own PNG encoder, after the
+// header checks. The PDF library reads some chunks by a fixed length rather
+// than the declared one, so an uploaded file can look like a small, valid PNG
+// to Go while hiding a second pixel stream that the PDF library inflates
+// without bound (a 2 MB upload can reach gigabytes and kill the service, and
+// forward_auth for every gated site with it). Bytes written by Go's encoder
+// hold only what Go decoded: no hidden chunks, no interlacing, which the PDF
+// library cannot embed. The decoded image is at most MaxRasterSide square.
+func CanonicalPNG(data []byte) ([]byte, error) {
+	if _, err := checkHeader(data); err != nil {
+		return nil, err
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("breakglass: unreadable image: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("breakglass: re-encode image: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// checkHeader reads only the header and refuses oversized or 16-bit images,
+// returning the format ("png" or "jpeg").
+func checkHeader(data []byte) (string, error) {
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("breakglass: unreadable image: %w", err)
+	}
 	if cfg.Width > MaxRasterSide || cfg.Height > MaxRasterSide {
-		return ErrImageTooLarge
+		return "", ErrImageTooLarge
 	}
 	switch cfg.ColorModel {
 	case color.RGBA64Model, color.NRGBA64Model, color.Gray16Model:
-		return ErrImageTooLarge
+		return "", ErrImageTooLarge
 	}
-	if format == "png" {
-		// The header alone is not enough for PNG: the PDF library inflates the
-		// whole pixel stream without bound, so a small file with a truthful
-		// 1000 px header and a crafted stream can expand to gigabytes. A full
-		// decode, bounded by the header just checked, refuses surplus or short
-		// pixel data. The PDF library also cannot embed interlaced PNGs (IHDR
-		// byte 12), which would break every card that uses the image.
-		if len(data) > 28 && data[28] != 0 {
-			return ErrImageTooLarge
-		}
-		if _, err := png.Decode(bytes.NewReader(data)); err != nil {
-			return fmt.Errorf("breakglass: unreadable image: %w", err)
-		}
-	}
-	return nil
+	return format, nil
 }
 
 // ImageKind classifies uploaded image bytes as "png", "jpeg", "svg", or ""

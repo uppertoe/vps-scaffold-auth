@@ -450,6 +450,16 @@ func readUploadedImage(r *http.Request, field string) (data []byte, mime string,
 			return nil, "", false, errUnsupportedImage
 		}
 	}
+	// A PNG is stored as Go re-encoded it, so the stored bytes never carry
+	// chunks that the PDF library would read differently (see
+	// breakglass.CanonicalPNG).
+	if kind == "png" {
+		canon, err := breakglass.CanonicalPNG(data)
+		if err != nil {
+			return nil, "", false, errUnsupportedImage
+		}
+		data, mime = canon, "image/png"
+	}
 	return data, mime, true, nil
 }
 
