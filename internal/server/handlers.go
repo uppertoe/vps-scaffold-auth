@@ -632,7 +632,7 @@ func (s *Server) sendCode(r *http.Request, emailAddr string, now time.Time) erro
 		// performed would be a (small) timing difference from the decoy path.
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		msg := s.buildCodeEmail(ctx, emailAddr, code)
+		msg := s.buildCodeEmailAt(ctx, emailAddr, code, now)
 		if err := s.sender.Send(ctx, msg); err != nil {
 			log.Printf("send code to %s: %v", emailAddr, err)
 		}
