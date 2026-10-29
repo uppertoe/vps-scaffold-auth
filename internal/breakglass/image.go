@@ -2,8 +2,11 @@ package breakglass
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image"
+	"image/color"
+	_ "image/jpeg" // registers JPEG for image.DecodeConfig
 	"image/png"
 	"math"
 	"strings"
@@ -22,12 +25,48 @@ func pdfImage(data []byte, mime string, size int) ([]byte, string, error) {
 		png, err := rasterizeSVG(data, size)
 		return png, "PNG", err
 	case "png":
+		if err := CheckRaster(data); err != nil {
+			return nil, "", err
+		}
 		return data, "PNG", nil
 	case "jpeg":
+		if err := CheckRaster(data); err != nil {
+			return nil, "", err
+		}
 		return data, "JPG", nil
 	default:
 		return nil, "", fmt.Errorf("breakglass: unsupported image type %q", mime)
 	}
+}
+
+// MaxRasterSide bounds a PNG or JPEG's width and height in pixels. The PDF
+// library decodes the whole image to embed it, so a small file declaring large
+// dimensions costs memory: about 20 MB at 1000 px a side for 8-bit RGBA, but
+// over 128 MB at 3000 px, enough to kill the service and with it forward_auth
+// for every gated site. Cards draw images at 256 px, so 1000 px loses nothing.
+const MaxRasterSide = 1000
+
+// ErrImageTooLarge reports an image refused by CheckRaster for its dimensions
+// or bit depth.
+var ErrImageTooLarge = errors.New("breakglass: image too large to embed")
+
+// CheckRaster reads only a PNG or JPEG's header and refuses dimensions over
+// MaxRasterSide or 16-bit colour (which doubles the decoded size). It is
+// applied at upload and again before embedding, so images stored before the
+// limit existed are covered too.
+func CheckRaster(data []byte) error {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("breakglass: unreadable image: %w", err)
+	}
+	if cfg.Width > MaxRasterSide || cfg.Height > MaxRasterSide {
+		return ErrImageTooLarge
+	}
+	switch cfg.ColorModel {
+	case color.RGBA64Model, color.NRGBA64Model, color.Gray16Model:
+		return ErrImageTooLarge
+	}
+	return nil
 }
 
 // ImageKind classifies uploaded image bytes as "png", "jpeg", "svg", or ""

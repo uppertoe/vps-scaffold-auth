@@ -364,6 +364,9 @@ type Store interface {
 	// ListAuthEvents returns login-flow events, newest first, paginated. An empty
 	// email lists across all addresses.
 	ListAuthEvents(ctx context.Context, email string, limit, offset int) ([]AuthEvent, error)
+	// HasRecentLogin reports whether email signed in successfully from
+	// clientIP at or after since (an AuthEventLogin with AuthOutcomeOK).
+	HasRecentLogin(ctx context.Context, email, clientIP string, since time.Time) (bool, error)
 	// RecordAppAccess records one app access, deduplicated on
 	// (email, host, kind, bucket): a repeat within the same hour is a no-op.
 	RecordAppAccess(ctx context.Context, a AppAccess) error

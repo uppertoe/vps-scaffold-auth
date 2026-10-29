@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"image"
 	"image/png"
 	"io"
@@ -134,7 +135,7 @@ func TestBrandingUploadFitsUnderAdminCeiling(t *testing.T) {
 	loginAs(t, c, sender, "admin@example.com", nil)
 	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
 
-	logo := testPNG(t, 610, 610, true, 1) // about 1.5 MB
+	logo := testPNG(t, 610, 610, true, 1) // about 1.5 MB, within MaxRasterSide
 	if len(logo) < 1400<<10 || len(logo) > maxBrandingUpload {
 		t.Fatalf("test logo is %d bytes, want about 1.5 MB", len(logo))
 	}
@@ -168,7 +169,7 @@ func TestBrandingRefusesHugeDimensions(t *testing.T) {
 	mw := multipart.NewWriter(&buf)
 	mw.WriteField("csrf", tok)
 	fw, _ := mw.CreateFormFile("logo", "wide.png")
-	fw.Write(testPNG(t, maxImageSide+1, 1, false, 9))
+	fw.Write(testPNG(t, breakglass.MaxRasterSide+1, 1, false, 9))
 	mw.Close()
 	req := httptest.NewRequest(http.MethodPost, "/admin/branding", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
@@ -177,5 +178,51 @@ func TestBrandingRefusesHugeDimensions(t *testing.T) {
 	}
 	if b, ok, _ := srv.store.GetBranding(context.Background()); ok && len(b.Logo) > 0 {
 		t.Error("huge image was saved")
+	}
+}
+
+// A 16-bit PNG, which decodes at twice the size, is refused.
+func TestBrandingRefuses16BitImages(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+	var img bytes.Buffer
+	if err := png.Encode(&img, image.NewNRGBA64(image.Rect(0, 0, 8, 8))); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("csrf", tok)
+	fw, _ := mw.CreateFormFile("logo", "deep.png")
+	fw.Write(img.Bytes())
+	mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/admin/branding", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if rec := c.do(req); rec.Code != http.StatusBadRequest {
+		t.Errorf("16-bit image: status %d, want 400", rec.Code)
+	}
+}
+
+// A refused image leaves the rest of the form unsaved.
+func TestRefusedImageSavesNothing(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("csrf", tok)
+	mw.WriteField("title", "Changed title")
+	fw, _ := mw.CreateFormFile("glyph", "wide.png")
+	fw.Write(testPNG(t, breakglass.MaxRasterSide+1, 1, false, 3))
+	mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/admin/branding", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if rec := c.do(req); rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", rec.Code)
+	}
+	if b, ok, _ := srv.store.GetBranding(context.Background()); ok && b.Title == "Changed title" {
+		t.Error("the title was saved although the image was refused")
 	}
 }

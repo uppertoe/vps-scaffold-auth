@@ -29,6 +29,7 @@ type Server struct {
 	secrets      *secretbox.Box
 	emailLimiter *ratelimit.Limiter // codes sent, per (address, client IP)
 	emailCeiling *ratelimit.Limiter // codes sent, per address from all IPs
+	sendsPerIP   *ratelimit.Limiter // codes sent, per client IP across all addresses
 	ipLimiter    *ratelimit.Limiter // code requests, per client IP
 	wrongCodes   *ratelimit.Limiter // wrong email or TOTP codes, per client IP
 	breakLimiter *ratelimit.Limiter // per-IP limiter for break-glass scans
@@ -41,7 +42,7 @@ type Server struct {
 	handler      http.Handler
 	now          func() time.Time
 	loc          *time.Location // timezone for rendering timestamps in the admin UI
-	logo         logoCache      // the sign-in logo (see logo_cache.go)
+	branding     brandingCache  // public branding snapshot (see logo_cache.go)
 }
 
 // New constructs a Server from its dependencies.
@@ -74,7 +75,8 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		policy:       authz.NewPolicy(cfg.AllowedDomains, cfg.AdminEmails),
 		secrets:      secrets,
 		emailLimiter: ratelimit.New(cfg.RateLimitPerEmail.Count, cfg.RateLimitPerEmail.Window),
-		emailCeiling: limiterOr(cfg.RateLimitPerEmailCeiling, config.RateLimit{Count: 30, Window: time.Hour}),
+		emailCeiling: limiterOr(cfg.RateLimitPerEmailCeiling, config.RateLimit{Count: 12, Window: time.Hour}),
+		sendsPerIP:   limiterOr(cfg.RateLimitSendsPerIP, config.RateLimit{Count: 60, Window: time.Hour}),
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
 		wrongCodes:   limiterOr(cfg.RateLimitWrongCodesPerIP, cfg.RateLimitPerIP),
 		breakLimiter: newBreakLimiter(cfg),

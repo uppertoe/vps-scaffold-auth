@@ -745,6 +745,21 @@ func (s *SQLite) RecordAuthEvent(ctx context.Context, e AuthEvent) error {
 	return err
 }
 
+// HasRecentLogin reports whether email signed in successfully from clientIP at
+// or after since. The (email, created_at) index keeps it cheap.
+func (s *SQLite) HasRecentLogin(ctx context.Context, email, clientIP string, since time.Time) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM auth_events
+		 WHERE email = ? AND created_at >= ? AND event_type = ? AND outcome = ? AND client_ip = ?
+		 LIMIT 1`,
+		email, since.Unix(), AuthEventLogin, AuthOutcomeOK, clientIP).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // ListAuthEvents returns login-flow events, newest first. Empty email = all.
 func (s *SQLite) ListAuthEvents(ctx context.Context, email string, limit, offset int) ([]AuthEvent, error) {
 	if limit <= 0 {

@@ -103,6 +103,9 @@ type Config struct {
 	RateLimitPerEmailCeiling RateLimit
 	// RateLimitPerIP caps code requests (/request) per client IP.
 	RateLimitPerIP RateLimit
+	// RateLimitSendsPerIP caps the code emails one client IP can cause, across
+	// all addresses, bounding bounce-driven damage to the mail account.
+	RateLimitSendsPerIP RateLimit
 	// RateLimitWrongCodesPerIP caps WRONG email or authenticator codes per
 	// client IP. A correct code costs nothing, so many people signing in
 	// behind one hospital NAT do not use it up.
@@ -221,7 +224,10 @@ func Load() (*Config, error) {
 	if c.RateLimitPerIP, err = getrate("RATELIMIT_PER_IP", RateLimit{60, 15 * time.Minute}); err != nil {
 		return nil, err
 	}
-	if c.RateLimitPerEmailCeiling, err = getrate("RATELIMIT_PER_EMAIL_CEILING", RateLimit{30, time.Hour}); err != nil {
+	if c.RateLimitSendsPerIP, err = getrate("RATELIMIT_SENDS_PER_IP", RateLimit{60, time.Hour}); err != nil {
+		return nil, err
+	}
+	if c.RateLimitPerEmailCeiling, err = getrate("RATELIMIT_PER_EMAIL_CEILING", RateLimit{12, time.Hour}); err != nil {
 		return nil, err
 	}
 	if c.RateLimitWrongCodesPerIP, err = getrate("RATELIMIT_WRONG_CODES_PER_IP", RateLimit{60, 15 * time.Minute}); err != nil {

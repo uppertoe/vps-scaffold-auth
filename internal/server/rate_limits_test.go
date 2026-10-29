@@ -86,3 +86,43 @@ func TestEmailCeilingBoundsDistributedFlood(t *testing.T) {
 		t.Errorf("distributed flood sent %d emails, want 2", n)
 	}
 }
+
+// An address that signed in from an IP passes the send ceilings there, so a
+// flood elsewhere cannot lock the owner out of their usual network; a new IP
+// for the same address is still bounded.
+func TestKnownDeviceBypassesCeiling(t *testing.T) {
+	srv, sender := testServerWith(t, func(c *config.Config) {
+		c.RateLimitPerEmailCeiling = config.RateLimit{Count: 1, Window: time.Hour}
+		c.OTPResendCooldown = 0
+	})
+	loginAs(t, newClient(t, srv.Handler()), sender, "owner@example.com", nil) // from 10.0.0.1
+	sentCount(sender)
+	for _, ip := range []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"} {
+		requestFrom(newClient(t, srv.Handler()), ip, "owner@example.com")
+	}
+	if n := sentCount(sender); n != 0 {
+		t.Fatalf("flood sent %d emails past an empty ceiling", n)
+	}
+	newClient(t, srv.Handler()).postForm("/request", url.Values{"email": {"owner@example.com"}})
+	if n := sentCount(sender); n != 1 {
+		t.Errorf("owner's usual IP got %d emails, want 1", n)
+	}
+	requestFrom(newClient(t, srv.Handler()), "203.0.113.9", "owner@example.com")
+	if n := sentCount(sender); n != 0 {
+		t.Errorf("an unknown IP got %d emails past the ceiling, want 0", n)
+	}
+}
+
+// One IP cannot cause more than its send cap across many addresses.
+func TestSendsPerIPCap(t *testing.T) {
+	srv, sender := testServerWith(t, func(c *config.Config) {
+		c.RateLimitSendsPerIP = config.RateLimit{Count: 2, Window: time.Hour}
+	})
+	c := newClient(t, srv.Handler())
+	for _, who := range []string{"a@example.com", "b@example.com", "c@example.com", "d@example.com"} {
+		requestFrom(c, "198.51.100.7", who)
+	}
+	if n := sentCount(sender); n != 2 {
+		t.Errorf("one IP caused %d emails, want 2", n)
+	}
+}

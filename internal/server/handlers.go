@@ -553,10 +553,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		// email, don't spend a send token. The existing code's attempt counter
 		// stays intact, so a re-request can't reset the brute-force cap — which
 		// is the guard that survives back-button / refresh / new-tab.
-	// The send allowance is per (address, client IP), so a stranger elsewhere
-	// cannot spend the owner's own; the per-address ceiling bounds a
-	// distributed flood of one inbox.
-	case s.emailLimiter.Allow(emailAddr+"|"+clientIP(r)) && s.emailCeiling.Allow(emailAddr):
+	case s.allowSend(r.Context(), emailAddr, clientIP(r), now):
 		if permitted {
 			if err := s.sendCode(r, emailAddr, now); err != nil { // SaveCode(overwrite) + email
 				log.Printf("send code to %s: %v", emailAddr, err)
@@ -577,6 +574,34 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "code", pageData{Email: emailAddr, Redirect: rd, Remember: remember})
+}
+
+// knownDeviceWindow is how far back a successful sign-in from the same client
+// IP lets an address past the send ceilings (see allowSend).
+const knownDeviceWindow = 30 * 24 * time.Hour
+
+// allowSend decides whether /request may send a code (or, for an address that
+// is not permitted, mint its decoy). The allowance is per (address, client IP),
+// so a stranger elsewhere cannot spend the owner's own. Beyond that, the
+// per-address ceiling bounds a flood of one inbox spread across many IPs, and
+// the per-IP send cap bounds the mail one client can cause across many
+// addresses. An address that signed in successfully from this same IP within
+// knownDeviceWindow passes both ceilings, so an attacker who exhausts them
+// cannot lock the owner out from their usual network. Permitted and
+// non-permitted addresses take the same path.
+func (s *Server) allowSend(ctx context.Context, emailAddr, ip string, now time.Time) bool {
+	if !s.emailLimiter.Allow(emailAddr + "|" + ip) {
+		return false
+	}
+	if s.emailCeiling.Allow(emailAddr) && s.sendsPerIP.Allow(ip) {
+		return true
+	}
+	known, err := s.store.HasRecentLogin(ctx, emailAddr, ip, now.Add(-knownDeviceWindow))
+	if err != nil {
+		log.Printf("recent-login check for %s: %v (treating as unknown)", emailAddr, err)
+		return false
+	}
+	return known
 }
 
 // sendCode generates and stores a fresh OTP code, then dispatches the email on

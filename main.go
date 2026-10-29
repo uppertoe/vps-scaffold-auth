@@ -123,7 +123,7 @@ func run() error {
 // runTOTPEnroll provisions an admin's TOTP secret out-of-band (admin-provisioned
 // model: secrets are never self-enrolled at login). Run it in the same container
 // and environment as the server so it uses the same at-rest encryption key, e.g.
-// `docker compose exec auth auth -totp-enroll you@example.com`. It prints the
+// `docker compose exec auth /app -totp-enroll you@example.com`. It prints the
 // secret once; treat that output as sensitive.
 func runTOTPEnroll(rawEmail string) int {
 	emailAddr := strings.ToLower(strings.TrimSpace(rawEmail))
