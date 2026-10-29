@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -1365,7 +1367,31 @@ func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// The sign-in pages link the logo as /logo.img?v=<version of its bytes>,
+	// so that URL names one exact image and can be cached for a year without a
+	// round trip. Any other request (no v, or a v from a replaced logo)
+	// revalidates by ETag, so an out-of-date or invented v can never pin a
+	// stale logo. The logo is shown to anyone on the public sign-in pages, so
+	// shared caches may keep it.
+	v := logoVersion(b.Logo)
+	etag := `"` + v + `"`
+	w.Header().Set("ETag", etag)
+	if r.URL.Query().Get("v") == v {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	writeImage(w, b.LogoType, b.Logo)
+}
+
+// logoVersion names one exact logo: the first 16 hex digits of its SHA-256.
+func logoVersion(logo []byte) string {
+	sum := sha256.Sum256(logo)
+	return hex.EncodeToString(sum[:8])
 }
 
 // writeImage serves stored image bytes (logos, glyphs, QR PNGs). It overrides

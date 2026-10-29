@@ -114,7 +114,7 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 	// Surface the global branding logo on the public auth pages when set.
 	if data.LogoURL == "" {
 		if b, ok, err := s.store.GetBranding(context.Background()); err == nil && ok && len(b.Logo) > 0 {
-			data.LogoURL = "/logo.img"
+			data.LogoURL = "/logo.img?v=" + logoVersion(b.Logo)
 		}
 	}
 	// Fill domain-derived UX fields on the login page (hint line + email
