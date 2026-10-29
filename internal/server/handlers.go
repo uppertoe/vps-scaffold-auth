@@ -593,8 +593,15 @@ func (s *Server) allowSend(ctx context.Context, emailAddr, ip string, now time.T
 	if !s.emailLimiter.Allow(emailAddr + "|" + ip) {
 		return false
 	}
-	if s.emailCeiling.Allow(emailAddr) && s.sendsPerIP.Allow(ip) {
-		return true
+	// The per-IP cap is charged first and refunded if the ceiling refuses, so
+	// that a request refused by either spends neither: otherwise one IP that
+	// has filled its own send cap (with decoys, sending no mail) could still
+	// drain an owner's ceiling.
+	if s.sendsPerIP.Allow(ip) {
+		if s.emailCeiling.Allow(emailAddr) {
+			return true
+		}
+		s.sendsPerIP.Refund(ip)
 	}
 	known, err := s.store.HasRecentLogin(ctx, emailAddr, ip, now.Add(-knownDeviceWindow))
 	if err != nil {
@@ -643,7 +650,11 @@ func (s *Server) storeDecoyCode(ctx context.Context, emailAddr string, now time.
 	if err != nil {
 		return err
 	}
-	return s.store.EnsureCode(ctx, emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL))
+	// Dated as if issued one cooldown ago, so it does not start the resend
+	// cooldown. Otherwise an attacker who burns the owner's code and re-requests
+	// over the limit would plant a decoy that makes the owner's own next request
+	// a no-op, before allowSend's known-device check could let it through.
+	return s.store.EnsureCode(ctx, emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL-s.cfg.OTPResendCooldown))
 }
 
 // saveDecoyCode is the decoy twin of sendCode: it overwrites any existing code

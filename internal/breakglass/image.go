@@ -55,7 +55,7 @@ var ErrImageTooLarge = errors.New("breakglass: image too large to embed")
 // applied at upload and again before embedding, so images stored before the
 // limit existed are covered too.
 func CheckRaster(data []byte) error {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("breakglass: unreadable image: %w", err)
 	}
@@ -65,6 +65,20 @@ func CheckRaster(data []byte) error {
 	switch cfg.ColorModel {
 	case color.RGBA64Model, color.NRGBA64Model, color.Gray16Model:
 		return ErrImageTooLarge
+	}
+	if format == "png" {
+		// The header alone is not enough for PNG: the PDF library inflates the
+		// whole pixel stream without bound, so a small file with a truthful
+		// 1000 px header and a crafted stream can expand to gigabytes. A full
+		// decode, bounded by the header just checked, refuses surplus or short
+		// pixel data. The PDF library also cannot embed interlaced PNGs (IHDR
+		// byte 12), which would break every card that uses the image.
+		if len(data) > 28 && data[28] != 0 {
+			return ErrImageTooLarge
+		}
+		if _, err := png.Decode(bytes.NewReader(data)); err != nil {
+			return fmt.Errorf("breakglass: unreadable image: %w", err)
+		}
 	}
 	return nil
 }

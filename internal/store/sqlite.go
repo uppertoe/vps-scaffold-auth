@@ -152,6 +152,8 @@ CREATE TABLE IF NOT EXISTS auth_events (
 );
 CREATE INDEX IF NOT EXISTS idx_auth_events_email ON auth_events(email, created_at);
 CREATE INDEX IF NOT EXISTS idx_auth_events_created ON auth_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_auth_events_login ON auth_events(email, client_ip, created_at)
+	WHERE event_type = 'login' AND outcome = 'ok';
 CREATE TABLE IF NOT EXISTS app_access (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	email      TEXT NOT NULL,
@@ -750,10 +752,12 @@ func (s *SQLite) RecordAuthEvent(ctx context.Context, e AuthEvent) error {
 func (s *SQLite) HasRecentLogin(ctx context.Context, email, clientIP string, since time.Time) (bool, error) {
 	var one int
 	err := s.db.QueryRowContext(ctx,
+		// The event type and outcome are literals so that SQLite can use the
+		// partial index idx_auth_events_login, which answers this alone.
 		`SELECT 1 FROM auth_events
-		 WHERE email = ? AND created_at >= ? AND event_type = ? AND outcome = ? AND client_ip = ?
+		 WHERE event_type = 'login' AND outcome = 'ok' AND email = ? AND client_ip = ? AND created_at >= ?
 		 LIMIT 1`,
-		email, since.Unix(), AuthEventLogin, AuthOutcomeOK, clientIP).Scan(&one)
+		email, clientIP, since.Unix()).Scan(&one)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}

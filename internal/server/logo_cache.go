@@ -17,8 +17,9 @@ const brandingCacheTTL = 30 * time.Second
 // brandingSnapshot is the part of the branding the public pages and code
 // emails use.
 type brandingSnapshot struct {
-	logo, logoType, logoVersion string
-	headerColor, accentColor    string
+	logo                     []byte // shared and never modified: callers must not write to it
+	logoType, logoVersion    string
+	headerColor, accentColor string
 }
 
 type brandingCache struct {
@@ -30,7 +31,9 @@ type brandingCache struct {
 
 // publicBranding returns the cached snapshot, reading the store when it is
 // older than brandingCacheTTL. The lock is held across the read, so a flood
-// causes one read, not many. A store error is returned and not cached.
+// causes one read, not many. If the read fails, the previous snapshot is kept
+// and served for another TTL, so a slow or failing store is not retried by
+// every waiting request; with no previous snapshot the error is returned.
 func (s *Server) publicBranding(ctx context.Context) (brandingSnapshot, error) {
 	c := &s.branding
 	c.mu.Lock()
@@ -41,13 +44,17 @@ func (s *Server) publicBranding(ctx context.Context) (brandingSnapshot, error) {
 	}
 	b, ok, err := s.store.GetBranding(ctx)
 	if err != nil {
+		if c.loaded {
+			c.at = now
+			return c.snap, nil
+		}
 		return brandingSnapshot{}, err
 	}
 	var snap brandingSnapshot
 	if ok {
 		snap.headerColor, snap.accentColor = b.HeaderColor, b.AccentColor
 		if len(b.Logo) > 0 {
-			snap.logo, snap.logoType, snap.logoVersion = string(b.Logo), b.LogoType, logoVersion(b.Logo)
+			snap.logo, snap.logoType, snap.logoVersion = b.Logo, b.LogoType, logoVersion(b.Logo)
 		}
 	}
 	c.snap, c.loaded, c.at = snap, true, now
@@ -55,13 +62,15 @@ func (s *Server) publicBranding(ctx context.Context) (brandingSnapshot, error) {
 }
 
 // siteLogo returns the sign-in logo, its type and its version (see
-// logoVersion). An empty logo means none is set.
+// logoVersion). An empty logo means none is set. The bytes are the cache's own,
+// not a copy, so that serving them costs no allocation: callers only write
+// them to a response.
 func (s *Server) siteLogo(ctx context.Context) (logo []byte, mime, version string, err error) {
 	snap, err := s.publicBranding(ctx)
-	if err != nil || snap.logo == "" {
+	if err != nil || len(snap.logo) == 0 {
 		return nil, "", "", err
 	}
-	return []byte(snap.logo), snap.logoType, snap.logoVersion, nil
+	return snap.logo, snap.logoType, snap.logoVersion, nil
 }
 
 // forgetBranding drops the cached snapshot, so the next request reads the

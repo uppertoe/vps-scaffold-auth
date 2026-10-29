@@ -126,3 +126,46 @@ func TestSendsPerIPCap(t *testing.T) {
 		t.Errorf("one IP caused %d emails, want 2", n)
 	}
 }
+
+// An over-limit decoy does not start the resend cooldown, so an attacker who
+// burns the owner's code and re-requests cannot make the owner's own request
+// from their usual IP a no-op.
+func TestOverLimitDecoyDoesNotBlockOwner(t *testing.T) {
+	srv, sender := testServerWith(t, func(c *config.Config) {
+		c.RateLimitPerEmailCeiling = config.RateLimit{Count: 1, Window: time.Hour}
+		c.OTPResendCooldown = time.Minute
+	})
+	loginAs(t, newClient(t, srv.Handler()), sender, "owner@example.com", nil) // from 10.0.0.1, spends the ceiling
+	sentCount(sender)
+	requestFrom(newClient(t, srv.Handler()), "198.51.100.1", "owner@example.com") // over the ceiling: decoy
+	if n := sentCount(sender); n != 0 {
+		t.Fatalf("attacker's over-limit request sent %d emails", n)
+	}
+	newClient(t, srv.Handler()).postForm("/request", url.Values{"email": {"owner@example.com"}})
+	if n := sentCount(sender); n != 1 {
+		t.Errorf("owner's request from the usual IP sent %d emails, want 1", n)
+	}
+}
+
+// An IP that has filled its own send cap cannot spend an owner's ceiling.
+func TestFullSendCapDoesNotDrainCeiling(t *testing.T) {
+	srv, sender := testServerWith(t, func(c *config.Config) {
+		c.RateLimitSendsPerIP = config.RateLimit{Count: 2, Window: time.Hour}
+		c.RateLimitPerEmailCeiling = config.RateLimit{Count: 1, Window: time.Hour}
+		c.OTPResendCooldown = 0
+	})
+	attacker := newClient(t, srv.Handler())
+	for _, who := range []string{"x1@example.org", "x2@example.org"} { // not permitted: decoys, no mail
+		requestFrom(attacker, "198.51.100.7", who)
+	}
+	for i := 0; i < 5; i++ {
+		requestFrom(attacker, "198.51.100.7", "victim@example.com")
+	}
+	if n := sentCount(sender); n != 0 {
+		t.Fatalf("attacker caused %d emails", n)
+	}
+	requestFrom(newClient(t, srv.Handler()), "203.0.113.9", "victim@example.com")
+	if n := sentCount(sender); n != 1 {
+		t.Errorf("victim's own request sent %d emails, want 1", n)
+	}
+}

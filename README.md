@@ -477,8 +477,10 @@ still reach an app during a time-critical event (e.g. a code stroke).
 - No user enumeration: `/request` always responds the same way, and the OTP
   email is dispatched off the request path so response timing doesn't reveal
   whether an address is permitted.
-- Rate limiting, shaped so that no stranger can lock a person out and a shared
-  egress IP (e.g. a hospital NAT) doesn't throttle many distinct users:
+- Rate limiting, shaped so that a stranger cannot spend a person's own sending
+  allowance, a person can still get a code on the network they usually sign in
+  from, and a shared egress IP (e.g. a hospital NAT) doesn't throttle many
+  distinct users who type their codes correctly:
   - code sends are limited per (address, client IP) (`RATELIMIT_PER_EMAIL`), per
     address across all IPs (`RATELIMIT_PER_EMAIL_CEILING`) and per client IP
     across all addresses (`RATELIMIT_SENDS_PER_IP`); an address that signed in
