@@ -553,7 +553,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		// email, don't spend a send token. The existing code's attempt counter
 		// stays intact, so a re-request can't reset the brute-force cap — which
 		// is the guard that survives back-button / refresh / new-tab.
-	case s.emailLimiter.Allow(emailAddr):
+	case s.allowSend(r.Context(), emailAddr, clientIP(r), now):
 		if permitted {
 			if err := s.sendCode(r, emailAddr, now); err != nil { // SaveCode(overwrite) + email
 				log.Printf("send code to %s: %v", emailAddr, err)
@@ -574,6 +574,41 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "code", pageData{Email: emailAddr, Redirect: rd, Remember: remember})
+}
+
+// knownDeviceWindow is how far back a successful sign-in from the same client
+// IP lets an address past the send ceilings (see allowSend).
+const knownDeviceWindow = 30 * 24 * time.Hour
+
+// allowSend decides whether /request may send a code (or, for an address that
+// is not permitted, mint its decoy). The allowance is per (address, client IP),
+// so a stranger elsewhere cannot spend the owner's own. Beyond that, the
+// per-address ceiling bounds a flood of one inbox spread across many IPs, and
+// the per-IP send cap bounds the mail one client can cause across many
+// addresses. An address that signed in successfully from this same IP within
+// knownDeviceWindow passes both ceilings, so an attacker who exhausts them
+// cannot lock the owner out from their usual network. Permitted and
+// non-permitted addresses take the same path.
+func (s *Server) allowSend(ctx context.Context, emailAddr, ip string, now time.Time) bool {
+	if !s.emailLimiter.Allow(emailAddr + "|" + ip) {
+		return false
+	}
+	// The per-IP cap is charged first and refunded if the ceiling refuses, so
+	// that a request refused by either spends neither: otherwise one IP that
+	// has filled its own send cap (with decoys, sending no mail) could still
+	// drain an owner's ceiling.
+	if s.sendsPerIP.Allow(ip) {
+		if s.emailCeiling.Allow(emailAddr) {
+			return true
+		}
+		s.sendsPerIP.Refund(ip)
+	}
+	known, err := s.store.HasRecentLogin(ctx, emailAddr, ip, now.Add(-knownDeviceWindow))
+	if err != nil {
+		log.Printf("recent-login check for %s: %v (treating as unknown)", emailAddr, err)
+		return false
+	}
+	return known
 }
 
 // sendCode generates and stores a fresh OTP code, then dispatches the email on
@@ -615,7 +650,11 @@ func (s *Server) storeDecoyCode(ctx context.Context, emailAddr string, now time.
 	if err != nil {
 		return err
 	}
-	return s.store.EnsureCode(ctx, emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL))
+	// Dated as if issued one cooldown ago, so it does not start the resend
+	// cooldown. Otherwise an attacker who burns the owner's code and re-requests
+	// over the limit would plant a decoy that makes the owner's own next request
+	// a no-op, before allowSend's known-device check could let it through.
+	return s.store.EnsureCode(ctx, emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL-s.cfg.OTPResendCooldown))
 }
 
 // saveDecoyCode is the decoy twin of sendCode: it overwrites any existing code
@@ -698,7 +737,10 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	if rd == "" {
 		rd = st.Redirect
 	}
-	if !s.ipLimiter.Allow(clientIP(r)) {
+	// Every attempt is charged up front, so simultaneous guesses cannot all
+	// pass the check; a correct code is refunded below, so people signing in
+	// behind one hospital NAT spend nothing.
+	if !s.wrongCodes.Allow(clientIP(r)) {
 		s.render(w, http.StatusTooManyRequests, "code", pageData{
 			Error: "Too many attempts. Please wait and try again.", Email: st.Email, Redirect: rd,
 		})
@@ -714,6 +756,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 
 	switch res {
 	case store.ConsumeOK:
+		s.wrongCodes.Refund(clientIP(r))
 		// Re-derive "open host" from the destination exactly as /request did. rd
 		// is client-influenced (the posted copy wins), so this is not what keeps
 		// strangers out: a guest session is the same whichever host minted it,
@@ -814,7 +857,8 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	if rd == "" {
 		rd = p.Redirect
 	}
-	if !s.ipLimiter.Allow(clientIP(r)) {
+	// Charged up front and refunded on a correct code, as in handleVerifyCode.
+	if !s.wrongCodes.Allow(clientIP(r)) {
 		s.render(w, http.StatusTooManyRequests, "totp", pageData{
 			Error: "Too many attempts. Please wait and try again.", Redirect: rd,
 		})
@@ -870,7 +914,9 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// TOTP satisfied: clear the failure counter and issue the session.
+	// TOTP satisfied: refund the attempt, clear the failure counter and issue
+	// the session.
+	s.wrongCodes.Refund(clientIP(r))
 	if err := s.store.ClearTOTPFailures(r.Context(), p.Email); err != nil {
 		log.Printf("clear totp failures for %s: %v", p.Email, err)
 	}

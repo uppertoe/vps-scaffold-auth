@@ -95,8 +95,21 @@ type Config struct {
 	BreakGlassPDFHeader      string
 	BreakGlassPDFBody        string
 
+	// RateLimitPerEmail caps the codes sent to one address from one client IP,
+	// so a stranger elsewhere cannot spend the owner's own allowance.
 	RateLimitPerEmail RateLimit
-	RateLimitPerIP    RateLimit
+	// RateLimitPerEmailCeiling caps the codes sent to one address from all IPs
+	// together, bounding how hard a distributed party can flood an inbox.
+	RateLimitPerEmailCeiling RateLimit
+	// RateLimitPerIP caps code requests (/request) per client IP.
+	RateLimitPerIP RateLimit
+	// RateLimitSendsPerIP caps the code emails one client IP can cause, across
+	// all addresses, bounding bounce-driven damage to the mail account.
+	RateLimitSendsPerIP RateLimit
+	// RateLimitWrongCodesPerIP caps WRONG email or authenticator codes per
+	// client IP. A correct code costs nothing, so many people signing in
+	// behind one hospital NAT do not use it up.
+	RateLimitWrongCodesPerIP RateLimit
 	// RateLimitBreakGlassPerIP throttles break-glass QR scans per client IP. It is
 	// deliberately separate from (and more generous than) RateLimitPerIP: the
 	// 128-bit token — not this limit — is the brute-force boundary at /break, so
@@ -205,11 +218,19 @@ func Load() (*Config, error) {
 	if c.RateLimitPerEmail, err = getrate("RATELIMIT_PER_EMAIL", RateLimit{5, 15 * time.Minute}); err != nil {
 		return nil, err
 	}
-	// Per-IP limit for the login flow. This is a secondary guard — the per-email
-	// limit and the per-code attempt cap are the primary brute-force bounds — so
-	// it is set generously enough not to throttle many distinct users behind one
-	// shared egress IP (e.g. a hospital or office NAT).
+	// Per-IP limit on code requests. It is set generously enough not to throttle
+	// many distinct users behind one shared egress IP (a hospital or office
+	// NAT); wrong codes have their own per-IP limit, RateLimitWrongCodesPerIP.
 	if c.RateLimitPerIP, err = getrate("RATELIMIT_PER_IP", RateLimit{60, 15 * time.Minute}); err != nil {
+		return nil, err
+	}
+	if c.RateLimitSendsPerIP, err = getrate("RATELIMIT_SENDS_PER_IP", RateLimit{60, time.Hour}); err != nil {
+		return nil, err
+	}
+	if c.RateLimitPerEmailCeiling, err = getrate("RATELIMIT_PER_EMAIL_CEILING", RateLimit{12, time.Hour}); err != nil {
+		return nil, err
+	}
+	if c.RateLimitWrongCodesPerIP, err = getrate("RATELIMIT_WRONG_CODES_PER_IP", RateLimit{60, 15 * time.Minute}); err != nil {
 		return nil, err
 	}
 	if c.RateLimitBreakGlassPerIP, err = getrate("RATELIMIT_BREAKGLASS_PER_IP", RateLimit{60, 5 * time.Minute}); err != nil {

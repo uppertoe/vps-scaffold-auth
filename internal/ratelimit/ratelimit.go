@@ -22,6 +22,7 @@ type Limiter struct {
 	rate    float64 // tokens per second
 	window  time.Duration
 	now     func() time.Time
+	lastGC  time.Time
 }
 
 // New returns a Limiter permitting count events per window per key.
@@ -40,23 +41,7 @@ func New(count int, window time.Duration) *Limiter {
 func (l *Limiter) Allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
-	now := l.now()
-	b, ok := l.buckets[key]
-	if !ok {
-		// First sighting starts full, then immediately spends one token.
-		b = &bucket{tokens: l.count, lastSeen: now}
-		l.buckets[key] = b
-		l.gc(now)
-	} else {
-		elapsed := now.Sub(b.lastSeen).Seconds()
-		b.tokens += elapsed * l.rate
-		if b.tokens > l.count {
-			b.tokens = l.count
-		}
-		b.lastSeen = now
-	}
-
+	b := l.refill(key)
 	if b.tokens >= 1 {
 		b.tokens--
 		return true
@@ -64,16 +49,57 @@ func (l *Limiter) Allow(key string) bool {
 	return false
 }
 
-// gc opportunistically drops idle buckets so the map cannot grow without
-// bound. Called while the lock is held, and only when the map is large.
+// Refund returns one token to key, up to the limit: for a caller that charges
+// every attempt up front, so that simultaneous attempts cannot all pass a
+// check before any is charged, and gives the token back when the outcome
+// should be free (a correct code).
+func (l *Limiter) Refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := l.refill(key)
+	if b.tokens++; b.tokens > l.count {
+		b.tokens = l.count
+	}
+}
+
+// refill returns key's bucket, created full on first sighting and topped up
+// for the time since it was last seen. Called with the lock held.
+func (l *Limiter) refill(key string) *bucket {
+	now := l.now()
+	b, ok := l.buckets[key]
+	if !ok {
+		b = &bucket{tokens: l.count, lastSeen: now}
+		l.buckets[key] = b
+		l.gc(now)
+		return b
+	}
+	b.tokens += now.Sub(b.lastSeen).Seconds() * l.rate
+	if b.tokens > l.count {
+		b.tokens = l.count
+	}
+	b.lastSeen = now
+	return b
+}
+
+// gc drops buckets that have refilled completely: a full bucket behaves
+// exactly like an absent one, so dropping it changes no decision. Each bucket
+// is full again within window/count of its last token being spent, so under a
+// spray of new keys the map holds only recent activity. gc runs while the lock
+// is held, only once the map is large, and at most once per gcInterval, so a
+// spray cannot make every insert pay for a full sweep.
 func (l *Limiter) gc(now time.Time) {
-	if len(l.buckets) < 10000 {
+	if len(l.buckets) < gcThreshold || now.Sub(l.lastGC) < gcInterval {
 		return
 	}
-	cutoff := now.Add(-l.window)
+	l.lastGC = now
 	for k, b := range l.buckets {
-		if b.lastSeen.Before(cutoff) {
+		if b.tokens+now.Sub(b.lastSeen).Seconds()*l.rate >= l.count {
 			delete(l.buckets, k)
 		}
 	}
 }
+
+const (
+	gcThreshold = 1000
+	gcInterval  = time.Second
+)

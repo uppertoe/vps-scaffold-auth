@@ -2,8 +2,11 @@ package breakglass
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image"
+	"image/color"
+	_ "image/jpeg" // registers JPEG for image.DecodeConfig
 	"image/png"
 	"math"
 	"strings"
@@ -22,12 +25,89 @@ func pdfImage(data []byte, mime string, size int) ([]byte, string, error) {
 		png, err := rasterizeSVG(data, size)
 		return png, "PNG", err
 	case "png":
-		return data, "PNG", nil
+		// Never the stored bytes: see CanonicalPNG. This also covers images
+		// stored before uploads were re-encoded.
+		canon, err := CanonicalPNG(data)
+		if err != nil {
+			return nil, "", err
+		}
+		return canon, "PNG", nil
 	case "jpeg":
+		if err := CheckRaster(data); err != nil {
+			return nil, "", err
+		}
 		return data, "JPG", nil
 	default:
 		return nil, "", fmt.Errorf("breakglass: unsupported image type %q", mime)
 	}
+}
+
+// MaxRasterSide bounds a PNG or JPEG's width and height in pixels. The PDF
+// library decodes the whole image to embed it, so a small file declaring large
+// dimensions costs memory: about 20 MB at 1000 px a side for 8-bit RGBA, but
+// over 128 MB at 3000 px, enough to kill the service and with it forward_auth
+// for every gated site. Cards draw images at 256 px, so 1000 px loses nothing.
+const MaxRasterSide = 1000
+
+// ErrImageTooLarge reports an image refused by CheckRaster for its dimensions
+// or bit depth.
+var ErrImageTooLarge = errors.New("breakglass: image too large to embed")
+
+// CheckRaster refuses a PNG or JPEG whose header declares more than
+// MaxRasterSide on either side or 16-bit colour (which doubles the decoded
+// size), and a PNG whose pixel data Go cannot decode within those bounds. It
+// is applied at upload and again before embedding. On its own it does not make
+// a PNG safe to hand to the PDF library, which parses PNG chunks differently
+// from Go: use CanonicalPNG for that.
+func CheckRaster(data []byte) error {
+	format, err := checkHeader(data)
+	if err != nil || format != "png" {
+		return err
+	}
+	if _, err := png.Decode(bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("breakglass: unreadable image: %w", err)
+	}
+	return nil
+}
+
+// CanonicalPNG returns the image re-encoded by Go's own PNG encoder, after the
+// header checks. The PDF library reads some chunks by a fixed length rather
+// than the declared one, so an uploaded file can look like a small, valid PNG
+// to Go while hiding a second pixel stream that the PDF library inflates
+// without bound (a 2 MB upload can reach gigabytes and kill the service, and
+// forward_auth for every gated site with it). Bytes written by Go's encoder
+// hold only what Go decoded: no hidden chunks, no interlacing, which the PDF
+// library cannot embed. The decoded image is at most MaxRasterSide square.
+func CanonicalPNG(data []byte) ([]byte, error) {
+	if _, err := checkHeader(data); err != nil {
+		return nil, err
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("breakglass: unreadable image: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("breakglass: re-encode image: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// checkHeader reads only the header and refuses oversized or 16-bit images,
+// returning the format ("png" or "jpeg").
+func checkHeader(data []byte) (string, error) {
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("breakglass: unreadable image: %w", err)
+	}
+	if cfg.Width > MaxRasterSide || cfg.Height > MaxRasterSide {
+		return "", ErrImageTooLarge
+	}
+	switch cfg.ColorModel {
+	case color.RGBA64Model, color.NRGBA64Model, color.Gray16Model:
+		return "", ErrImageTooLarge
+	}
+	return format, nil
 }
 
 // ImageKind classifies uploaded image bytes as "png", "jpeg", "svg", or ""

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -438,11 +439,33 @@ func TestLogoCacheClearedOnBrandingSave(t *testing.T) {
 		}
 	}
 	anon := newClient(t, srv.Handler())
-	for _, logo := range [][]byte{[]byte("\x89PNG\r\n\x1a\nfirst"), []byte("\x89PNG\r\n\x1a\nsecond")} {
+	for _, logo := range [][]byte{testPNG(t, 8, 8, false, 1), testPNG(t, 8, 8, false, 2)} {
 		upload(logo)
 		want := `src="/logo.img?v=` + logoVersion(logo) + `"`
 		if body := anon.get("/login", nil).Body.String(); !strings.Contains(body, want) {
 			t.Errorf("login page does not show %s after the save", want)
 		}
+	}
+}
+
+// Rendering a public page does not copy the logo: anonymous GET /login has no
+// rate limit, so a per-page copy of a 2 MB logo would be a cheap way to
+// exhaust memory.
+func TestLoginPageDoesNotCopyLogo(t *testing.T) {
+	srv, _ := testServer(t)
+	logo := testPNG(t, 700, 700, true, 5) // about 2 MB
+	if err := srv.store.SetBrandingImage(context.Background(), store.BrandingLogo, logo, "image/png"); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(t, srv.Handler())
+	c.get("/login", nil) // load the cache
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := 0; i < 20; i++ {
+		c.get("/login", nil)
+	}
+	runtime.ReadMemStats(&after)
+	if perPage := (after.TotalAlloc - before.TotalAlloc) / 20; perPage > uint64(len(logo))/4 {
+		t.Errorf("each /login allocated %d bytes with a %d-byte logo", perPage, len(logo))
 	}
 }

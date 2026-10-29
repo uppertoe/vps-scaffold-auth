@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -306,16 +307,24 @@ func (s *Server) handleAdminBranding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request) {
-	// Whatever this request changes, the sign-in pages read the logo afresh.
-	defer s.forgetLogo()
+	allowSlowUpload(w)
+	// Whatever this request changes, the sign-in pages and emails read the
+	// branding afresh.
+	defer s.forgetBranding()
 	r.Body = http.MaxBytesReader(w, r.Body, maxBrandingUpload+64<<10)
 	if err := r.ParseMultipartForm(maxBrandingUpload); err != nil {
 		s.renderAdmin(w, r, http.StatusRequestEntityTooLarge, "admin_message", adminData{
-			Title: "Upload too large", Message: "Logo and glyph uploads must be under 2 MB.",
+			Title: "Upload too large", Message: "The images in one upload must total less than 2 MB.",
 		})
 		return
 	}
 	if !s.checkCSRF(w, r) {
+		return
+	}
+	// Check every image before saving anything, so a refused image does not
+	// leave the text and colours half saved.
+	if err := validateImageFields(r, "logo", "pdflogo", "glyph"); err != nil {
+		s.brandingUploadError(w, r)
 		return
 	}
 	if err := s.store.SaveBrandingText(r.Context(),
@@ -349,6 +358,33 @@ func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request)
 	}
 	s.auditAdmin(r, store.AdminActionBrandingUpdate, "global", "")
 	http.Redirect(w, r, "/admin/branding", http.StatusFound)
+}
+
+// allowSlowUpload gives an admin's branding upload two minutes to arrive. The
+// server's 15-second read and write timeouts would otherwise cut off a 2 MB
+// upload on a link slower than about 1 Mbit/s: the write deadline also runs
+// from when the request began, so it is extended past the read deadline or
+// the admin would see an error after the upload had in fact been saved. Only
+// admin routes call it, after requireAdmin, so an anonymous client cannot use
+// it to hold connections open.
+func allowSlowUpload(w http.ResponseWriter) {
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(2 * time.Minute))
+	_ = rc.SetWriteDeadline(time.Now().Add(2*time.Minute + 15*time.Second))
+}
+
+// validateImageFields checks each named upload (one being removed is skipped)
+// without storing anything.
+func validateImageFields(r *http.Request, fields ...string) error {
+	for _, f := range fields {
+		if r.PostFormValue("remove_"+f) != "" {
+			continue
+		}
+		if _, _, _, err := readUploadedImage(r, f); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // applyImageField stores an uploaded global-branding image, or clears it when
@@ -405,12 +441,32 @@ func readUploadedImage(r *http.Request, field string) (data []byte, mime string,
 	if mime == "" || mime == "application/octet-stream" {
 		mime = "image/" + kind
 	}
+	// Raster images are checked for dimensions and bit depth before they are
+	// stored (see breakglass.CheckRaster).
+	if kind != "svg" {
+		if err := breakglass.CheckRaster(data); errors.Is(err, breakglass.ErrImageTooLarge) {
+			return nil, "", false, errImageTooLarge
+		} else if err != nil {
+			return nil, "", false, errUnsupportedImage
+		}
+	}
+	// A PNG is stored as Go re-encoded it, so the stored bytes never carry
+	// chunks that the PDF library would read differently (see
+	// breakglass.CanonicalPNG).
+	if kind == "png" {
+		canon, err := breakglass.CanonicalPNG(data)
+		if err != nil {
+			return nil, "", false, errUnsupportedImage
+		}
+		data, mime = canon, "image/png"
+	}
 	return data, mime, true, nil
 }
 
 var (
 	errUploadTooLarge   = &uploadErr{"too large"}
 	errUnsupportedImage = &uploadErr{"unsupported type"}
+	errImageTooLarge    = &uploadErr{"dimensions too large"}
 )
 
 type uploadErr struct{ msg string }
@@ -420,7 +476,7 @@ func (e *uploadErr) Error() string { return e.msg }
 func (s *Server) brandingUploadError(w http.ResponseWriter, r *http.Request) {
 	s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 		Title:   "Could not save image",
-		Message: "Logos and glyphs must be PNG, JPEG, or SVG and under 2 MB.",
+		Message: "Logos and glyphs must be PNG, JPEG or SVG files under 2 MB, and no more than 1,000 pixels wide or high.",
 	})
 }
 
@@ -848,10 +904,11 @@ func (s *Server) codeBrandingView(ctx context.Context, codeID int64) codeBrandin
 
 // handleAdminSaveCodeBranding stores a code's per-code branding overrides.
 func (s *Server) handleAdminSaveCodeBranding(w http.ResponseWriter, r *http.Request) {
+	allowSlowUpload(w)
 	r.Body = http.MaxBytesReader(w, r.Body, maxBrandingUpload+64<<10)
 	if err := r.ParseMultipartForm(maxBrandingUpload); err != nil {
 		s.renderAdmin(w, r, http.StatusRequestEntityTooLarge, "admin_message", adminData{
-			Title: "Upload too large", Message: "Logo and glyph uploads must be under 2 MB.",
+			Title: "Upload too large", Message: "The images in one upload must total less than 2 MB.",
 		})
 		return
 	}
@@ -871,6 +928,10 @@ func (s *Server) handleAdminSaveCodeBranding(w http.ResponseWriter, r *http.Requ
 		bar1 = hexOrDefault(r.PostFormValue("bar1_color"), breakglass.DefaultPalette.Bar1)
 		bar2 = hexOrDefault(r.PostFormValue("bar2_color"), breakglass.DefaultPalette.Bar2)
 		bar3 = hexOrDefault(r.PostFormValue("bar3_color"), breakglass.DefaultPalette.Bar3)
+	}
+	if err := validateImageFields(r, "logo", "glyph"); err != nil {
+		s.brandingUploadError(w, r)
+		return
 	}
 	if err := s.store.SaveCodeBrandingMeta(r.Context(), id,
 		trimField(r.PostFormValue("title")),

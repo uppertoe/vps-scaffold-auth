@@ -3,6 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
+	"image"
+	"image/png"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -11,6 +14,29 @@ import (
 	"strings"
 	"testing"
 )
+
+// testPNG encodes a real PNG of w by h pixels. With noise it barely
+// compresses, so its size tracks w*h*4 bytes; seed varies the pixels.
+func testPNG(t *testing.T, w, h int, noise bool, seed byte) []byte {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	x := uint32(seed) + 1
+	for i := range img.Pix {
+		if noise {
+			x ^= x << 13
+			x ^= x >> 17
+			x ^= x << 5
+			img.Pix[i] = byte(x)
+		} else {
+			img.Pix[i] = seed
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
 
 type zeroReader struct{}
 
@@ -109,7 +135,10 @@ func TestBrandingUploadFitsUnderAdminCeiling(t *testing.T) {
 	loginAs(t, c, sender, "admin@example.com", nil)
 	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
 
-	logo := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{1}, 1500<<10)...)
+	logo := testPNG(t, 610, 610, true, 1) // about 1.5 MB, within MaxRasterSide
+	if len(logo) < 1400<<10 || len(logo) > maxBrandingUpload {
+		t.Fatalf("test logo is %d bytes, want about 1.5 MB", len(logo))
+	}
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	mw.WriteField("csrf", tok)
@@ -126,5 +155,74 @@ func TestBrandingUploadFitsUnderAdminCeiling(t *testing.T) {
 	b, ok, err := srv.store.GetBranding(context.Background())
 	if err != nil || !ok || len(b.Logo) != len(logo) {
 		t.Fatalf("logo not saved: ok=%v err=%v len=%d", ok, err, len(b.Logo))
+	}
+}
+
+// A small file declaring huge dimensions is refused, and nothing is saved.
+func TestBrandingRefusesHugeDimensions(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("csrf", tok)
+	fw, _ := mw.CreateFormFile("logo", "wide.png")
+	fw.Write(testPNG(t, breakglass.MaxRasterSide+1, 1, false, 9))
+	mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/admin/branding", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if rec := c.do(req); rec.Code != http.StatusBadRequest {
+		t.Errorf("huge image: status %d, want 400", rec.Code)
+	}
+	if b, ok, _ := srv.store.GetBranding(context.Background()); ok && len(b.Logo) > 0 {
+		t.Error("huge image was saved")
+	}
+}
+
+// A 16-bit PNG, which decodes at twice the size, is refused.
+func TestBrandingRefuses16BitImages(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+	var img bytes.Buffer
+	if err := png.Encode(&img, image.NewNRGBA64(image.Rect(0, 0, 8, 8))); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("csrf", tok)
+	fw, _ := mw.CreateFormFile("logo", "deep.png")
+	fw.Write(img.Bytes())
+	mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/admin/branding", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if rec := c.do(req); rec.Code != http.StatusBadRequest {
+		t.Errorf("16-bit image: status %d, want 400", rec.Code)
+	}
+}
+
+// A refused image leaves the rest of the form unsaved.
+func TestRefusedImageSavesNothing(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("csrf", tok)
+	mw.WriteField("title", "Changed title")
+	fw, _ := mw.CreateFormFile("glyph", "wide.png")
+	fw.Write(testPNG(t, breakglass.MaxRasterSide+1, 1, false, 3))
+	mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/admin/branding", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if rec := c.do(req); rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", rec.Code)
+	}
+	if b, ok, _ := srv.store.GetBranding(context.Background()); ok && b.Title == "Changed title" {
+		t.Error("the title was saved although the image was refused")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strings"
 	texttemplate "text/template"
 )
 
@@ -22,6 +23,9 @@ type pageData struct {
 	Message  string
 	Remember bool
 	LogoURL  string
+	// CodePlaceholder shows the email code's length in the code box (OTP_LENGTH
+	// zeros), filled in by render.
+	CodePlaceholder string
 	// LoginNotice is an optional operator-set instruction line rendered on the
 	// sign-in page (from the LOGIN_NOTICE env var). Rendered auto-escaped as
 	// plain text by html/template — never as template.HTML.
@@ -111,10 +115,11 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	data.CodePlaceholder = strings.Repeat("0", s.cfg.OTPLength)
 	// Surface the global branding logo on the public auth pages when set.
 	if data.LogoURL == "" {
-		if logo, _, v, err := s.siteLogo(context.Background()); err == nil && len(logo) > 0 {
-			data.LogoURL = "/logo.img?v=" + v
+		if b, err := s.publicBranding(context.Background()); err == nil && b.logoVersion != "" {
+			data.LogoURL = "/logo.img?v=" + b.logoVersion
 		}
 	}
 	// Fill domain-derived UX fields on the login page (hint line + email

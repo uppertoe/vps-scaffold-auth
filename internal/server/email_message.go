@@ -36,9 +36,9 @@ func (s *Server) buildCodeEmail(ctx context.Context, to, code string) email.Mess
 
 	header := breakglass.DefaultPalette.Header
 	accent := breakglass.DefaultPalette.Accent
-	if b, ok, err := s.store.GetBranding(ctx); err == nil && ok {
-		header = hexOrDefault(b.HeaderColor, header)
-		accent = hexOrDefault(b.AccentColor, accent)
+	if b, err := s.publicBranding(ctx); err == nil {
+		header = hexOrDefault(b.headerColor, header)
+		accent = hexOrDefault(b.accentColor, accent)
 	}
 
 	htmlBody := s.renderCodeEmailHTML(codeEmailData{

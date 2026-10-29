@@ -3,7 +3,7 @@
 A minimal **email one-time-code `forward_auth` gateway** for the
 [vps-scaffold](https://github.com/uppertoe/vps-base-template) family. It puts a
 passwordless login wall in front of any web app behind Caddy: users enter their
-email, receive a 6-digit code, type it in, and get a session — no passwords, no
+email, receive a one-time code (`OTP_LENGTH` digits), type it in, and get a session — no passwords, no
 passkeys, no third-party identity provider.
 
 It runs as a normal app under `apps/auth/` in a server repo and is consumed as
@@ -27,12 +27,12 @@ browser ──▶ Caddy (app.example.com)
                │                          ├─ valid session → 200 + Remote-User/Email/Groups → upstream app
                │                          └─ no session    → 302 to auth.example.com/login
                ▼
-            auth.example.com  ── login page → email → 6-digit code → signed-cookie session
+            auth.example.com  ── login page → email → one-time code → signed-cookie session
 ```
 
 1. Caddy calls `GET /verify` on every request to a protected app.
 2. No/invalid session → `/verify` returns a 302 to the login page.
-3. User enters email → a 6-digit code is emailed (single-use, ~10 min).
+3. User enters email → a one-time code (`OTP_LENGTH` digits, 8 recommended) is emailed (single-use, ~10 min).
 4. User types the code → an HMAC-signed session cookie is set on `.example.com`
    (shared across all app subdomains).
 5. `/verify` now returns 200 plus `Remote-User`, `Remote-Email`, and
@@ -355,7 +355,7 @@ secrets are issued out of band:
 - **First admin / bootstrap.** Run the one-off CLI in the same container and
   environment as the server (so it shares the at-rest encryption key):
   ```bash
-  docker compose exec auth auth -totp-enroll you@example.com
+  docker compose exec auth /app -totp-enroll you@example.com
   ```
   It prints the setup key + `otpauth://` URL once (treat as a secret); add it to
   your authenticator app. `auth -totp-remove you@example.com` deletes a secret.
@@ -477,10 +477,19 @@ still reach an app during a time-critical event (e.g. a code stroke).
 - No user enumeration: `/request` always responds the same way, and the OTP
   email is dispatched off the request path so response timing doesn't reveal
   whether an address is permitted.
-- Per-email and per-IP rate limiting. The per-email limit plus the per-code
-  attempt cap are the primary brute-force bounds; the per-IP limit is a secondary
-  guard, kept generous (default `60/15m`) so a shared egress IP (e.g. a hospital
-  NAT) doesn't throttle many distinct users. Break-glass scans use a separate,
+- Rate limiting, shaped so that a stranger cannot spend a person's own sending
+  allowance, a person can still get a code on the network they usually sign in
+  from, and a shared egress IP (e.g. a hospital NAT) doesn't throttle many
+  distinct users who type their codes correctly:
+  - code sends are limited per (address, client IP) (`RATELIMIT_PER_EMAIL`), per
+    address across all IPs (`RATELIMIT_PER_EMAIL_CEILING`) and per client IP
+    across all addresses (`RATELIMIT_SENDS_PER_IP`); an address that signed in
+    from the same IP within 30 days passes the last two;
+  - code requests are limited per client IP (`RATELIMIT_PER_IP`, generous);
+  - wrong email or authenticator codes are limited per client IP
+    (`RATELIMIT_WRONG_CODES_PER_IP`), refunded on a correct code;
+  - the per-code attempt caps (`OTP_MAX_ATTEMPTS`, `OTP_MAX_TOTAL_ATTEMPTS`) bound
+    guessing against any one code. Break-glass scans use a separate,
   more permissive per-IP limit (`RATELIMIT_BREAKGLASS_PER_IP`) since the 128-bit
   token — not the IP throttle — is the real boundary there.
 - Open-redirect safe: the post-login target must be `https` and on a subdomain
@@ -528,7 +537,7 @@ main.go                 entrypoint + graceful shutdown + -healthcheck probe
 internal/config         env parsing + validation (fail fast)
 internal/server         routes, handlers, embedded HTML templates
 internal/session        HMAC-signed session / state / pending / CSRF cookies
-internal/otp            6-digit code generation + hashing
+internal/otp            one-time code generation + hashing
 internal/store          Store interface + CGO-free SQLite implementation
 internal/authz          domain/whitelist roles, group set, redirect validation
 internal/email          smtp | resend | log backends
