@@ -316,7 +316,7 @@ func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request)
 	r.Body = http.MaxBytesReader(w, r.Body, maxBrandingUpload+64<<10)
 	if err := r.ParseMultipartForm(maxBrandingUpload); err != nil {
 		s.renderAdmin(w, r, http.StatusRequestEntityTooLarge, "admin_message", adminData{
-			Title: "Upload too large", Message: "Logo and glyph uploads must be under 2 MB.",
+			Title: "Upload too large", Message: "The images in one upload must total less than 2 MB.",
 		})
 		return
 	}
@@ -450,7 +450,7 @@ func (e *uploadErr) Error() string { return e.msg }
 func (s *Server) brandingUploadError(w http.ResponseWriter, r *http.Request) {
 	s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 		Title:   "Could not save image",
-		Message: "Logos and glyphs must be PNG, JPEG, or SVG and under 2 MB.",
+		Message: "Logos and glyphs must be PNG, JPEG or SVG files under 2 MB, and no more than 4,000 pixels wide or high.",
 	})
 }
 
@@ -882,7 +882,7 @@ func (s *Server) handleAdminSaveCodeBranding(w http.ResponseWriter, r *http.Requ
 	r.Body = http.MaxBytesReader(w, r.Body, maxBrandingUpload+64<<10)
 	if err := r.ParseMultipartForm(maxBrandingUpload); err != nil {
 		s.renderAdmin(w, r, http.StatusRequestEntityTooLarge, "admin_message", adminData{
-			Title: "Upload too large", Message: "Logo and glyph uploads must be under 2 MB.",
+			Title: "Upload too large", Message: "The images in one upload must total less than 2 MB.",
 		})
 		return
 	}
