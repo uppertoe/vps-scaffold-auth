@@ -404,6 +404,9 @@ func TestLogoCacheHeaders(t *testing.T) {
 	if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
 		t.Errorf("If-None-Match: status=%d body=%d bytes, want 304 and no body", rec.Code, rec.Body.Len())
 	}
+	if got := rec.Header().Get("Content-Security-Policy"); got != "default-src 'none'; sandbox" {
+		t.Errorf("304 CSP = %q, want the sandboxed image policy", got)
+	}
 
 	// Pages keep no-store.
 	if got := c.get("/login", nil).Header().Get("Cache-Control"); got != "no-store" {
