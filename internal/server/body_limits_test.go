@@ -62,18 +62,43 @@ func TestPublicFormsCapBodies(t *testing.T) {
 	}
 }
 
-// A body that declares more than the ceiling is refused before any handler runs.
+// A public body that declares more than the ceiling is refused before any
+// handler runs.
 func TestDeclaredOversizeIsRefused(t *testing.T) {
 	srv, _ := testServer(t)
-	for path, size := range map[string]int64{"/verify-code": maxPublicBody + 1, "/admin/branding": maxAdminBody + 1} {
-		req := httptest.NewRequest(http.MethodPost, path, io.LimitReader(zeroReader{}, size))
-		req.ContentLength = size
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusRequestEntityTooLarge {
-			t.Errorf("%s with %d bytes: status %d, want 413", path, size, rec.Code)
-		}
+	size := int64(maxPublicBody + 1)
+	req := httptest.NewRequest(http.MethodPost, "/verify-code", io.LimitReader(zeroReader{}, size))
+	req.ContentLength = size
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("/verify-code with %d bytes: status %d, want 413", size, rec.Code)
+	}
+}
+
+// An over-size branding upload from an admin reaches the handler's own page,
+// not a bare 413, and saves nothing.
+func TestOversizeBrandingShowsAdminPage(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("csrf", tok)
+	fw, _ := mw.CreateFormFile("logo", "logo.png")
+	fw.Write(append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{1}, maxAdminBody)...))
+	mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/admin/branding", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := c.do(req)
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), "Upload too large") {
+		t.Errorf("oversize branding: status %d, want 413 with the admin page", rec.Code)
+	}
+	if b, ok, _ := srv.store.GetBranding(context.Background()); ok && len(b.Logo) > 0 {
+		t.Error("oversize branding upload saved a logo")
 	}
 }
 

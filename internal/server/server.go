@@ -154,17 +154,20 @@ const (
 // holding up to 32 MiB in memory and spooling the rest to /tmp (a tmpfs, so
 // also memory), before the handler has checked anything: a few anonymous
 // requests could exhaust the container and take down forward_auth for every
-// gated site. A body that declares a larger size is refused at once with 413;
-// one that grows past the cap while being read fails to parse, and the handler
-// sees empty fields, as for any malformed form. The /admin/ subtree gets the
-// larger ceiling; requireAdmin still runs before any admin handler reads.
+// gated site. On a public route, a body that declares a larger size is refused
+// at once with 413; one that grows past the cap while being read fails to
+// parse, and the handler sees empty fields, as for any malformed form. The
+// /admin/ subtree gets the larger ceiling and no early refusal, so an
+// over-size branding upload reaches the handler's own "Upload too large" page;
+// requireAdmin still runs before any admin handler reads.
 func limitBodies(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		limit := int64(maxPublicBody)
-		if strings.HasPrefix(r.URL.Path, "/admin/") {
+		admin := strings.HasPrefix(r.URL.Path, "/admin/")
+		if admin {
 			limit = maxAdminBody
 		}
-		if r.ContentLength > limit {
+		if !admin && r.ContentLength > limit {
 			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
 			return
 		}
