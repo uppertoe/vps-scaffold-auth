@@ -553,7 +553,10 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		// email, don't spend a send token. The existing code's attempt counter
 		// stays intact, so a re-request can't reset the brute-force cap — which
 		// is the guard that survives back-button / refresh / new-tab.
-	case s.emailLimiter.Allow(emailAddr):
+	// The send allowance is per (address, client IP), so a stranger elsewhere
+	// cannot spend the owner's own; the per-address ceiling bounds a
+	// distributed flood of one inbox.
+	case s.emailLimiter.Allow(emailAddr+"|"+clientIP(r)) && s.emailCeiling.Allow(emailAddr):
 		if permitted {
 			if err := s.sendCode(r, emailAddr, now); err != nil { // SaveCode(overwrite) + email
 				log.Printf("send code to %s: %v", emailAddr, err)
@@ -698,7 +701,10 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	if rd == "" {
 		rd = st.Redirect
 	}
-	if !s.ipLimiter.Allow(clientIP(r)) {
+	// Every attempt is charged up front, so simultaneous guesses cannot all
+	// pass the check; a correct code is refunded below, so people signing in
+	// behind one hospital NAT spend nothing.
+	if !s.wrongCodes.Allow(clientIP(r)) {
 		s.render(w, http.StatusTooManyRequests, "code", pageData{
 			Error: "Too many attempts. Please wait and try again.", Email: st.Email, Redirect: rd,
 		})
@@ -714,6 +720,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 
 	switch res {
 	case store.ConsumeOK:
+		s.wrongCodes.Refund(clientIP(r))
 		// Re-derive "open host" from the destination exactly as /request did. rd
 		// is client-influenced (the posted copy wins), so this is not what keeps
 		// strangers out: a guest session is the same whichever host minted it,
@@ -814,7 +821,8 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	if rd == "" {
 		rd = p.Redirect
 	}
-	if !s.ipLimiter.Allow(clientIP(r)) {
+	// Charged up front and refunded on a correct code, as in handleVerifyCode.
+	if !s.wrongCodes.Allow(clientIP(r)) {
 		s.render(w, http.StatusTooManyRequests, "totp", pageData{
 			Error: "Too many attempts. Please wait and try again.", Redirect: rd,
 		})
@@ -870,7 +878,9 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// TOTP satisfied: clear the failure counter and issue the session.
+	// TOTP satisfied: refund the attempt, clear the failure counter and issue
+	// the session.
+	s.wrongCodes.Refund(clientIP(r))
 	if err := s.store.ClearTOTPFailures(r.Context(), p.Email); err != nil {
 		log.Printf("clear totp failures for %s: %v", p.Email, err)
 	}

@@ -438,7 +438,7 @@ func TestLogoCacheClearedOnBrandingSave(t *testing.T) {
 		}
 	}
 	anon := newClient(t, srv.Handler())
-	for _, logo := range [][]byte{[]byte("\x89PNG\r\n\x1a\nfirst"), []byte("\x89PNG\r\n\x1a\nsecond")} {
+	for _, logo := range [][]byte{testPNG(t, 8, 8, false, 1), testPNG(t, 8, 8, false, 2)} {
 		upload(logo)
 		want := `src="/logo.img?v=` + logoVersion(logo) + `"`
 		if body := anon.get("/login", nil).Body.String(); !strings.Contains(body, want) {

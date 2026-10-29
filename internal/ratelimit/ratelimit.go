@@ -40,28 +40,44 @@ func New(count int, window time.Duration) *Limiter {
 func (l *Limiter) Allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
-	now := l.now()
-	b, ok := l.buckets[key]
-	if !ok {
-		// First sighting starts full, then immediately spends one token.
-		b = &bucket{tokens: l.count, lastSeen: now}
-		l.buckets[key] = b
-		l.gc(now)
-	} else {
-		elapsed := now.Sub(b.lastSeen).Seconds()
-		b.tokens += elapsed * l.rate
-		if b.tokens > l.count {
-			b.tokens = l.count
-		}
-		b.lastSeen = now
-	}
-
+	b := l.refill(key)
 	if b.tokens >= 1 {
 		b.tokens--
 		return true
 	}
 	return false
+}
+
+// Refund returns one token to key, up to the limit: for a caller that charges
+// every attempt up front, so that simultaneous attempts cannot all pass a
+// check before any is charged, and gives the token back when the outcome
+// should be free (a correct code).
+func (l *Limiter) Refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := l.refill(key)
+	if b.tokens++; b.tokens > l.count {
+		b.tokens = l.count
+	}
+}
+
+// refill returns key's bucket, created full on first sighting and topped up
+// for the time since it was last seen. Called with the lock held.
+func (l *Limiter) refill(key string) *bucket {
+	now := l.now()
+	b, ok := l.buckets[key]
+	if !ok {
+		b = &bucket{tokens: l.count, lastSeen: now}
+		l.buckets[key] = b
+		l.gc(now)
+		return b
+	}
+	b.tokens += now.Sub(b.lastSeen).Seconds() * l.rate
+	if b.tokens > l.count {
+		b.tokens = l.count
+	}
+	b.lastSeen = now
+	return b
 }
 
 // gc opportunistically drops idle buckets so the map cannot grow without

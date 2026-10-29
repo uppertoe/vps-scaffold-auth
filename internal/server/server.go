@@ -27,8 +27,10 @@ type Server struct {
 	sessions     *session.Manager
 	policy       *authz.Policy
 	secrets      *secretbox.Box
-	emailLimiter *ratelimit.Limiter
-	ipLimiter    *ratelimit.Limiter
+	emailLimiter *ratelimit.Limiter // codes sent, per (address, client IP)
+	emailCeiling *ratelimit.Limiter // codes sent, per address from all IPs
+	ipLimiter    *ratelimit.Limiter // code requests, per client IP
+	wrongCodes   *ratelimit.Limiter // wrong email or TOTP codes, per client IP
 	breakLimiter *ratelimit.Limiter // per-IP limiter for break-glass scans
 	totpReplay   *totpReplay
 	access       *accessAudit
@@ -72,7 +74,9 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		policy:       authz.NewPolicy(cfg.AllowedDomains, cfg.AdminEmails),
 		secrets:      secrets,
 		emailLimiter: ratelimit.New(cfg.RateLimitPerEmail.Count, cfg.RateLimitPerEmail.Window),
+		emailCeiling: limiterOr(cfg.RateLimitPerEmailCeiling, config.RateLimit{Count: 30, Window: time.Hour}),
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
+		wrongCodes:   limiterOr(cfg.RateLimitWrongCodesPerIP, cfg.RateLimitPerIP),
 		breakLimiter: newBreakLimiter(cfg),
 		access:       newAccessAudit(st, cfg.AuditRetention),
 		csp:          cspPolicy(cfg.Domain, cfg.AllowApexRedirect),
@@ -103,6 +107,16 @@ func newBreakLimiter(cfg *config.Config) *ratelimit.Limiter {
 	rl := cfg.RateLimitBreakGlassPerIP
 	if rl.Count <= 0 || rl.Window <= 0 {
 		rl = cfg.RateLimitPerIP
+	}
+	return ratelimit.New(rl.Count, rl.Window)
+}
+
+// limiterOr builds a limiter from rl, or from fallback when rl is unset (a
+// hand-built config), so a newer limit is never a zero-count limiter that
+// denies everything.
+func limiterOr(rl, fallback config.RateLimit) *ratelimit.Limiter {
+	if rl.Count <= 0 || rl.Window <= 0 {
+		rl = fallback
 	}
 	return ratelimit.New(rl.Count, rl.Window)
 }

@@ -47,3 +47,23 @@ func TestRefillOverTime(t *testing.T) {
 		t.Error("should be allowed after refill window")
 	}
 }
+
+func TestRefundReturnsOneToken(t *testing.T) {
+	l := New(2, time.Hour)
+	if !l.Allow("k") || !l.Allow("k") {
+		t.Fatal("first two should pass")
+	}
+	l.Refund("k")
+	if !l.Allow("k") {
+		t.Fatal("a refunded token should be spendable")
+	}
+	if l.Allow("k") {
+		t.Fatal("only one token was refunded")
+	}
+	for i := 0; i < 5; i++ {
+		l.Refund("k")
+	}
+	if !l.Allow("k") || !l.Allow("k") || l.Allow("k") {
+		t.Error("refunds should not raise a bucket above its limit")
+	}
+}

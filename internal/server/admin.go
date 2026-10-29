@@ -1,8 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	_ "image/jpeg" // registers JPEG for image.DecodeConfig
+	_ "image/png"  // registers PNG for image.DecodeConfig
 	"log"
 	"net"
 	"net/http"
@@ -306,6 +310,7 @@ func (s *Server) handleAdminBranding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request) {
+	allowSlowUpload(w)
 	// Whatever this request changes, the sign-in pages read the logo afresh.
 	defer s.forgetLogo()
 	r.Body = http.MaxBytesReader(w, r.Body, maxBrandingUpload+64<<10)
@@ -349,6 +354,14 @@ func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request)
 	}
 	s.auditAdmin(r, store.AdminActionBrandingUpdate, "global", "")
 	http.Redirect(w, r, "/admin/branding", http.StatusFound)
+}
+
+// allowSlowUpload gives an admin's branding upload two minutes to arrive. The
+// server's 15-second ReadTimeout would otherwise refuse a 2 MB upload on a link
+// slower than about 1 Mbit/s. Only admin routes call it, after requireAdmin,
+// so an anonymous client cannot use it to hold connections open.
+func allowSlowUpload(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(2 * time.Minute))
 }
 
 // applyImageField stores an uploaded global-branding image, or clears it when
@@ -405,12 +418,29 @@ func readUploadedImage(r *http.Request, field string) (data []byte, mime string,
 	if mime == "" || mime == "application/octet-stream" {
 		mime = "image/" + kind
 	}
+	// A small file can declare enormous dimensions: a 2 MB PNG of 10,000 by
+	// 10,000 pixels decodes to about 400 MB when a card PDF is built, enough to
+	// kill the service and with it forward_auth for every gated site. Raster
+	// images are refused above maxImageSide on either side.
+	if kind != "svg" {
+		cfg, _, derr := image.DecodeConfig(bytes.NewReader(data))
+		if derr != nil {
+			return nil, "", false, errUnsupportedImage
+		}
+		if cfg.Width > maxImageSide || cfg.Height > maxImageSide {
+			return nil, "", false, errImageTooLarge
+		}
+	}
 	return data, mime, true, nil
 }
+
+// maxImageSide bounds a branding image's width and height in pixels.
+const maxImageSide = 4000
 
 var (
 	errUploadTooLarge   = &uploadErr{"too large"}
 	errUnsupportedImage = &uploadErr{"unsupported type"}
+	errImageTooLarge    = &uploadErr{"dimensions too large"}
 )
 
 type uploadErr struct{ msg string }
@@ -848,6 +878,7 @@ func (s *Server) codeBrandingView(ctx context.Context, codeID int64) codeBrandin
 
 // handleAdminSaveCodeBranding stores a code's per-code branding overrides.
 func (s *Server) handleAdminSaveCodeBranding(w http.ResponseWriter, r *http.Request) {
+	allowSlowUpload(w)
 	r.Body = http.MaxBytesReader(w, r.Body, maxBrandingUpload+64<<10)
 	if err := r.ParseMultipartForm(maxBrandingUpload); err != nil {
 		s.renderAdmin(w, r, http.StatusRequestEntityTooLarge, "admin_message", adminData{

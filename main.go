@@ -92,6 +92,10 @@ func run() error {
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		// Every gated request's headers, cookies included, reach /verify, so a
+		// megabyte of headers per request (Go's default ceiling) is far more
+		// than any browser sends and needlessly costly to parse.
+		MaxHeaderBytes: 64 << 10,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
