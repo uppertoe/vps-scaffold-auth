@@ -1358,12 +1358,12 @@ func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request
 // handleLogo serves the global branding logo for the public login pages.
 // Returns 404 when no logo is configured.
 func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
-	b, ok, err := s.store.GetBranding(r.Context())
+	logo, mime, v, err := s.siteLogo(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if !ok || len(b.Logo) == 0 {
+	if len(logo) == 0 {
 		http.NotFound(w, r)
 		return
 	}
@@ -1373,7 +1373,6 @@ func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
 	// revalidates by ETag, so an out-of-date or invented v can never pin a
 	// stale logo. The logo is shown to anyone on the public sign-in pages, so
 	// shared caches may keep it.
-	v := logoVersion(b.Logo)
 	etag := `"` + v + `"`
 	w.Header().Set("ETag", etag)
 	if r.URL.Query().Get("v") == v {
@@ -1383,12 +1382,12 @@ func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
 	}
 	// The image headers go on the 304 too: a browser refreshes its stored
 	// copy's headers from a 304, which must not drop the sandbox policy.
-	setImageHeaders(w, b.LogoType)
+	setImageHeaders(w, mime)
 	if r.Header.Get("If-None-Match") == etag {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	w.Write(b.Logo)
+	w.Write(logo)
 }
 
 // logoVersion names one exact logo: the first 16 hex digits of its SHA-256.

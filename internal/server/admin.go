@@ -306,6 +306,8 @@ func (s *Server) handleAdminBranding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request) {
+	// Whatever this request changes, the sign-in pages read the logo afresh.
+	defer s.forgetLogo()
 	r.Body = http.MaxBytesReader(w, r.Body, maxBrandingUpload+64<<10)
 	if err := r.ParseMultipartForm(maxBrandingUpload); err != nil {
 		s.renderAdmin(w, r, http.StatusRequestEntityTooLarge, "admin_message", adminData{

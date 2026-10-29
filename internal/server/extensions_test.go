@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -411,5 +414,35 @@ func TestLogoCacheHeaders(t *testing.T) {
 	// Pages keep no-store.
 	if got := c.get("/login", nil).Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("login page Cache-Control = %q, want no-store", got)
+	}
+}
+
+// A logo saved in the admin UI reaches the sign-in page at once, despite the
+// logo cache.
+func TestLogoCacheClearedOnBrandingSave(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	upload := func(logo []byte) {
+		tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		mw.WriteField("csrf", tok)
+		fw, _ := mw.CreateFormFile("logo", "logo.png")
+		fw.Write(logo)
+		mw.Close()
+		req := httptest.NewRequest(http.MethodPost, "/admin/branding", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		if rec := c.do(req); rec.Code >= 400 {
+			t.Fatalf("branding upload: status %d", rec.Code)
+		}
+	}
+	anon := newClient(t, srv.Handler())
+	for _, logo := range [][]byte{[]byte("\x89PNG\r\n\x1a\nfirst"), []byte("\x89PNG\r\n\x1a\nsecond")} {
+		upload(logo)
+		want := `src="/logo.img?v=` + logoVersion(logo) + `"`
+		if body := anon.get("/login", nil).Body.String(); !strings.Contains(body, want) {
+			t.Errorf("login page does not show %s after the save", want)
+		}
 	}
 }

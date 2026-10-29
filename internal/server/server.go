@@ -39,6 +39,7 @@ type Server struct {
 	handler      http.Handler
 	now          func() time.Time
 	loc          *time.Location // timezone for rendering timestamps in the admin UI
+	logo         logoCache      // the sign-in logo (see logo_cache.go)
 }
 
 // New constructs a Server from its dependencies.
