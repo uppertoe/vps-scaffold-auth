@@ -56,9 +56,9 @@ The gateway relies on three things that Caddy guarantees on every request.
 
 A public route has no guard, so the snippets include one for public routes
 that removes the session cookie and any identity headers the browser sent. A
-tool with a public path is then never handed a forged identity. On the data
-lab's servers, every tool that reads those headers already removes them on its
-public paths, and the other public routes lead to tools that ignore them.
+tool with a public path is then never handed a forged identity. Every public
+route on the data lab's servers uses it, and each server's own checks run the
+end-to-end tests against its copy of the guards.
 
 Every change to the gateway is tested end to end before an image is
 published. The tests run the production version of Caddy with these guards,
