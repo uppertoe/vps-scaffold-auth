@@ -38,9 +38,46 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           govulncheck ./...
 
+  fuzz:
+    # The property tests' seeds run in `go test`; this explores beyond them
+    # for a short while on every change. A failure is a real counter-example:
+    # add it to testdata/fuzz as a seed when fixing it.
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: go.sum
+      - name: Fuzz the access decisions
+        run: |
+          set -e
+          for f in FuzzValidateRedirect FuzzCanAccessApp FuzzBuildGroupsKeepsRoleFirst; do
+            go test ./internal/authz/ -run '^$' -fuzz "^$f\$" -fuzztime 30s
+          done
+          go test ./internal/server/ -run '^$' -fuzz '^FuzzParsePolicy$' -fuzztime 30s
+
+  e2e:
+    # The whole chain: the production Caddy with deploy/auth.caddy, the image
+    # built from this commit, and an app that echoes what it receives. See
+    # docs/security-assumptions.md for what each check proves.
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: go.sum
+      - name: End-to-end security chain
+        run: scripts/e2e.sh
+
   publish:
     # Build and push the image on pushes to main and on version tags.
-    needs: test
+    needs: [test, fuzz, e2e]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

@@ -101,8 +101,8 @@ them.
 > `vps_auth_session` from the upstream request automatically (via the
 > `strip_auth_cookie` snippet folded into it), leaving the app's own cookies
 > intact. Apps take identity from the `Remote-*` headers, never the cookie. If you
-> hand-roll a `reverse_proxy` instead of using a guard, `import strip_auth_cookie`
-> inside it.
+> hand-roll a guarded `reverse_proxy`, `import strip_auth_cookie` inside it; for a
+> public route, import `strip_public` instead (below).
 
 #### Per-app access
 
@@ -291,7 +291,7 @@ app.{$DOMAIN} {
     @public path /webhooks/* /healthz
     handle @public {
         reverse_proxy app:3000 {
-            import strip_auth_cookie   # still strip — see the note below
+            import strip_public   # no login, but strip the cookie and forged identity
         }
     }
     # Everything else requires a signed-in user at the domain.
@@ -302,17 +302,21 @@ app.{$DOMAIN} {
 ```
 
 A fully public app is just a host with no guard at all:
-`public.{$DOMAIN} { reverse_proxy public:3000 { import strip_auth_cookie } }`.
+`public.{$DOMAIN} { reverse_proxy public:3000 { import strip_public } }`.
 
-> **Strip the cookie on public routes too.** The session cookie is scoped to
-> `.<domain>`, so the browser sends it to **every** subdomain and every path —
-> public ones included. A guard strips it automatically, but a plain
-> `reverse_proxy` does not, so a public backend would receive the estate-wide
-> bearer token that protected routes carefully withhold. `import
-> strip_auth_cookie` inside any public (or otherwise untrusted) backend's
-> `reverse_proxy` closes that. It only scrubs the cookie from the request Caddy
-> forwards upstream — it sends nothing to the browser, so it does **not** log the
-> user out; their session is untouched and still works on protected routes.
+> **Strip the cookie and forged identity on public routes too.** The session
+> cookie is scoped to `.<domain>`, so the browser sends it to **every** subdomain
+> and every path — public ones included. A guard strips it automatically, but a
+> plain `reverse_proxy` does not, so a public backend would receive the
+> estate-wide bearer token that protected routes carefully withhold. A public
+> route also has no guard to remove the `Remote-*` headers a client sends, so an
+> app that reads `Remote-User` anywhere (a mixed host whose webhook path shares
+> the app's middleware) would believe a forged identity there. `import
+> strip_public` inside any public backend's `reverse_proxy` removes both. It only
+> scrubs the request Caddy forwards upstream — it sends nothing to the browser, so
+> it does **not** log the user out. Never use it inside a guard, where the
+> `Remote-*` headers are the gateway's own; there, `strip_auth_cookie` is the
+> right snippet.
 
 ## Configuration
 

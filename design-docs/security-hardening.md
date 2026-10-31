@@ -54,10 +54,15 @@ The gateway relies on three things that Caddy guarantees on every request.
   only the entry that Caddy wrote. A visitor therefore cannot pose as a new
   address on every request to escape the limits.
 
-The guards were checked against a running copy of Caddy, because Caddy's
-default ordering would otherwise delete the gateway's answer instead of the
-browser's copy. The server's own checks test the header handling on every
-change to its routes.
+A public route has no guard, so Caddy removes the session cookie and any
+identity headers the browser sent from those requests too. An app with a
+public path therefore never sees a forged identity on it.
+
+Every change to the gateway is tested end to end before an image is
+published. The tests run the production version of Caddy with these guards,
+in front of the image built from the change, and check what reaches the
+browser and what reaches the app. Each assumption the chain relies on, and
+the test that proves it, is listed in the repository's security register.
 
 ## The pages
 

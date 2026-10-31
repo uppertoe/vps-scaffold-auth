@@ -11,3 +11,6 @@
 
 # OS / editor
 .DS_Store
+
+# Caddy root certificate copied out by scripts/e2e.sh
+e2e/.root.crt

@@ -1,0 +1,74 @@
+# End-to-end test stack: the gateway image built from this repository, the
+# real guard snippets from deploy/auth.caddy, the production Caddy and a
+# header-echo app. Run it with scripts/e2e.sh, not directly.
+#
+# The gateway uses the log mail backend so the test can read each code from
+# its log, which the gateway allows only in its insecure-cookie mode. That mode
+# drops the cookie's Secure attribute and the HSTS header and changes nothing
+# else; both are covered by unit tests (TestHSTSHeaderOnlyUnderTLS and the
+# session package's cookie tests).
+services:
+  caddy:
+    # The digest the department server's scaffold pins (vps-base-template
+    # docker/caddy.base.yml), so the test runs the Caddy production runs.
+    image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+    environment:
+      - DOMAIN=e2e.test
+    ports:
+      - "127.0.0.1:${E2E_PORT:-18443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The guard snippets under test. A server repo can point this at its own
+      # apps/auth/auth.caddy to test its diverged copy.
+      - ${E2E_AUTH_CADDY:-../deploy/auth.caddy}:/etc/caddy/auth.caddy:ro
+    depends_on:
+      auth:
+        condition: service_healthy
+      whoami:
+        condition: service_started
+
+  auth:
+    build:
+      context: ..
+    # The same runtime restrictions as deploy/docker-compose.yml, so a change
+    # that needs a capability or a writable root fails here first.
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - auth_data:/data
+    mem_limit: 128m
+    pids_limit: 128
+    environment:
+      - DOMAIN=e2e.test
+      - AUTH_PUBLIC_URL=https://auth.e2e.test
+      - ALLOWED_EMAIL_DOMAINS=example.org,example.net
+      - ADMIN_EMAILS=boss@admins.example
+      - OPEN_REGISTRATION_HOSTS=open.e2e.test
+      - SESSION_SECRET=${E2E_SESSION_SECRET:?set by scripts/e2e.sh}
+      - DATA_ENCRYPTION_KEY=${E2E_DATA_KEY:?set by scripts/e2e.sh}
+      - EMAIL_BACKEND=log
+      - EMAIL_FROM=Sign-in <auth@e2e.test>
+      - COOKIE_INSECURE=true
+      - TOTP_ENABLED=true
+      - OTP_LENGTH=8
+      # Short renewal so the test can watch a session renew.
+      - SESSION_TTL=10m
+      - SESSION_RENEW_AFTER=3s
+      - SESSION_REMEMBER_TTL=1h
+      # Code requests per client IP; the last test spends the rest of it.
+      - RATELIMIT_PER_IP=40/15m
+    healthcheck:
+      test: ["CMD", "/app", "-healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  whoami:
+    # Echoes every request header back, so the test sees what the app sees.
+    image: traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+
+volumes:
+  auth_data:
