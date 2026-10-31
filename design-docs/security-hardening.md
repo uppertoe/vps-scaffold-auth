@@ -54,9 +54,11 @@ The gateway relies on three things that Caddy guarantees on every request.
   only the entry that Caddy wrote. A visitor therefore cannot pose as a new
   address on every request to escape the limits.
 
-A public route has no guard, so Caddy removes the session cookie and any
-identity headers the browser sent from those requests too. An app with a
-public path therefore never sees a forged identity on it.
+A public route has no guard, so the snippets include one for public routes
+that removes the session cookie and any identity headers the browser sent. A
+tool with a public path is then never handed a forged identity. On the data
+lab's servers, every tool that reads those headers already removes them on its
+public paths, and the other public routes lead to tools that ignore them.
 
 Every change to the gateway is tested end to end before an image is
 published. The tests run the production version of Caddy with these guards,
