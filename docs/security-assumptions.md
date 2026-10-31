@@ -77,9 +77,15 @@ has its own test, named in the table.
 - **C9, reachability.** Only the server can show that the gateway and apps
   publish no ports and share networks only with Caddy.
 - **The server repos' guard snippets.** Each server keeps its own copy of
-  `auth.caddy`, and the copies have diverged. Run this suite against a copy
-  with `E2E_AUTH_CADDY=/path/to/apps/auth/auth.caddy scripts/e2e.sh`. The
-  copy must define `strip_public`.
+  `auth.caddy`, and the copies have diverged. Each server's CI runs this suite
+  against its own copy with
+  `E2E_AUTH_CADDY=/absolute/path/to/apps/auth/auth.caddy scripts/e2e.sh`. The
+  copy is tested as written, with two allowances that carry no security: a
+  hard-coded auth host is renamed to the test domain, and `protected_open` is
+  taken from the reference copy if the server has no guest sign-in. A copy
+  missing any other snippet, `strip_public` included, fails the run. The
+  public routes themselves live in each app's own Caddy file, which this suite
+  does not see.
 - **The Secure attribute and HSTS through Caddy.** The end-to-end stack uses
   the log mail backend, which needs the insecure-cookie mode. Both are proven
   by unit tests instead (`TestHSTSHeaderOnlyUnderTLS`).

@@ -31,10 +31,35 @@ cleanup() {
     $E2E_COMPOSE logs --no-color caddy >&2 || true
   fi
   $E2E_COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -f "$E2E_CA"
+  rm -f "$E2E_CA" "$ROOT/e2e/.auth-under-test.caddy"
   exit "$status"
 }
 trap cleanup EXIT
+
+# A server repo tests its own copy of the guard snippets by setting
+# E2E_AUTH_CADDY. The copy is tested as written, with two allowances for
+# deployment differences that carry no security: a hard-coded auth host is
+# renamed to the test domain, and a guard for a feature the server does not use
+# is taken from the reference copy, with a notice. A missing security snippet
+# fails the run.
+OPTIONAL_SNIPPETS="protected_open"
+REQUIRED_SNIPPETS="protected protected_domains protected_groups protected_admin protected_access auth_gate strip_client_identity strip_auth_cookie strip_public"
+if [ -n "${E2E_AUTH_CADDY:-}" ]; then
+  src="$E2E_AUTH_CADDY"
+  export E2E_AUTH_CADDY="$ROOT/e2e/.auth-under-test.caddy"
+  sed -E 's/^auth\.[A-Za-z0-9.-]+ \{/auth.{$DOMAIN} {/' "$src" > "$E2E_AUTH_CADDY"
+  cmp -s "$src" "$E2E_AUTH_CADDY" || echo "e2e: renamed the copy's hard-coded auth host to auth.e2e.test"
+  for s in $REQUIRED_SNIPPETS; do
+    grep -q "^($s) {" "$E2E_AUTH_CADDY" || { echo "e2e: $src does not define ($s); copy it from deploy/auth.caddy" >&2; exit 1; }
+  done
+  for s in $OPTIONAL_SNIPPETS; do
+    if ! grep -q "^($s) {" "$E2E_AUTH_CADDY"; then
+      echo "e2e: $src does not define ($s); testing the reference version for that guard only"
+      printf '\n' >> "$E2E_AUTH_CADDY"
+      sed -n "/^($s) {/,/^}/p" deploy/auth.caddy >> "$E2E_AUTH_CADDY"
+    fi
+  done
+fi
 
 $E2E_COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
 $E2E_COMPOSE up -d --build --wait

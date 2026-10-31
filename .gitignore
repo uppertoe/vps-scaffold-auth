@@ -14,3 +14,4 @@
 
 # Caddy root certificate copied out by scripts/e2e.sh
 e2e/.root.crt
+e2e/.auth-under-test.caddy
