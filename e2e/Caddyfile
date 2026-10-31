@@ -1,0 +1,75 @@
+# End-to-end test sites. Each site exercises one guard from deploy/auth.caddy,
+# which is mounted unchanged, so the test proves the snippets this repository
+# ships. Keep comments free of braces: the scaffold counts them.
+{
+	admin off
+	local_certs
+	skip_install_trust
+	auto_https disable_redirects
+}
+
+import /etc/caddy/auth.caddy
+
+# Any signed-in user. Also sets an app cookie of its own, so the test can
+# prove that the gateway's renewed cookie is ADDED beside it, not swapped.
+app.{$DOMAIN} {
+	header +Set-Cookie "app_own=set-by-app; Path=/"
+	import protected whoami:80
+}
+
+# The one app open to the public: guests admitted.
+open.{$DOMAIN} {
+	import protected_open whoami:80
+}
+
+# Staff at one domain.
+staff.{$DOMAIN} {
+	import protected_domains "example.org" whoami:80
+}
+
+# Members of a group.
+reports.{$DOMAIN} {
+	import protected_groups "reports" whoami:80
+}
+
+# Administrators only.
+admin.{$DOMAIN} {
+	import protected_admin whoami:80
+}
+
+# A domain OR a group.
+either.{$DOMAIN} {
+	import protected_access "example.net" "reports" whoami:80
+}
+
+# A hand-rolled guard with a misspelt rule: must close, not open.
+broken.{$DOMAIN} {
+	route {
+		import strip_client_identity
+		import auth_gate "gruops=admin"
+		reverse_proxy whoami:80 {
+			import strip_auth_cookie
+		}
+	}
+}
+
+# A wholly public app: no guard, but the session cookie and any forged
+# identity headers must still be removed.
+public.{$DOMAIN} {
+	reverse_proxy whoami:80 {
+		import strip_public
+	}
+}
+
+# Public and protected paths on one host.
+mixed.{$DOMAIN} {
+	@public path /webhooks/*
+	handle @public {
+		reverse_proxy whoami:80 {
+			import strip_public
+		}
+	}
+	handle {
+		import protected_domains "example.org" whoami:80
+	}
+}

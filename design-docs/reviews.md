@@ -8,7 +8,7 @@ lastmod: 2026-10-31
 ## How the gateway is reviewed
 
 Since it was built in May 2026, the gateway has been reviewed adversarially on
-the seven dates in the table below, several of them in successive rounds. In
+the dates in the table below, several of them in successive rounds. In
 each review, reviewers read the code and the Caddy guards as an
 attacker would and reported what they could reach. Every finding was fixed
 with a test that would have caught it, and the tests run on every change.
@@ -24,6 +24,7 @@ with a test that would have caught it, and the tests run on every change.
 | 11 October 2026 | Anyone could sign in as any allowed address without its code, by presenting the cookie given to anyone who asks for a code as a session. Guesses at a code were limited per network only. The admin pages trusted a session's groups until it expired. Renewed sessions never reached the browser. | Each cookie records its purpose, and every existing session was ended. Each code has an overall guess limit. The admin pages check the current list on every request. The Caddy guards were rewritten to pass renewals on. Sign-in forms must come from the gateway's own page. |
 | 29 October 2026 | Three successive reviews found ways an anonymous visitor could exhaust the gateway's memory, and so take every tool offline: oversized forms, floods of logo requests and images that expand when decoded. Send limits could be used up by a stranger. | The limits listed under [keeping the gateway available](security-hardening.md) were added, and the send limits were reshaped around the hospital's network. |
 | 31 October 2026 | The server's [review](../server/security-reviews.md) examined the login wall as one of five areas and found no way in from outside. | No change was needed. |
+| 31 October 2026 | A pass tested every assumption the chain relies on, through the production version of Caddy. It found that the snippet for a public route passed identity headers sent by the browser on to its app. No live tool was exposed, because every tool on the servers that reads those headers already removed them. | A snippet for public routes now removes those headers. Every assumption is listed with the test that proves it, each test was shown to fail when its protection was removed, and the whole chain is tested before every release. |
 
 The finding of 11 October was the most serious in the gateway's history. When
 it was fixed, every session in use was ended, so everyone signed in again

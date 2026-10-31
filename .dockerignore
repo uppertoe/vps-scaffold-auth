@@ -11,6 +11,10 @@ Dockerfile
 
 # Tests aren't compiled into the image.
 *_test.go
+e2e
+scripts
+docs
+design-docs
 
 # Local build output, data, and secrets — must never enter the build context.
 /auth

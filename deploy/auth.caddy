@@ -265,6 +265,20 @@ auth.{$DOMAIN} {
 	header_up Cookie "(^|;\s*)vps_auth_session=[^;]*" ""
 }
 
+# For a PUBLIC route: import inside its reverse_proxy, in place of
+# strip_auth_cookie. A public route has no guard, so nothing else removes the
+# identity headers a client sends, and an app that reads Remote-User anywhere
+# (a mixed host whose webhook path shares the app's middleware) would believe a
+# forged identity there. This removes the session cookie and every Remote-*
+# header. Never use it inside a guard: there the Remote-* headers are the
+# gateway's own and must reach the app. Proven by e2e/chain_test.go.
+(strip_public) {
+	header_up Cookie "(^|;\s*)vps_auth_session=[^;]*" ""
+	header_up -Remote-User
+	header_up -Remote-Email
+	header_up -Remote-Groups
+}
+
 # Delete any client-supplied identity headers from the request BEFORE forward_auth
 # runs, so its copy_headers can re-add the authoritative values on a 2xx. The apps
 # trust Remote-* because only Caddy sets them; this makes that guarantee explicit
