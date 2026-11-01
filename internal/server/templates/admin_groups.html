@@ -21,6 +21,7 @@
           <form class="inline" method="post" action="/admin/groups">
             <input type="hidden" name="csrf" value="{{$csrf}}">
             <input type="hidden" name="name" value="{{.Name}}">
+            <input name="label" type="text" aria-label="Label for {{.Name}} (optional)" placeholder="Label (optional)">
             <button type="submit">Create group</button>
           </form>
         </td>
@@ -37,6 +38,11 @@
     <div style="flex:1 1 auto">
       <h2 style="margin:0"><code class="mono">{{.Name}}</code>{{if .Label}} <span class="muted">— {{.Label}}</span>{{end}}{{if .Unused}} <span class="pill guest" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">not used by any app</span>{{end}}</h2>
       {{if .Hosts}}<div class="muted">Used by {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}</div>{{end}}
+      <form class="inline" method="post" action="/admin/groups/{{.Name}}/label">
+        <input type="hidden" name="csrf" value="{{$csrf}}">
+        <input name="label" type="text" value="{{.Label}}" aria-label="Label for {{.Name}}" placeholder="Label (optional)">
+        <button type="submit" class="ghost">Save label</button>
+      </form>
     </div>
     <form class="inline" method="post" action="/admin/groups/{{.Name}}/delete" style="flex:0 0 auto">
       <input type="hidden" name="csrf" value="{{$csrf}}">

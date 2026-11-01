@@ -27,6 +27,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/groups", s.handleAdminGroups)
 	mux.HandleFunc("POST /admin/groups", s.handleAdminCreateGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/delete", s.handleAdminDeleteGroup)
+	mux.HandleFunc("POST /admin/groups/{name}/label", s.handleAdminGroupLabel)
 	mux.HandleFunc("POST /admin/groups/{name}/members", s.handleAdminAddMember)
 	mux.HandleFunc("POST /admin/groups/{name}/members/delete", s.handleAdminRemoveMember)
 	mux.HandleFunc("GET /admin/access", s.handleAdminAccess)
@@ -797,6 +798,30 @@ func (s *Server) handleAdminAddMember(w http.ResponseWriter, r *http.Request) {
 		}
 		s.auditAdmin(r, store.AdminActionGroupAddMember, group, emailAddr)
 	}
+	http.Redirect(w, r, "/admin/groups", http.StatusFound)
+}
+
+// handleAdminGroupLabel changes a group's display label. The label is shown to
+// administrators only; apps see the group name.
+func (s *Server) handleAdminGroupLabel(w http.ResponseWriter, r *http.Request) {
+	if !s.checkCSRF(w, r) {
+		return
+	}
+	group := normalizeGroupName(r.PathValue("name"))
+	label := trimField(r.PostFormValue("label"))
+	if r := []rune(label); len(r) > 200 {
+		label = string(r[:200])
+	}
+	found, err := s.store.UpdateGroupLabel(r.Context(), group, label)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	s.auditAdmin(r, store.AdminActionGroupLabel, group, label)
 	http.Redirect(w, r, "/admin/groups", http.StatusFound)
 }
 

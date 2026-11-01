@@ -540,6 +540,16 @@ func (s *SQLite) CreateGroup(ctx context.Context, name, label string) error {
 	return err
 }
 
+// UpdateGroupLabel changes an existing group's display label.
+func (s *SQLite) UpdateGroupLabel(ctx context.Context, name, label string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE groups SET label = ? WHERE name = ?`, label, name)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // DeleteGroup removes a group; memberships cascade.
 func (s *SQLite) DeleteGroup(ctx context.Context, name string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM groups WHERE name = ?`, name)
