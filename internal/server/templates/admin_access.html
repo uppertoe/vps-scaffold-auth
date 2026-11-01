@@ -19,7 +19,7 @@
 <div class="panel">
   <h2 style="margin-top:0">App access</h2>
   {{if .AppAccess}}
-  <table>
+  <div class="tablewrap"><table>
     <thead><tr><th>When</th><th>Email</th><th>App</th><th>Type</th></tr></thead>
     <tbody>
     {{range .AppAccess}}
@@ -31,7 +31,7 @@
       </tr>
     {{end}}
     </tbody>
-  </table>
+  </table></div>
   {{else}}
   <p class="muted">No app-access records{{if .FilterEmail}} for this address{{end}} yet.</p>
   {{end}}
@@ -40,7 +40,7 @@
 <div class="panel">
   <h2 style="margin-top:0">Login attempts</h2>
   {{if .AuthEvents}}
-  <table>
+  <div class="tablewrap"><table>
     <thead><tr><th>When</th><th>Email</th><th>Step</th><th>Outcome</th><th>Client IP</th></tr></thead>
     <tbody>
     {{range .AuthEvents}}
@@ -53,7 +53,7 @@
       </tr>
     {{end}}
     </tbody>
-  </table>
+  </table></div>
   {{else}}
   <p class="muted">No login attempts{{if .FilterEmail}} for this address{{end}} yet.</p>
   {{end}}

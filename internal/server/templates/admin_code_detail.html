@@ -33,22 +33,28 @@
 
 <div class="panel">
   <h2 style="margin-top:0">Manage</h2>
-  <div class="row">
-    <form class="inline" method="post" action="/admin/break/{{.ID}}/remint">
-      <input type="hidden" name="csrf" value="{{$.CSRF}}">
-      <button type="submit" class="ghost">Re-mint token</button>
-    </form>
-    {{if .Active}}
-    <form class="inline" method="post" action="/admin/break/{{.ID}}/revoke">
-      <input type="hidden" name="csrf" value="{{$.CSRF}}">
-      <button type="submit" class="danger">Revoke</button>
-    </form>
-    {{end}}
-  </div>
-  <p class="muted" style="margin-top:12px">
-    Re-minting invalidates every already-printed card for this location and issues a new one.
-    Revoking blocks future scans immediately; sessions already granted expire on their own short timeout.
-  </p>
+  <details class="confirm">
+    <summary>Re-mint this code</summary>
+    <div class="confirmbody">
+      <p>Re-minting issues a new code. Every card already printed for this location stops working, so print and place the new card straight away.</p>
+      <form class="inline" method="post" action="/admin/break/{{.ID}}/remint">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <button type="submit" class="danger">Re-mint the code</button>
+      </form>
+    </div>
+  </details>
+  {{if .Active}}
+  <details class="confirm">
+    <summary>Revoke this code</summary>
+    <div class="confirmbody">
+      <p>Revoking refuses every future scan of this card at once. Sessions already granted by a scan last until their own short timeout.</p>
+      <form class="inline" method="post" action="/admin/break/{{.ID}}/revoke">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <button type="submit" class="danger">Revoke the code</button>
+      </form>
+    </div>
+  </details>
+  {{end}}
 </div>
 {{end}}
 

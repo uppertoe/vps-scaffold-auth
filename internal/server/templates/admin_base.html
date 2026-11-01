@@ -115,22 +115,79 @@
   .muted { color: var(--muted); font-size: 13px; }
   .err { background: var(--err-bg); color: var(--err-text); border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; }
   code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+
+  /* Shell: brand, menu with the current page marked, signed-in admin. The menu
+     scrolls sideways on a narrow screen instead of wrapping into rows. */
+  header.bar { flex-wrap: wrap; row-gap: 8px; }
+  header.bar nav { display: flex; gap: 4px; overflow-x: auto; flex: 1 1 auto; -webkit-overflow-scrolling: touch; }
+  header.bar nav a { margin: 0; padding: 6px 10px; border-radius: 8px; white-space: nowrap; }
+  header.bar nav a[aria-current=page] { background: rgba(255,255,255,.12); color: var(--bar-fg); }
+  header.bar .who { font-size: 13px; color: var(--bar-link); white-space: nowrap; display: flex; gap: 12px; align-items: center; }
+  header.bar .who a { color: var(--bar-fg); text-decoration: none; }
+  header.bar .who a:hover { text-decoration: underline; }
+  @media (max-width: 640px) {
+    header.bar { padding: 12px 16px; }
+    header.bar nav { order: 3; flex-basis: 100%; }
+    main { padding: 20px 16px 48px; }
+  }
+  /* One-line confirmation or refusal after an action. */
+  .notice { border-radius: 10px; padding: 10px 14px; margin-bottom: 18px; font-size: 14px; }
+  .notice.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .notice.warn { background: var(--err-bg); color: var(--err-text); }
+  /* Disclosure rows: a group, a missing group, a confirmation step. */
+  details > summary { cursor: pointer; list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before { content: "\25B8"; display: inline-block; width: 1em; color: var(--muted); transition: transform .15s; }
+  details[open] > summary::before { transform: rotate(90deg); }
+  .grouprow { border-top: 1px solid var(--line); padding: 12px 0; }
+  .grouprow:first-child { border-top: 0; padding-top: 0; }
+  .grouprow > summary { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .grouprow > summary .name { font-weight: 600; }
+  .grouprow > summary .meta { color: var(--muted); font-size: 13px; }
+  .grouprow > summary .count { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .grouprow .body { padding: 10px 0 4px 1em; }
+  .inlineform { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .inlineform input[type=text], .inlineform input[type=email] { flex: 1 1 220px; width: auto; padding: 8px 10px; font-size: 14px; }
+  .inlineform button { margin-top: 0; padding: 8px 14px; }
+  .confirm { margin-top: 14px; }
+  .confirm > summary { color: var(--danger); font-size: 14px; font-weight: 600; display: inline-block; }
+  .confirm > summary::before { content: none; }
+  .confirm .confirmbody { margin-top: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+  .confirm .confirmbody p { margin: 0 0 10px; font-size: 14px; }
+  .confirm .confirmbody button { margin-top: 0; }
+  /* Overview tiles. */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .stat { background: var(--surface); border: 1px solid var(--card-border); border-radius: 12px; padding: 14px 16px; box-shadow: 0 1px 3px rgba(0,0,0,.07); text-decoration: none; color: inherit; display: block; }
+  .stat:hover { text-decoration: none; border-color: var(--accent); }
+  .stat .n { font-size: 26px; font-weight: 700; display: block; }
+  .stat .l { color: var(--muted); font-size: 13px; }
+  ul.todo { margin: 0; padding-left: 18px; }
+  ul.todo li { margin: 6px 0; }
+  .tablewrap { overflow-x: auto; }
+  .missingrow { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 0; }
+  .missingrow .what { flex: 1 1 260px; }
+  .missingrow .inlineform { margin-top: 0; flex: 0 1 340px; }
+  .missingrow .inlineform input[type=text] { flex: 1 1 160px; }
 </style>
 </head>
 <body>
   <header class="bar">
     <strong>Auth admin</strong>
-    <nav>
-      <a href="/admin/break">Break-glass codes</a>
-      <a href="/admin/access">Access log</a>
-      <a href="/admin/audit">Admin audit</a>
-      <a href="/admin/groups">Groups</a>
-      <a href="/admin/totp">Admin 2FA</a>
-      <a href="/admin/branding">Branding</a>
-      <a href="/admin/settings">Settings</a>
+    <nav aria-label="Admin pages">
+      <a href="/admin/"{{if eq .Active "admin_home"}} aria-current="page"{{end}}>Overview</a>
+      <a href="/admin/groups"{{if eq .Active "admin_groups"}} aria-current="page"{{end}}>Groups</a>
+      <a href="/admin/break"{{if or (eq .Active "admin_codes") (eq .Active "admin_code_detail")}} aria-current="page"{{end}}>Break-glass codes</a>
+      <a href="/admin/access"{{if eq .Active "admin_access"}} aria-current="page"{{end}}>Access log</a>
+      <a href="/admin/audit"{{if eq .Active "admin_audit"}} aria-current="page"{{end}}>Admin audit</a>
+      <a href="/admin/totp"{{if eq .Active "admin_totp"}} aria-current="page"{{end}}>Admin 2FA</a>
+      <a href="/admin/branding"{{if eq .Active "admin_branding"}} aria-current="page"{{end}}>Branding</a>
+      <a href="/admin/settings"{{if eq .Active "admin_settings"}} aria-current="page"{{end}}>Settings</a>
     </nav>
+    {{if .AdminEmail}}<span class="who">{{.AdminEmail}} <a href="/logout">Sign out</a></span>{{end}}
   </header>
   <main>
+    {{if .Notice}}<div class="notice ok" role="status">{{.Notice}}</div>{{end}}
+    {{if .Warning}}<div class="notice warn" role="alert">{{.Warning}}</div>{{end}}
     {{template "content" .}}
   </main>
 </body>

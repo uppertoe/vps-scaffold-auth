@@ -5,6 +5,7 @@
 
 <div class="panel">
   {{if .AdminEvents}}
+  <div class="tablewrap">
   <table>
     <thead><tr><th>When</th><th>Admin</th><th>Action</th><th>Target</th><th>Detail</th><th>Client IP</th></tr></thead>
     <tbody>
@@ -12,7 +13,7 @@
       <tr>
         <td class="muted">{{.Time}}</td>
         <td>{{.Actor}}</td>
-        <td><code class="mono">{{.Action}}</code></td>
+        <td title="{{.Action}}">{{.ActionLabel}}</td>
         <td>{{.Target}}</td>
         <td class="muted">{{.Detail}}</td>
         <td><code class="mono">{{.ClientIP}}</code></td>
@@ -20,6 +21,7 @@
     {{end}}
     </tbody>
   </table>
+  </div>
   {{else}}
   <p class="muted">No administrative actions recorded yet.</p>
   {{end}}

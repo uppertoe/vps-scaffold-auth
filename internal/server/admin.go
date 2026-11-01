@@ -359,7 +359,7 @@ func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.auditAdmin(r, store.AdminActionBrandingUpdate, "global", "")
-	http.Redirect(w, r, "/admin/branding", http.StatusFound)
+	redirectDone(w, r, "/admin/branding", "branding-saved", "")
 }
 
 // allowSlowUpload gives an admin's branding upload two minutes to arrive. The
@@ -544,7 +544,7 @@ func (s *Server) handleAdminSaveSettings(w http.ResponseWriter, r *http.Request)
 	// Record whether a webhook is set, not the URL itself (it may carry a token).
 	s.auditAdmin(r, store.AdminActionSettingsUpdate, "break_glass",
 		fmt.Sprintf("ttl=%gh notify_emails=%d webhook=%t", hours, len(emails), webhook != ""))
-	http.Redirect(w, r, "/admin/settings", http.StatusFound)
+	redirectDone(w, r, "/admin/settings", "settings-saved", "")
 }
 
 func (s *Server) settingsError(w http.ResponseWriter, r *http.Request, msg string) {
@@ -647,8 +647,57 @@ func (s *Server) auditAdmin(r *http.Request, action, target, detail string) {
 
 // --- Home ---
 
+// handleAdminHome is the overview: what needs an administrator's attention,
+// and a count of what the gateway holds.
 func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/admin/break", http.StatusFound)
+	ctx := r.Context()
+	groups, err := s.store.ListGroups(ctx)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	codes, err := s.store.ListBreakGlassCodes(ctx)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	ov := &overviewView{Groups: len(groups), TOTPEnabled: s.cfg.TOTPEnabled}
+	cardTargets := map[string]bool{}
+	for _, c := range codes {
+		cardTargets[normalizeGroupName(c.TargetGroup)] = true
+		if c.Status == "active" {
+			ov.ActiveCards++
+		}
+	}
+	routeGroups, routeGroupsOn := s.routeGroups()
+	ov.RouteGroupsOn = routeGroupsOn
+	existing := map[string]bool{}
+	for _, g := range groups {
+		existing[g.Name] = true
+		members, err := s.store.ListGroupMembers(ctx, g.Name)
+		if err != nil {
+			s.adminError(w, r)
+			return
+		}
+		ov.Members += len(members)
+		if routeGroupsOn && len(routeGroups[g.Name]) == 0 && !cardTargets[g.Name] {
+			ov.UnusedGroups = append(ov.UnusedGroups, g.Name)
+		}
+	}
+	for name := range routeGroups {
+		if !existing[name] && !cardTargets[name] {
+			ov.MissingGroups = append(ov.MissingGroups, name)
+		}
+	}
+	sort.Strings(ov.MissingGroups)
+	if s.cfg.TOTPEnabled {
+		for _, a := range s.totpAdminViews(ctx) {
+			if !a.Enrolled {
+				ov.AdminsWithoutTOTP = append(ov.AdminsWithoutTOTP, a.Email)
+			}
+		}
+	}
+	s.renderAdmin(w, r, http.StatusOK, "admin_home", adminData{Title: "Overview", Overview: ov})
 }
 
 // --- Login & access audit ---
@@ -740,8 +789,12 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(missing, func(i, j int) bool { return missing[i].Name < missing[j].Name })
+	open := normalizeGroupName(r.URL.Query().Get("open"))
+	if !existing[open] {
+		open = ""
+	}
 	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{
-		Title: "Groups", Groups: view,
+		Title: "Groups", Groups: view, OpenGroup: open,
 		MissingGroups: missing, RouteGroupsOn: routeGroupsOn,
 	})
 }
@@ -770,7 +823,7 @@ func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.auditAdmin(r, store.AdminActionGroupCreate, name, "")
-	http.Redirect(w, r, "/admin/groups", http.StatusFound)
+	redirectDone(w, r, "/admin/groups", "group-created", name)
 }
 
 func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) {
@@ -782,7 +835,7 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.auditAdmin(r, store.AdminActionGroupDelete, r.PathValue("name"), "")
-	http.Redirect(w, r, "/admin/groups", http.StatusFound)
+	redirectDone(w, r, "/admin/groups", "group-deleted", "")
 }
 
 func (s *Server) handleAdminAddMember(w http.ResponseWriter, r *http.Request) {
@@ -791,14 +844,16 @@ func (s *Server) handleAdminAddMember(w http.ResponseWriter, r *http.Request) {
 	}
 	group := r.PathValue("name")
 	emailAddr := normalizeEmail(r.PostFormValue("email"))
-	if validEmail(emailAddr) {
-		if err := s.store.AddGroupMember(r.Context(), group, emailAddr); err != nil {
-			s.adminError(w, r)
-			return
-		}
-		s.auditAdmin(r, store.AdminActionGroupAddMember, group, emailAddr)
+	if !validEmail(emailAddr) {
+		redirectDone(w, r, "/admin/groups", "member-invalid", group)
+		return
 	}
-	http.Redirect(w, r, "/admin/groups", http.StatusFound)
+	if err := s.store.AddGroupMember(r.Context(), group, emailAddr); err != nil {
+		s.adminError(w, r)
+		return
+	}
+	s.auditAdmin(r, store.AdminActionGroupAddMember, group, emailAddr)
+	redirectDone(w, r, "/admin/groups", "member-added", group)
 }
 
 // handleAdminGroupLabel changes a group's display label. The label is shown to
@@ -822,7 +877,7 @@ func (s *Server) handleAdminGroupLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditAdmin(r, store.AdminActionGroupLabel, group, label)
-	http.Redirect(w, r, "/admin/groups", http.StatusFound)
+	redirectDone(w, r, "/admin/groups", "label-saved", group)
 }
 
 func (s *Server) handleAdminRemoveMember(w http.ResponseWriter, r *http.Request) {
@@ -836,7 +891,7 @@ func (s *Server) handleAdminRemoveMember(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.auditAdmin(r, store.AdminActionGroupRemoveMember, group, emailAddr)
-	http.Redirect(w, r, "/admin/groups", http.StatusFound)
+	redirectDone(w, r, "/admin/groups", "member-removed", group)
 }
 
 // --- Break-glass codes ---
@@ -902,7 +957,7 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.auditAdmin(r, store.AdminActionBreakCreate, label, "group="+group)
-	http.Redirect(w, r, "/admin/break", http.StatusFound)
+	redirectDone(w, r, "/admin/break", "card-created", "")
 }
 
 func (s *Server) handleAdminBreakDetail(w http.ResponseWriter, r *http.Request) {
@@ -1009,7 +1064,7 @@ func (s *Server) handleAdminSaveCodeBranding(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.auditAdmin(r, store.AdminActionCodeBranding, "code#"+strconv.FormatInt(id, 10), "")
-	http.Redirect(w, r, "/admin/break/"+strconv.FormatInt(id, 10), http.StatusFound)
+	redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-branding", "")
 }
 
 // handleAdminCodeBrandingImage serves a code's override logo or glyph preview.
@@ -1056,7 +1111,7 @@ func (s *Server) handleAdminBreakRevoke(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.auditAdmin(r, store.AdminActionBreakRevoke, "code#"+strconv.FormatInt(id, 10), "")
-	http.Redirect(w, r, "/admin/break/"+strconv.FormatInt(id, 10), http.StatusFound)
+	redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-revoked", "")
 }
 
 func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) {
@@ -1078,7 +1133,7 @@ func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.auditAdmin(r, store.AdminActionBreakRemint, "code#"+strconv.FormatInt(id, 10), "")
-	http.Redirect(w, r, "/admin/break/"+strconv.FormatInt(id, 10), http.StatusFound)
+	redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-reminted", "")
 }
 
 func (s *Server) handleAdminBreakQR(w http.ResponseWriter, r *http.Request) {
