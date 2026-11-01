@@ -28,3 +28,20 @@ func TestParseGroupFeeds(t *testing.T) {
 		t.Errorf("http refused in dev: %v", err)
 	}
 }
+
+func TestFeedAlertToken(t *testing.T) {
+	setValid(t)
+	t.Setenv("GROUP_FEED_ALERT_TOKEN", "tk_abc")
+	if _, err := Load(); err == nil {
+		t.Error("token without a URL was accepted")
+	}
+	t.Setenv("GROUP_FEED_ALERT_URL", "https://ntfy.example.com/alerts")
+	c, err := Load()
+	if err != nil || c.FeedAlertToken != "tk_abc" {
+		t.Fatalf("token with URL = %+v, %v", c, err)
+	}
+	t.Setenv("GROUP_FEED_ALERT_TOKEN", "tk_a bc")
+	if _, err := Load(); err == nil {
+		t.Error("token with whitespace was accepted")
+	}
+}

@@ -69,11 +69,14 @@ type Config struct {
 
 	// GroupFeeds are groups filled from endpoints (GROUP_FEEDS, with tokens in
 	// GROUP_FEED_TOKEN_<GROUP>), fetched every FeedInterval. A failed fetch, an
-	// empty list or a large shrink keeps the current members and alerts
-	// FeedAlertURL (optional; an ntfy topic URL suits).
+	// empty list or a held change keeps the current members and alerts
+	// FeedAlertURL (optional; an ntfy topic URL suits), as does every change
+	// the gateway applies without an administrator. FeedAlertToken, if set, is
+	// sent as a bearer token (an ntfy publish token for a write-only user).
 	GroupFeeds      []GroupFeed
 	FeedInterval    time.Duration
 	FeedAlertURL    string
+	FeedAlertToken  string
 	DisplayLocation *time.Location
 
 	SessionTTL         time.Duration
@@ -310,6 +313,13 @@ func Load() (*Config, error) {
 		if perr != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !(c.CookieInsecure && u.Scheme == "http")) {
 			return nil, fmt.Errorf("GROUP_FEED_ALERT_URL must be an https URL")
 		}
+	}
+	c.FeedAlertToken = strings.TrimSpace(getenv("GROUP_FEED_ALERT_TOKEN", ""))
+	if c.FeedAlertToken != "" && c.FeedAlertURL == "" {
+		return nil, fmt.Errorf("GROUP_FEED_ALERT_TOKEN is set but GROUP_FEED_ALERT_URL is not")
+	}
+	if strings.ContainsAny(c.FeedAlertToken, " \t\r\n") {
+		return nil, fmt.Errorf("GROUP_FEED_ALERT_TOKEN must not contain whitespace")
 	}
 
 	if err := c.validate(); err != nil {
