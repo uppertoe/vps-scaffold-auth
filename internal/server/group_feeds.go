@@ -358,10 +358,10 @@ const alertListLimit = 10
 func (s *Server) alertApplied(group string, add, remove []string) {
 	var parts []string
 	if len(add) > 0 {
-		parts = append(parts, "Added: "+alertList(add)+".")
+		parts = append(parts, "These members have been added: "+alertList(add)+".")
 	}
 	if len(remove) > 0 {
-		parts = append(parts, "Removed: "+alertList(remove)+".")
+		parts = append(parts, "These members have been removed: "+alertList(remove)+".")
 	}
 	s.postFeedAlert("Gateway group feed changed members",
 		fmt.Sprintf("The gateway has updated %s from its feed. %s", group, strings.Join(parts, " ")))
@@ -371,7 +371,7 @@ func alertList(emails []string) string {
 	if len(emails) <= alertListLimit {
 		return strings.Join(emails, ", ")
 	}
-	return fmt.Sprintf("%s and %d more", strings.Join(emails[:alertListLimit], ", "), len(emails)-alertListLimit)
+	return fmt.Sprintf("%s and %d others", strings.Join(emails[:alertListLimit], ", "), len(emails)-alertListLimit)
 }
 
 func (s *Server) postFeedAlert(title, msg string) {

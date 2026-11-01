@@ -436,7 +436,7 @@ func TestFeedAppliedChangesAreAnnounced(t *testing.T) {
 	if got.title != "Gateway group feed changed members" {
 		t.Errorf("title = %q", got.title)
 	}
-	want := "The gateway has updated rch-consultants from its feed. Added: new@example.com. Removed: m00@example.com."
+	want := "The gateway has updated rch-consultants from its feed. These members have been added: new@example.com. These members have been removed: m00@example.com."
 	if got.body != want {
 		t.Errorf("body = %q, want %q", got.body, want)
 	}
@@ -460,7 +460,7 @@ func TestAlertListNamesTenThenCounts(t *testing.T) {
 		e = append(e, fmt.Sprintf("p%02d@example.com", i))
 	}
 	got := alertList(e)
-	if !strings.HasSuffix(got, "p09@example.com and 3 more") || strings.Contains(got, "p10@") {
+	if !strings.HasSuffix(got, "p09@example.com and 3 others") || strings.Contains(got, "p10@") {
 		t.Errorf("alertList = %q", got)
 	}
 	if alertList(e[:2]) != "p00@example.com, p01@example.com" {
