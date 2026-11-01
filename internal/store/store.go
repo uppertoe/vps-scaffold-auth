@@ -72,6 +72,7 @@ const (
 	AdminActionGroupDelete       = "group_delete"
 	AdminActionGroupAddMember    = "group_add_member"
 	AdminActionGroupRemoveMember = "group_remove_member"
+	AdminActionGroupLabel        = "group_label"
 	AdminActionTOTPGenerate      = "totp_generate"
 	AdminActionTOTPRemove        = "totp_remove"
 	AdminActionSettingsUpdate    = "settings_update"
@@ -280,6 +281,9 @@ type Store interface {
 	ListGroups(ctx context.Context) ([]Group, error)
 	// CreateGroup inserts a group (no-op if it already exists).
 	CreateGroup(ctx context.Context, name, label string) error
+	// UpdateGroupLabel changes an existing group's display label. It reports
+	// whether the group exists.
+	UpdateGroupLabel(ctx context.Context, name, label string) (bool, error)
 	// DeleteGroup removes a group and (via cascade) its memberships.
 	DeleteGroup(ctx context.Context, name string) error
 	// AddGroupMember adds an email to a group (idempotent).
