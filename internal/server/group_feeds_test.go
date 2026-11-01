@@ -338,7 +338,7 @@ func TestFeedAcceptNeedsTheHashOnScreen(t *testing.T) {
 	shown := heldHash(t, srv) // the admin loads the page here
 	body.Store(`["m00@example.com","m01@example.com"]`)
 	srv.syncFeed(ctx, "rch-consultants", "group feed", "") // the hourly sync replaces the held change
-	if _, err := srv.syncFeed(ctx, "rch-consultants", "admin@example.com", shown); !errors.Is(err, errNothingHeld) {
+	if _, err := srv.syncFeed(ctx, "rch-consultants", "admin@example.com", shown); !errors.Is(err, errChangeReplaced) {
 		t.Errorf("accept of a replaced change = %v, want refused", err)
 	}
 	if len(members(t, srv)) != 5 {
@@ -360,8 +360,8 @@ func TestFeedStopsWhenStateUnreadable(t *testing.T) {
 	ts := feedEndpoint(t, &body, &hits)
 	srv, _ := feedServer(t, ts.URL, "")
 	srv.store = syncStateReadFails{srv.store}
-	st, _ := srv.syncFeed(context.Background(), "rch-consultants", "group feed", "")
-	if st.Status != store.GroupSyncFailed || hits.Load() != 0 {
+	st, err := srv.syncFeed(context.Background(), "rch-consultants", "group feed", "")
+	if !errors.Is(err, errStateUnreadable) || st.Status != store.GroupSyncFailed || hits.Load() != 0 {
 		t.Errorf("state unreadable: status %q, feed fetched %d times", st.Status, hits.Load())
 	}
 }

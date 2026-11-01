@@ -85,6 +85,9 @@ func (s *Server) StartFeeds(ctx context.Context) {
 			for _, g := range groups {
 				if _, err := s.syncFeed(ctx, g, "group feed", ""); err != nil {
 					log.Printf("group feed %s: %v", g, err)
+					if errors.Is(err, errStateUnreadable) {
+						s.alertFeed(g, "The gateway could not read the group's last sync, so the feed has not been fetched.")
+					}
 				}
 			}
 			t.Reset(s.cfg.FeedInterval)
@@ -93,8 +96,10 @@ func (s *Server) StartFeeds(ctx context.Context) {
 }
 
 var (
-	errNoFeed      = errors.New("group has no feed")
-	errNothingHeld = errors.New("no change is held for this group")
+	errNoFeed          = errors.New("group has no feed")
+	errNothingHeld     = errors.New("no change is held for this group")
+	errChangeReplaced  = errors.New("the held change has been replaced by a newer one")
+	errStateUnreadable = errors.New("the last sync state could not be read")
 )
 
 // feedHoldAdds and feedHoldRemoves are the largest change applied without an
@@ -132,11 +137,14 @@ func (s *Server) syncFeed(ctx context.Context, group, actor, acceptHash string) 
 		// Without the last state the hold checks cannot run; change nothing
 		// and record nothing.
 		log.Printf("group feed %s: reading sync state: %v", group, err)
-		return store.GroupSyncState{Group: group, Status: store.GroupSyncFailed}, nil
+		return store.GroupSyncState{Group: group, Status: store.GroupSyncFailed}, errStateUnreadable
 	}
 	prev := states[group]
-	if accept && (prev.Status != store.GroupSyncHeld || acceptHash != prev.PendingHash) {
+	if accept && prev.Status != store.GroupSyncHeld {
 		return prev, errNothingHeld
+	}
+	if accept && acceptHash != prev.PendingHash {
+		return prev, errChangeReplaced
 	}
 	st := store.GroupSyncState{Group: group, LastAttempt: now, AcceptedList: prev.AcceptedList}
 	finish := func(status, detail string) (store.GroupSyncState, error) {

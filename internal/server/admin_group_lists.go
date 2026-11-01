@@ -214,6 +214,10 @@ func (s *Server) handleAdminSyncGroup(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, errNothingHeld):
 		s.redirectDone(w, r, "/admin/groups", "sync-nothing-held", group)
+	case errors.Is(err, errChangeReplaced):
+		s.redirectDone(w, r, "/admin/groups", "sync-replaced", group)
+	case errors.Is(err, errStateUnreadable):
+		s.redirectDone(w, r, "/admin/groups", "sync-unreadable", group)
 	case err != nil:
 		s.adminError(w, r)
 	case st.Status == store.GroupSyncOK:
