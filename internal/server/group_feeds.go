@@ -230,6 +230,11 @@ func (s *Server) syncFeed(ctx context.Context, group, actor, acceptHash string) 
 			return finish(store.GroupSyncFailed, "The gateway could not update members.")
 		}
 		s.groupRecheck.forgetAll()
+		// A change applied without an administrator is announced, so the
+		// roster cannot widen access unseen.
+		if !accept {
+			s.alertApplied(group, add, remove)
+		}
 	}
 	// The accepted set moves only when an administrator accepts, or on a
 	// first fill small enough to apply without one.
@@ -341,6 +346,35 @@ func (s *Server) groupExistsCtx(ctx context.Context, name string) (bool, error) 
 // alertFeed posts a short notice to GROUP_FEED_ALERT_URL (an ntfy topic, for
 // example) when a feed moves into a failed, empty or held state.
 func (s *Server) alertFeed(group, detail string) {
+	s.postFeedAlert("Gateway group feed needs attention",
+		fmt.Sprintf("Group feed %s needs attention. %s The members have been kept as they were.", group, detail))
+}
+
+// alertListLimit is how many addresses an applied-change alert names before
+// it gives a count of the rest.
+const alertListLimit = 10
+
+// alertApplied announces a change the gateway applied on its own.
+func (s *Server) alertApplied(group string, add, remove []string) {
+	var parts []string
+	if len(add) > 0 {
+		parts = append(parts, "Added: "+alertList(add)+".")
+	}
+	if len(remove) > 0 {
+		parts = append(parts, "Removed: "+alertList(remove)+".")
+	}
+	s.postFeedAlert("Gateway group feed changed members",
+		fmt.Sprintf("The gateway has updated %s from its feed. %s", group, strings.Join(parts, " ")))
+}
+
+func alertList(emails []string) string {
+	if len(emails) <= alertListLimit {
+		return strings.Join(emails, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(emails[:alertListLimit], ", "), len(emails)-alertListLimit)
+}
+
+func (s *Server) postFeedAlert(title, msg string) {
 	if s.cfg.FeedAlertURL == "" {
 		return
 	}
@@ -348,7 +382,7 @@ func (s *Server) alertFeed(group, detail string) {
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
 		return
 	}
-	msg := fmt.Sprintf("Group feed %s needs attention. %s The members have been kept as they were.", group, detail)
+	token := s.cfg.FeedAlertToken
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -356,12 +390,18 @@ func (s *Server) alertFeed(group, detail string) {
 		if err != nil {
 			return
 		}
-		req.Header.Set("Title", "Gateway group feed needs attention")
+		req.Header.Set("Title", title)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 		resp, err := s.feeds.client.Do(req)
 		if err != nil {
 			log.Printf("group feed alert: %v", err)
 			return
 		}
 		resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			log.Printf("group feed alert: refused with HTTP %d", resp.StatusCode)
+		}
 	}()
 }

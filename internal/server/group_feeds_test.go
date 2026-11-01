@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -379,5 +381,89 @@ func fill(t *testing.T, srv *Server) {
 		if st, err = srv.syncFeed(ctx, "rch-consultants", "admin@example.com", heldHash(t, srv)); err != nil || st.Status != store.GroupSyncOK {
 			t.Fatalf("accepting the first fill = %+v, %v", st, err)
 		}
+	}
+}
+
+// alertCapture records each alert's title, body and Authorization header.
+type alertCapture struct {
+	mu   sync.Mutex
+	msgs []capturedAlert
+}
+
+type capturedAlert struct{ title, body, auth string }
+
+func (a *alertCapture) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		a.mu.Lock()
+		a.msgs = append(a.msgs, capturedAlert{r.Header.Get("Title"), string(b), r.Header.Get("Authorization")})
+		a.mu.Unlock()
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func (a *alertCapture) all() []capturedAlert {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]capturedAlert(nil), a.msgs...)
+}
+
+func TestFeedAppliedChangesAreAnnounced(t *testing.T) {
+	var body atomic.Value
+	var hits atomic.Int32
+	body.Store(emailsJSON(20, "m"))
+	ts := feedEndpoint(t, &body, &hits)
+	var cap alertCapture
+	alert := cap.server(t)
+	srv, _ := testServerWith(t, func(c *config.Config) {
+		c.GroupFeeds = []config.GroupFeed{{Group: "rch-consultants", URL: ts.URL, Token: testFeedToken}}
+		c.FeedAlertURL = alert.URL
+		c.FeedAlertToken = "tk_alerttoken"
+	})
+	ctx := context.Background()
+	fill(t, srv) // held first fill (one alert), then accepted (none)
+	waitFor(t, func() bool { return len(cap.all()) == 1 })
+
+	// A small change applies on its own and is announced, with the addresses.
+	body.Store(strings.Replace(emailsJSON(20, "m"), "m00@example.com", "new@example.com", 1))
+	if st, _ := srv.syncFeed(ctx, "rch-consultants", "group feed", ""); st.Status != store.GroupSyncOK {
+		t.Fatalf("small change = %+v, want applied", st)
+	}
+	waitFor(t, func() bool { return len(cap.all()) == 2 })
+	got := cap.all()[1]
+	if got.title != "Gateway group feed changed members" {
+		t.Errorf("title = %q", got.title)
+	}
+	want := "The gateway has updated rch-consultants from its feed. Added: new@example.com. Removed: m00@example.com."
+	if got.body != want {
+		t.Errorf("body = %q, want %q", got.body, want)
+	}
+	for i, m := range cap.all() {
+		if m.auth != "Bearer tk_alerttoken" {
+			t.Errorf("alert %d Authorization = %q", i, m.auth)
+		}
+	}
+
+	// No change, no alert.
+	srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+	time.Sleep(100 * time.Millisecond)
+	if n := len(cap.all()); n != 2 {
+		t.Errorf("alerts after an unchanged sync = %d, want 2", n)
+	}
+}
+
+func TestAlertListNamesTenThenCounts(t *testing.T) {
+	var e []string
+	for i := 0; i < 13; i++ {
+		e = append(e, fmt.Sprintf("p%02d@example.com", i))
+	}
+	got := alertList(e)
+	if !strings.HasSuffix(got, "p09@example.com and 3 more") || strings.Contains(got, "p10@") {
+		t.Errorf("alertList = %q", got)
+	}
+	if alertList(e[:2]) != "p00@example.com, p01@example.com" {
+		t.Errorf("short alertList = %q", alertList(e[:2]))
 	}
 }
