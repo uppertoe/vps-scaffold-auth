@@ -33,17 +33,7 @@ const (
 	feedMaxBody      = 1 << 20 // 1 MiB: tens of thousands of addresses
 	feedMaxAddresses = 20000
 	feedFirstDelay   = time.Minute
-	// feedShowMax caps how many held addresses the Groups page lists each way.
-	feedShowMax = 200
 )
-
-// capList returns at most n items and how many were left out.
-func capList(xs []string, n int) ([]string, int) {
-	if len(xs) <= n {
-		return xs, 0
-	}
-	return xs[:n], len(xs) - n
-}
 
 type feedSyncer struct {
 	feeds  map[string]config.GroupFeed
@@ -93,7 +83,7 @@ func (s *Server) StartFeeds(ctx context.Context) {
 			}
 			sort.Strings(groups)
 			for _, g := range groups {
-				if _, err := s.syncFeed(ctx, g, "group feed", false); err != nil {
+				if _, err := s.syncFeed(ctx, g, "group feed", ""); err != nil {
 					log.Printf("group feed %s: %v", g, err)
 				}
 			}
@@ -112,32 +102,49 @@ var (
 func feedHoldAdds(current int) int    { return max(5, current/4) }
 func feedHoldRemoves(current int) int { return max(2, current/4) }
 
+// feedHoldDrift is the most the members may differ, in total, from the set
+// last accepted before a change is held.
+func feedHoldDrift(accepted int) int { return max(3, accepted/4) }
+
 // syncFeed fetches group's feed and applies it, unless the change is large
 // enough to hold for an administrator. actor is recorded in the audit ("group
-// feed" for the hourly sync, the admin's email for "Sync now"). accept applies
-// the held change, and only if the feed still returns exactly the set that was
-// held.
-func (s *Server) syncFeed(ctx context.Context, group, actor string, accept bool) (store.GroupSyncState, error) {
-	if _, ok := s.feedFor(group); !ok {
+// feed" for the hourly sync, the admin's email for "Sync now"). acceptHash,
+// when set, accepts the held change the administrator was shown: it applies
+// only if a change is held, its hash is acceptHash, and a fresh fetch still
+// returns exactly that set.
+func (s *Server) syncFeed(ctx context.Context, group, actor, acceptHash string) (store.GroupSyncState, error) {
+	feed, ok := s.feedFor(group)
+	if !ok {
 		return store.GroupSyncState{}, errNoFeed
 	}
-	feed, _ := s.feedFor(group)
 	s.feeds.mu.Lock()
 	defer s.feeds.mu.Unlock()
+	accept := acceptHash != ""
+
+	// Database writes get their own deadline, so a slow fetch cannot leave a
+	// change applied without its record.
+	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
 
 	now := s.now()
-	states, _ := s.store.ListGroupSyncStates(ctx)
+	states, err := s.store.ListGroupSyncStates(dbCtx)
+	if err != nil {
+		// Without the last state the hold checks cannot run; change nothing
+		// and record nothing.
+		log.Printf("group feed %s: reading sync state: %v", group, err)
+		return store.GroupSyncState{Group: group, Status: store.GroupSyncFailed}, nil
+	}
 	prev := states[group]
-	if accept && prev.Status != store.GroupSyncHeld {
+	if accept && (prev.Status != store.GroupSyncHeld || acceptHash != prev.PendingHash) {
 		return prev, errNothingHeld
 	}
-	st := store.GroupSyncState{Group: group, LastAttempt: now, Baseline: prev.Baseline}
+	st := store.GroupSyncState{Group: group, LastAttempt: now, AcceptedList: prev.AcceptedList}
 	finish := func(status, detail string) (store.GroupSyncState, error) {
 		st.Status, st.Detail = status, detail
 		if status == store.GroupSyncOK {
 			st.LastSuccess = now
 		}
-		if err := s.store.SetGroupSyncState(ctx, st); err != nil {
+		if err := s.store.SetGroupSyncState(dbCtx, st); err != nil {
 			return st, err
 		}
 		// Alert on entering a problem state, and again when a held change
@@ -155,16 +162,16 @@ func (s *Server) syncFeed(ctx context.Context, group, actor string, accept bool)
 	if len(emails) == 0 {
 		return finish(store.GroupSyncEmpty, "The feed returned no usable addresses.")
 	}
-	exists, err := s.groupExistsCtx(ctx, group)
+	exists, err := s.groupExistsCtx(dbCtx, group)
 	if err != nil {
 		return finish(store.GroupSyncFailed, "The gateway could not read groups.")
 	}
 	if !exists {
-		if err := s.store.CreateGroup(ctx, group, ""); err != nil {
+		if err := s.store.CreateGroup(dbCtx, group, ""); err != nil {
 			return finish(store.GroupSyncFailed, "The gateway could not create the group.")
 		}
 	}
-	current, err := s.store.ListGroupMembers(ctx, group)
+	current, err := s.store.ListGroupMembers(dbCtx, group)
 	if err != nil {
 		return finish(store.GroupSyncFailed, "The gateway could not read members.")
 	}
@@ -180,15 +187,18 @@ func (s *Server) syncFeed(ctx context.Context, group, actor string, accept bool)
 		return finish(store.GroupSyncHeld, "The feed has changed since the change was held, so the new change is held for checking instead.")
 	}
 	if !accept && len(add)+len(remove) > 0 {
-		reasons := []string{}
+		var reasons []string
 		if len(add) > feedHoldAdds(len(current)) {
 			reasons = append(reasons, fmt.Sprintf("it would add %d members", len(add)))
 		}
 		if len(remove) > feedHoldRemoves(len(current)) {
 			reasons = append(reasons, fmt.Sprintf("it would remove %d of %d members", len(remove), len(current)))
 		}
-		if prev.Baseline > 0 && 2*len(emails) < prev.Baseline {
-			reasons = append(reasons, fmt.Sprintf("the group would fall to %d from %d since the last accepted change", len(emails), prev.Baseline))
+		// Drift from the last accepted set, however gradual: a feed cannot
+		// replace or grow a group a little at a time unnoticed.
+		inA, inB := diffMembers(prev.AcceptedList, emails)
+		if drift := len(inA) + len(inB); drift > feedHoldDrift(len(prev.AcceptedList)) {
+			reasons = append(reasons, fmt.Sprintf("%d members would differ from the list last accepted", drift))
 		}
 		if len(reasons) > 0 {
 			st.PendingHash, st.PendingAddList, st.PendingRemoveList = hash, add, remove
@@ -196,25 +206,27 @@ func (s *Server) syncFeed(ctx context.Context, group, actor string, accept bool)
 		}
 	}
 	if len(add)+len(remove) > 0 {
-		if err := s.store.ApplyGroupSync(ctx, group, add, remove); err != nil {
+		events := make([]store.AdminEvent, 0, len(add)+len(remove)+1)
+		for _, e := range add {
+			events = append(events, store.AdminEvent{Actor: actor, Action: store.AdminActionGroupAddMember, Target: group, Detail: e, CreatedAt: now})
+		}
+		for _, e := range remove {
+			events = append(events, store.AdminEvent{Actor: actor, Action: store.AdminActionGroupRemoveMember, Target: group, Detail: e, CreatedAt: now})
+		}
+		summary := fmt.Sprintf("added %d, removed %d", len(add), len(remove))
+		if accept {
+			summary += " (accepted a held change)"
+		}
+		events = append(events, store.AdminEvent{Actor: actor, Action: store.AdminActionGroupSync, Target: group, Detail: summary, CreatedAt: now})
+		if err := s.store.ApplyGroupSync(dbCtx, group, add, remove, events); err != nil {
 			return finish(store.GroupSyncFailed, "The gateway could not update members.")
 		}
 		s.groupRecheck.forgetAll()
-		// One audit row per address, so any change can be rebuilt.
-		for _, e := range add {
-			_ = s.store.RecordAdminEvent(ctx, store.AdminEvent{Actor: actor, Action: store.AdminActionGroupAddMember, Target: group, Detail: e, CreatedAt: now})
-		}
-		for _, e := range remove {
-			_ = s.store.RecordAdminEvent(ctx, store.AdminEvent{Actor: actor, Action: store.AdminActionGroupRemoveMember, Target: group, Detail: e, CreatedAt: now})
-		}
-		_ = s.store.RecordAdminEvent(ctx, store.AdminEvent{
-			Actor: actor, Action: store.AdminActionGroupSync, Target: group,
-			Detail: fmt.Sprintf("added %d, removed %d%s", len(add), len(remove), map[bool]string{true: " (accepted a held change)"}[accept]), CreatedAt: now,
-		})
 	}
-	// The high-water mark resets on an accepted change and otherwise rises.
-	if accept || len(emails) > st.Baseline {
-		st.Baseline = len(emails)
+	// The accepted set moves only when an administrator accepts, or on a
+	// first fill small enough to apply without one.
+	if accept || len(prev.AcceptedList) == 0 {
+		st.AcceptedList = emails
 	}
 	return finish(store.GroupSyncOK, fmt.Sprintf("%d members; %d added, %d removed.%s", len(emails), len(add), len(remove), skippedNote))
 }

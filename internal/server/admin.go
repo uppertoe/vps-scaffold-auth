@@ -713,6 +713,12 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(ov.FeedProblems)
 	}
+	for g := range s.feeds.feeds {
+		if len(includes[g]) > 0 {
+			ov.FeedIncludes = append(ov.FeedIncludes, g)
+		}
+	}
+	sort.Strings(ov.FeedIncludes)
 	if s.cfg.TOTPEnabled {
 		for _, a := range s.totpAdminViews(ctx) {
 			if !a.Enrolled {
@@ -841,8 +847,8 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 				}
 				fv.Pending = st.Status == store.GroupSyncHeld
 				if fv.Pending {
-					fv.PendingAdd, fv.PendingAddMore = capList(st.PendingAddList, feedShowMax)
-					fv.PendingRemove, fv.PendingRemoveMore = capList(st.PendingRemoveList, feedShowMax)
+					fv.PendingAdd, fv.PendingRemove = st.PendingAddList, st.PendingRemoveList
+					fv.PendingHash = st.PendingHash
 				}
 			}
 		}

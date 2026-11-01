@@ -108,9 +108,9 @@ CREATE TABLE IF NOT EXISTS group_sync_state (
 	pending_hash        TEXT NOT NULL DEFAULT '',
 	pending_add_list    TEXT NOT NULL DEFAULT '',
 	pending_remove_list TEXT NOT NULL DEFAULT '',
-	-- The group's high-water mark since the last accepted change, against
-	-- which gradual shrinkage is measured.
-	baseline INTEGER NOT NULL DEFAULT 0
+	-- The member set an administrator last accepted (or the first small
+	-- fill), newline-separated: drift from it, however gradual, is held.
+	accepted_list TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS break_glass_codes (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -673,9 +673,10 @@ func (s *SQLite) AddGroupMembers(ctx context.Context, group string, emails []str
 	return added, nil
 }
 
-// ApplyGroupSync adds and removes members of a feed-filled group in one
-// transaction.
-func (s *SQLite) ApplyGroupSync(ctx context.Context, group string, add, remove []string) error {
+// ApplyGroupSync adds and removes members of a feed-filled group, and records
+// the audit events, in one transaction: the change and its record succeed or
+// fail together.
+func (s *SQLite) ApplyGroupSync(ctx context.Context, group string, add, remove []string, events []AdminEvent) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -694,6 +695,14 @@ func (s *SQLite) ApplyGroupSync(ctx context.Context, group string, add, remove [
 			return err
 		}
 	}
+	for _, e := range events {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO admin_events (actor, action, target, detail, client_ip, user_agent, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			e.Actor, e.Action, e.Target, e.Detail, e.ClientIP, e.UserAgent, e.CreatedAt.Unix()); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -701,7 +710,7 @@ func (s *SQLite) ApplyGroupSync(ctx context.Context, group string, add, remove [
 func (s *SQLite) SetGroupSyncState(ctx context.Context, st GroupSyncState) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO group_sync_state (group_name, last_attempt, last_success, status, detail, pending_add, pending_remove,
-		   pending_hash, pending_add_list, pending_remove_list, baseline)
+		   pending_hash, pending_add_list, pending_remove_list, accepted_list)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(group_name) DO UPDATE SET
 		   last_attempt = excluded.last_attempt,
@@ -709,9 +718,9 @@ func (s *SQLite) SetGroupSyncState(ctx context.Context, st GroupSyncState) error
 		   status = excluded.status, detail = excluded.detail,
 		   pending_add = excluded.pending_add, pending_remove = excluded.pending_remove,
 		   pending_hash = excluded.pending_hash, pending_add_list = excluded.pending_add_list,
-		   pending_remove_list = excluded.pending_remove_list, baseline = excluded.baseline`,
+		   pending_remove_list = excluded.pending_remove_list, accepted_list = excluded.accepted_list`,
 		st.Group, st.LastAttempt.Unix(), unixOrZero(st.LastSuccess), st.Status, st.Detail, len(st.PendingAddList), len(st.PendingRemoveList),
-		st.PendingHash, strings.Join(st.PendingAddList, "\n"), strings.Join(st.PendingRemoveList, "\n"), st.Baseline)
+		st.PendingHash, strings.Join(st.PendingAddList, "\n"), strings.Join(st.PendingRemoveList, "\n"), strings.Join(st.AcceptedList, "\n"))
 	return err
 }
 
@@ -719,7 +728,7 @@ func (s *SQLite) SetGroupSyncState(ctx context.Context, st GroupSyncState) error
 func (s *SQLite) ListGroupSyncStates(ctx context.Context) (map[string]GroupSyncState, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT group_name, last_attempt, last_success, status, detail, pending_add, pending_remove,
-		        pending_hash, pending_add_list, pending_remove_list, baseline FROM group_sync_state`)
+		        pending_hash, pending_add_list, pending_remove_list, accepted_list FROM group_sync_state`)
 	if err != nil {
 		return nil, err
 	}
@@ -729,12 +738,13 @@ func (s *SQLite) ListGroupSyncStates(ctx context.Context) (map[string]GroupSyncS
 		var st GroupSyncState
 		var attempt, success int64
 		var nAdd, nRemove int
-		var addList, removeList string
+		var addList, removeList, acceptedList string
 		if err := rows.Scan(&st.Group, &attempt, &success, &st.Status, &st.Detail, &nAdd, &nRemove,
-			&st.PendingHash, &addList, &removeList, &st.Baseline); err != nil {
+			&st.PendingHash, &addList, &removeList, &acceptedList); err != nil {
 			return nil, err
 		}
 		st.PendingAddList, st.PendingRemoveList = splitLines(addList), splitLines(removeList)
+		st.AcceptedList = splitLines(acceptedList)
 		st.LastAttempt = time.Unix(attempt, 0)
 		if success > 0 {
 			st.LastSuccess = time.Unix(success, 0)

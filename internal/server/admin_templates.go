@@ -200,11 +200,11 @@ type feedView struct {
 	LastAttempt string
 	LastSuccess string
 	Pending     bool
-	// The held change, as it would be applied (shown up to feedShowMax each).
-	PendingAdd        []string
-	PendingRemove     []string
-	PendingAddMore    int
-	PendingRemoveMore int
+	// The held change, exactly as it would be applied, and its hash (sent
+	// back with Accept so only the change on screen can be accepted).
+	PendingAdd    []string
+	PendingRemove []string
+	PendingHash   string
 }
 
 // overviewView is the admin home page: counts, and the items that need an
@@ -222,6 +222,9 @@ type overviewView struct {
 	// FeedProblems are feed-filled groups whose last sync failed, came back
 	// empty or was held.
 	FeedProblems []string
+	// FeedIncludes are synced groups that still include other groups (made
+	// before the group was synced), which widens "whoever the feed lists".
+	FeedIncludes []string
 	// Sites is the "who can reach what" table (ROUTE_ACCESS_FILE); nil
 	// leaves the table out.
 	Sites []siteAccessView
@@ -229,7 +232,7 @@ type overviewView struct {
 
 // Attention reports whether anything on the overview needs action.
 func (o *overviewView) Attention() bool {
-	return len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0 || len(o.FeedProblems) > 0
+	return len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0 || len(o.FeedProblems) > 0 || len(o.FeedIncludes) > 0
 }
 
 // missingGroupView is a group a route requires that has not been created.

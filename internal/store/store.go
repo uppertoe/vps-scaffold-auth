@@ -97,9 +97,9 @@ type GroupSyncState struct {
 	PendingHash       string
 	PendingAddList    []string
 	PendingRemoveList []string
-	// Baseline is the group's high-water mark since the last accepted
-	// change; falling below half of it is held.
-	Baseline int
+	// AcceptedList is the member set an administrator last accepted (or the
+	// first small fill); drift from it beyond a threshold is held.
+	AcceptedList []string
 }
 
 // Feed sync outcomes.
@@ -322,7 +322,7 @@ type Store interface {
 	AddGroupMembers(ctx context.Context, group string, emails []string) ([]string, error)
 	// ApplyGroupSync adds and removes a feed-filled group's members in one
 	// transaction; Set/ListGroupSyncState record each feed's last outcome.
-	ApplyGroupSync(ctx context.Context, group string, add, remove []string) error
+	ApplyGroupSync(ctx context.Context, group string, add, remove []string, events []AdminEvent) error
 	SetGroupSyncState(ctx context.Context, st GroupSyncState) error
 	ListGroupSyncStates(ctx context.Context) (map[string]GroupSyncState, error)
 	// UpdateGroupLabel changes an existing group's display label. It reports

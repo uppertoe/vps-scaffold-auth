@@ -201,7 +201,16 @@ func (s *Server) handleAdminSyncGroup(w http.ResponseWriter, r *http.Request) {
 	// Detached from the request: closing the tab must not fail the sync.
 	ctx, cancel := context.WithTimeout(context.Background(), feedFetchTimeout+10*time.Second)
 	defer cancel()
-	st, err := s.syncFeed(ctx, group, actor, r.PostFormValue("accept") == "1")
+	acceptHash := ""
+	if r.PostFormValue("accept") == "1" {
+		// The hash of the held change the admin was shown; a different (newer)
+		// held change is not accepted on the strength of an old page.
+		if acceptHash = r.PostFormValue("hash"); acceptHash == "" {
+			s.redirectDone(w, r, "/admin/groups", "sync-nothing-held", group)
+			return
+		}
+	}
+	st, err := s.syncFeed(ctx, group, actor, acceptHash)
 	switch {
 	case errors.Is(err, errNothingHeld):
 		s.redirectDone(w, r, "/admin/groups", "sync-nothing-held", group)
