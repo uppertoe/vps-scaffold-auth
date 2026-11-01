@@ -100,6 +100,7 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	srv.StartFeeds(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {

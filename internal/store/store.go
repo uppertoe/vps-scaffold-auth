@@ -75,11 +75,33 @@ const (
 	AdminActionGroupLabel         = "group_label"
 	AdminActionGroupIncludeAdd    = "group_include_add"
 	AdminActionGroupIncludeRemove = "group_include_remove"
+	AdminActionGroupSync          = "group_sync"
 	AdminActionTOTPGenerate       = "totp_generate"
 	AdminActionTOTPRemove         = "totp_remove"
 	AdminActionSettingsUpdate     = "settings_update"
 	AdminActionBrandingUpdate     = "branding_update"
 	AdminActionCodeBranding       = "break_glass_branding"
+)
+
+// GroupSyncState is the outcome of the last sync of a feed-filled group.
+// Status is one of the GroupSync* values; PendingAdd/PendingRemove describe a
+// change that was held back for an administrator to accept.
+type GroupSyncState struct {
+	Group         string
+	LastAttempt   time.Time
+	LastSuccess   time.Time
+	Status        string
+	Detail        string
+	PendingAdd    int
+	PendingRemove int
+}
+
+// Feed sync outcomes.
+const (
+	GroupSyncOK     = "ok"
+	GroupSyncFailed = "failed" // fetch or parse failed; members kept
+	GroupSyncEmpty  = "empty"  // the feed returned no addresses; members kept
+	GroupSyncHeld   = "held"   // too large a shrink; members kept until accepted
 )
 
 // AdminEvent records one administrative mutation for attribution: which admin
@@ -292,6 +314,11 @@ type Store interface {
 	// AddGroupMembers adds several addresses at once and returns those that
 	// were not already members.
 	AddGroupMembers(ctx context.Context, group string, emails []string) ([]string, error)
+	// ApplyGroupSync adds and removes a feed-filled group's members in one
+	// transaction; Set/ListGroupSyncState record each feed's last outcome.
+	ApplyGroupSync(ctx context.Context, group string, add, remove []string) error
+	SetGroupSyncState(ctx context.Context, st GroupSyncState) error
+	ListGroupSyncStates(ctx context.Context) (map[string]GroupSyncState, error)
 	// UpdateGroupLabel changes an existing group's display label. It reports
 	// whether the group exists.
 	UpdateGroupLabel(ctx context.Context, name, label string) (bool, error)

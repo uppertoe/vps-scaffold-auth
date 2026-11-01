@@ -91,6 +91,17 @@ CREATE TABLE IF NOT EXISTS group_includes (
 	PRIMARY KEY (group_name, included)
 );
 CREATE INDEX IF NOT EXISTS idx_group_includes_included ON group_includes(included);
+-- The last sync of each feed-filled group, for the admin pages. Not tied to
+-- groups by a foreign key: a feed's state outlives a deleted group row.
+CREATE TABLE IF NOT EXISTS group_sync_state (
+	group_name   TEXT PRIMARY KEY,
+	last_attempt INTEGER NOT NULL,
+	last_success INTEGER NOT NULL DEFAULT 0,
+	status       TEXT NOT NULL,
+	detail       TEXT NOT NULL DEFAULT '',
+	pending_add    INTEGER NOT NULL DEFAULT 0,
+	pending_remove INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS break_glass_codes (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
 	label        TEXT NOT NULL UNIQUE,
@@ -641,6 +652,75 @@ func (s *SQLite) AddGroupMembers(ctx context.Context, group string, emails []str
 		return nil, err
 	}
 	return added, nil
+}
+
+// ApplyGroupSync adds and removes members of a feed-filled group in one
+// transaction.
+func (s *SQLite) ApplyGroupSync(ctx context.Context, group string, add, remove []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	now := time.Now().Unix()
+	for _, e := range add {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO group_members (group_name, email, created_at) VALUES (?, ?, ?)
+			 ON CONFLICT(group_name, email) DO NOTHING`, group, e, now); err != nil {
+			return err
+		}
+	}
+	for _, e := range remove {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM group_members WHERE group_name = ? AND email = ?`, group, e); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SetGroupSyncState records the outcome of a feed sync.
+func (s *SQLite) SetGroupSyncState(ctx context.Context, st GroupSyncState) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO group_sync_state (group_name, last_attempt, last_success, status, detail, pending_add, pending_remove)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(group_name) DO UPDATE SET
+		   last_attempt = excluded.last_attempt,
+		   last_success = CASE WHEN excluded.last_success > 0 THEN excluded.last_success ELSE group_sync_state.last_success END,
+		   status = excluded.status, detail = excluded.detail,
+		   pending_add = excluded.pending_add, pending_remove = excluded.pending_remove`,
+		st.Group, st.LastAttempt.Unix(), unixOrZero(st.LastSuccess), st.Status, st.Detail, st.PendingAdd, st.PendingRemove)
+	return err
+}
+
+// ListGroupSyncStates returns the last sync outcome per group.
+func (s *SQLite) ListGroupSyncStates(ctx context.Context) (map[string]GroupSyncState, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT group_name, last_attempt, last_success, status, detail, pending_add, pending_remove FROM group_sync_state`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]GroupSyncState{}
+	for rows.Next() {
+		var st GroupSyncState
+		var attempt, success int64
+		if err := rows.Scan(&st.Group, &attempt, &success, &st.Status, &st.Detail, &st.PendingAdd, &st.PendingRemove); err != nil {
+			return nil, err
+		}
+		st.LastAttempt = time.Unix(attempt, 0)
+		if success > 0 {
+			st.LastSuccess = time.Unix(success, 0)
+		}
+		out[st.Group] = st
+	}
+	return out, rows.Err()
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 // DeleteGroup removes a group; memberships cascade.

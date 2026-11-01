@@ -24,6 +24,11 @@
       {{range $i, $g := .UnusedGroups}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}.
       If {{if eq (len .UnusedGroups) 1}}it is{{else}}they are{{end}} left over from a removed app, you can delete {{if eq (len .UnusedGroups) 1}}it{{else}}them{{end}} on the <a href="/admin/groups">Groups page</a>.</li>
     {{end}}
+    {{if .FeedProblems}}
+    <li>The feed for {{if eq (len .FeedProblems) 1}}this group{{else}}these groups{{end}} needs attention:
+      {{range $i, $g := .FeedProblems}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}.
+      The members have been kept as they were. Open the group on the <a href="/admin/groups">Groups page</a> to see why.</li>
+    {{end}}
     {{if .AdminsWithoutTOTP}}
     <li>{{if eq (len .AdminsWithoutTOTP) 1}}This administrator has{{else}}These administrators have{{end}} not set up two-factor sign-in:
       {{range $i, $a := .AdminsWithoutTOTP}}{{if $i}}, {{end}}{{$a}}{{end}}.

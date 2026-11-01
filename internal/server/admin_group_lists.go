@@ -95,6 +95,10 @@ func (s *Server) handleAdminConfirmMembers(w http.ResponseWriter, r *http.Reques
 	if !s.checkCSRF(w, r) {
 		return
 	}
+	if _, synced := s.feedFor(normalizeGroupName(r.PathValue("name"))); synced {
+		s.redirectDone(w, r, "/admin/groups", "group-synced", normalizeGroupName(r.PathValue("name")))
+		return
+	}
 	group := normalizeGroupName(r.PathValue("name"))
 	if !s.groupExists(r, group) {
 		http.NotFound(w, r)
@@ -169,4 +173,34 @@ func (s *Server) handleAdminRemoveInclude(w http.ResponseWriter, r *http.Request
 	s.groupRecheck.forgetAll()
 	s.auditAdmin(r, store.AdminActionGroupIncludeRemove, group, included)
 	s.redirectDone(w, r, "/admin/groups", "include-removed", group)
+}
+
+// handleAdminSyncGroup fetches a feed-filled group's feed now. accept=1
+// applies a change that was held for being too large a shrink.
+func (s *Server) handleAdminSyncGroup(w http.ResponseWriter, r *http.Request) {
+	if !s.checkCSRF(w, r) {
+		return
+	}
+	group := normalizeGroupName(r.PathValue("name"))
+	if _, ok := s.feedFor(group); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	accept := r.PostFormValue("accept") == "1"
+	st, err := s.syncFeed(r.Context(), group, accept)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	if accept {
+		s.auditAdmin(r, store.AdminActionGroupSync, group, "accepted a held change")
+	}
+	switch st.Status {
+	case store.GroupSyncOK:
+		s.redirectDone(w, r, "/admin/groups", "sync-ok", group)
+	case store.GroupSyncHeld:
+		s.redirectDone(w, r, "/admin/groups", "sync-held", group)
+	default:
+		s.redirectDone(w, r, "/admin/groups", "sync-failed", group)
+	}
 }

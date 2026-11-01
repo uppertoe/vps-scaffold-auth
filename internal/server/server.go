@@ -36,6 +36,7 @@ type Server struct {
 	totpReplay   *totpReplay
 	access       *accessAudit
 	groupRecheck *groupRecheck // refusal-path group re-reads (group_recheck.go)
+	feeds        *feedSyncer   // groups filled from endpoints (group_feeds.go)
 	csp          string        // precomputed Content-Security-Policy (see cspPolicy)
 	pages        pages
 	adminPages   pages
@@ -83,6 +84,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		breakLimiter: newBreakLimiter(cfg),
 		access:       newAccessAudit(st, cfg.AuditRetention),
 		groupRecheck: newGroupRecheck(),
+		feeds:        newFeedSyncer(cfg.GroupFeeds),
 		csp:          cspPolicy(cfg.Domain, cfg.AllowApexRedirect),
 		pages:        tmpls,
 		adminPages:   adminTmpls,

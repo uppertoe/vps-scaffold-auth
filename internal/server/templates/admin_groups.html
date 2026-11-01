@@ -29,16 +29,43 @@
   {{if .Groups}}
   {{range .Groups}}
   {{$group := .Name}}
+  {{$synced := .Feed}}
   <details class="grouprow" id="g-{{.Name}}"{{if eq .Name $open}} open{{end}}>
     <summary>
       <code class="mono name">{{.Name}}</code>
       {{if .Label}}<span class="meta">{{.Label}}</span>{{end}}
       {{if .Includes}}<span class="meta">includes {{range $i, $g := .Includes}}{{if $i}}, {{end}}{{$g}}{{end}}</span>{{end}}
+      {{if .Feed}}<span class="pill ok">synced</span>{{end}}
       {{if .Unused}}<span class="pill guest" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">not used by any app</span>{{end}}
       <span class="count">{{len .Members}} {{if eq (len .Members) 1}}member{{else}}members{{end}}</span>
     </summary>
     <div class="body">
       {{if .Hosts}}<p class="muted" style="margin:0 0 8px">Used by {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}</p>{{end}}
+      {{with .Feed}}
+      <div style="margin:0 0 12px">
+        <p style="margin:0 0 4px">Members come from the feed at <code class="mono">{{.Host}}</code>, which is fetched every hour.</p>
+        {{if eq .Status "ok"}}<p class="muted" style="margin:0">Last synced {{.LastSuccess}}. {{.Detail}}</p>
+        {{else if .Status}}<div class="notice warn" style="margin:6px 0">The last sync, at {{.LastAttempt}}, did not change the members. {{.Detail}}{{if .LastSuccess}} The last successful sync was {{.LastSuccess}}.{{end}}</div>
+        {{else}}<p class="muted" style="margin:0">The feed has not been fetched yet.</p>{{end}}
+        <form class="inlineform" method="post" action="/admin/groups/{{$group}}/sync">
+          <input type="hidden" name="csrf" value="{{$csrf}}">
+          <button type="submit" class="ghost">Sync now</button>
+        </form>
+        {{if .Pending}}
+        <details class="confirm">
+          <summary>Accept the change</summary>
+          <div class="confirmbody">
+            <p>Accepting applies the feed as it stands now, removing the members it no longer lists. Do this only once you have checked that the feed is right.</p>
+            <form class="inline" method="post" action="/admin/groups/{{$group}}/sync">
+              <input type="hidden" name="csrf" value="{{$csrf}}">
+              <input type="hidden" name="accept" value="1">
+              <button type="submit" class="danger">Apply the feed</button>
+            </form>
+          </div>
+        </details>
+        {{end}}
+      </div>
+      {{end}}
       {{if .Members}}
       <div class="tablewrap">
       <table>
@@ -47,11 +74,13 @@
           <tr>
             <td>{{.Email}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</td>
             <td style="text-align:right">
+              {{if not $synced}}
               <form class="inline" method="post" action="/admin/groups/{{$group}}/members/delete">
                 <input type="hidden" name="csrf" value="{{$csrf}}">
                 <input type="hidden" name="email" value="{{.Email}}">
                 <button type="submit" class="ghost" aria-label="Remove {{.Email}} from {{$group}}">Remove</button>
               </form>
+              {{end}}
             </td>
           </tr>
         {{end}}
@@ -61,6 +90,7 @@
       {{else}}
       <p class="muted" style="margin:0">No members.</p>
       {{end}}
+      {{if not .Feed}}
       <form method="post" action="/admin/groups/{{.Name}}/members" style="margin-top:12px">
         <input type="hidden" name="csrf" value="{{$csrf}}">
         <label for="add-{{.Name}}">Add members</label>
@@ -68,6 +98,7 @@
         <p class="muted" style="margin:4px 0 0">Add one address, or paste several, one per line or separated by commas.</p>
         <button type="submit">Add members</button>
       </form>
+      {{end}}
       <div style="margin-top:16px">
         <label style="margin-top:0">Also admits the members of</label>
         {{if .Includes}}
@@ -99,6 +130,7 @@
         <input name="label" type="text" maxlength="200" value="{{.Label}}" aria-label="Label for {{.Name}}" placeholder="Label (optional)">
         <button type="submit" class="ghost">Save label</button>
       </form>
+      {{if not .Feed}}
       <details class="confirm">
         <summary>Delete this group</summary>
         <div class="confirmbody">
@@ -109,6 +141,7 @@
           </form>
         </div>
       </details>
+      {{end}}
     </div>
   </details>
   {{end}}

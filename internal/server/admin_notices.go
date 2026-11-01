@@ -18,6 +18,7 @@ var adminNotices = map[string]string{
 	"members-added":   "The members have been added.",
 	"include-added":   "The group now admits the members of the included group.",
 	"include-removed": "The group no longer admits the members of that group.",
+	"sync-ok":         "The group has been synced from its feed.",
 	"card-created":    "The code has been created. Open it to print the card.",
 	"card-revoked":    "The code has been revoked. Scans of it are now refused.",
 	"card-reminted":   "The code has been re-minted. Cards printed before now no longer work.",
@@ -32,6 +33,9 @@ var adminWarnings = map[string]string{
 	"member-invalid": "The member has not been added. Enter a full email address, such as name@example.org.",
 	"members-none":   "No members have been added, because none were ticked.",
 	"include-cycle":  "The group has not been included, because that would make a group include itself.",
+	"group-synced":   "The members of this group come from its feed, so they cannot be changed here. To add people alongside them, include this group in another group.",
+	"sync-held":      "The members have been kept as they were, because the feed would remove more than half of them. Check the feed, then accept the change if it is right.",
+	"sync-failed":    "The members have been kept as they were, because the feed could not be used. The group shows the reason.",
 }
 
 // noticeCookie carries the notice code from an admin action to the page it

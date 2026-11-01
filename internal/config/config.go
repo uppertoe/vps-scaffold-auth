@@ -66,6 +66,14 @@ type Config struct {
 	// rules ("host<TAB>kind<TAB>value", .generated/caddy/route-access.tsv).
 	// When set, the admin overview shows a "who can reach what" table.
 	RouteAccessFile string
+
+	// GroupFeeds are groups filled from endpoints (GROUP_FEEDS, with tokens in
+	// GROUP_FEED_TOKEN_<GROUP>), fetched every FeedInterval. A failed fetch, an
+	// empty list or a large shrink keeps the current members and alerts
+	// FeedAlertURL (optional; an ntfy topic URL suits).
+	GroupFeeds      []GroupFeed
+	FeedInterval    time.Duration
+	FeedAlertURL    string
 	DisplayLocation *time.Location
 
 	SessionTTL         time.Duration
@@ -286,6 +294,17 @@ func Load() (*Config, error) {
 	if len(c.BreakGlassNotifyEmails) == 0 {
 		c.BreakGlassNotifyEmails = c.AdminEmails
 	}
+
+	if c.GroupFeeds, err = parseGroupFeeds(getenv("GROUP_FEEDS", ""), c.CookieInsecure); err != nil {
+		return nil, err
+	}
+	c.FeedInterval = DefaultFeedInterval
+	if v := strings.TrimSpace(getenv("GROUP_FEED_INTERVAL", "")); v != "" {
+		if c.FeedInterval, err = time.ParseDuration(v); err != nil || c.FeedInterval < 5*time.Minute {
+			return nil, fmt.Errorf("GROUP_FEED_INTERVAL must be a duration of at least 5m")
+		}
+	}
+	c.FeedAlertURL = strings.TrimSpace(getenv("GROUP_FEED_ALERT_URL", ""))
 
 	if err := c.validate(); err != nil {
 		return nil, err

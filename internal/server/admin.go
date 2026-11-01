@@ -31,6 +31,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/groups/{name}/members", s.handleAdminAddMember)
 	mux.HandleFunc("POST /admin/groups/{name}/members/confirm", s.handleAdminConfirmMembers)
 	mux.HandleFunc("POST /admin/groups/{name}/includes", s.handleAdminAddInclude)
+	mux.HandleFunc("POST /admin/groups/{name}/sync", s.handleAdminSyncGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/includes/delete", s.handleAdminRemoveInclude)
 	mux.HandleFunc("POST /admin/groups/{name}/members/delete", s.handleAdminRemoveMember)
 	mux.HandleFunc("GET /admin/access", s.handleAdminAccess)
@@ -704,6 +705,14 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Strings(ov.MissingGroups)
+	if states, err := s.store.ListGroupSyncStates(ctx); err == nil {
+		for g := range s.feeds.feeds {
+			if st, ok := states[g]; ok && st.Status != store.GroupSyncOK {
+				ov.FeedProblems = append(ov.FeedProblems, g)
+			}
+		}
+		sort.Strings(ov.FeedProblems)
+	}
 	if s.cfg.TOTPEnabled {
 		for _, a := range s.totpAdminViews(ctx) {
 			if !a.Enrolled {
@@ -782,6 +791,11 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
+	syncStates, err := s.store.ListGroupSyncStates(r.Context())
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
 	includedIn := map[string][]string{}
 	for g, incs := range includes {
 		for _, inc := range incs {
@@ -813,7 +827,23 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		sort.Strings(includedIn[g.Name])
+		var fv *feedView
+		if f, ok := s.feedFor(g.Name); ok {
+			fv = &feedView{}
+			if u, err := url.Parse(f.URL); err == nil {
+				fv.Host = u.Host
+			}
+			if st, ok := syncStates[g.Name]; ok {
+				fv.Status, fv.Detail = st.Status, st.Detail
+				fv.LastAttempt = s.stampMin(st.LastAttempt)
+				if !st.LastSuccess.IsZero() {
+					fv.LastSuccess = s.stampMin(st.LastSuccess)
+				}
+				fv.Pending = st.Status == store.GroupSyncHeld
+			}
+		}
 		view = append(view, groupView{
+			Feed: fv,
 			Name: g.Name, Label: g.Label, Members: mv,
 			Hosts:          hosts,
 			Unused:         routeGroupsOn && len(hosts) == 0 && !cardTargets[g.Name] && len(includedIn[g.Name]) == 0,
@@ -870,6 +900,10 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 	if !s.checkCSRF(w, r) {
 		return
 	}
+	if _, synced := s.feedFor(normalizeGroupName(r.PathValue("name"))); synced {
+		s.redirectDone(w, r, "/admin/groups", "group-synced", normalizeGroupName(r.PathValue("name")))
+		return
+	}
 	name := normalizeGroupName(r.PathValue("name"))
 	if err := s.store.DeleteGroup(r.Context(), name); err != nil {
 		s.adminError(w, r)
@@ -882,6 +916,10 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleAdminAddMember(w http.ResponseWriter, r *http.Request) {
 	if !s.checkCSRF(w, r) {
+		return
+	}
+	if _, synced := s.feedFor(normalizeGroupName(r.PathValue("name"))); synced {
+		s.redirectDone(w, r, "/admin/groups", "group-synced", normalizeGroupName(r.PathValue("name")))
 		return
 	}
 	group := normalizeGroupName(r.PathValue("name"))
@@ -944,6 +982,10 @@ func (s *Server) handleAdminGroupLabel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAdminRemoveMember(w http.ResponseWriter, r *http.Request) {
 	if !s.checkCSRF(w, r) {
+		return
+	}
+	if _, synced := s.feedFor(normalizeGroupName(r.PathValue("name"))); synced {
+		s.redirectDone(w, r, "/admin/groups", "group-synced", normalizeGroupName(r.PathValue("name")))
 		return
 	}
 	group := normalizeGroupName(r.PathValue("name"))

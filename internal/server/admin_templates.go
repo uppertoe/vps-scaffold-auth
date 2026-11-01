@@ -188,6 +188,18 @@ type groupView struct {
 	Includes       []string
 	IncludedIn     []string
 	IncludeOptions []string
+	// Feed is set for a group filled from an endpoint.
+	Feed *feedView
+}
+
+// feedView is a feed-filled group's source and last sync, for the Groups page.
+type feedView struct {
+	Host        string // host of the feed URL only; the path may carry secrets
+	Status      string
+	Detail      string
+	LastAttempt string
+	LastSuccess string
+	Pending     bool
 }
 
 // overviewView is the admin home page: counts, and the items that need an
@@ -202,6 +214,9 @@ type overviewView struct {
 	UnusedGroups      []string
 	TOTPEnabled       bool
 	AdminsWithoutTOTP []string
+	// FeedProblems are feed-filled groups whose last sync failed, came back
+	// empty or was held.
+	FeedProblems []string
 	// Sites is the "who can reach what" table (ROUTE_ACCESS_FILE); nil
 	// leaves the table out.
 	Sites []siteAccessView
@@ -209,7 +224,7 @@ type overviewView struct {
 
 // Attention reports whether anything on the overview needs action.
 func (o *overviewView) Attention() bool {
-	return len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0
+	return len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0 || len(o.FeedProblems) > 0
 }
 
 // missingGroupView is a group a route requires that has not been created.
@@ -285,6 +300,7 @@ var adminActionLabels = map[string]string{
 	store.AdminActionGroupRemoveMember:  "Member removed",
 	store.AdminActionGroupIncludeAdd:    "Group included",
 	store.AdminActionGroupIncludeRemove: "Group no longer included",
+	store.AdminActionGroupSync:          "Group synced from feed",
 	store.AdminActionTOTPGenerate:       "Two-factor secret issued",
 	store.AdminActionTOTPRemove:         "Two-factor removed",
 	store.AdminActionSettingsUpdate:     "Settings changed",
