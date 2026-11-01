@@ -37,5 +37,37 @@
   <p class="muted" style="margin:12px 0 0">The gateway has not been given the list of groups the apps use (ROUTE_GROUPS_FILE), so it cannot check for missing or unused groups.</p>
   {{end}}
 </div>
+
+{{if .Sites}}
+<div class="panel">
+  <h2 style="margin-top:0">Who can reach what</h2>
+  <p class="muted">Each site admits anyone who meets one of its rules. Where a site lists several, it may apply them to different paths.</p>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Site</th><th>Who can reach it</th></tr></thead>
+    <tbody>
+    {{range .Sites}}
+      <tr>
+        <td><code class="mono">{{.Host}}</code></td>
+        <td>
+          {{range .Rules}}
+          <div>
+            {{if eq .Kind "public"}}Open to everyone{{if .Reason}}: <span class="muted">{{.Reason}}</span>{{end}}
+            {{else if eq .Kind "network"}}Anyone on the {{index .Values 0}} network
+            {{else if eq .Kind "guests"}}Anyone signed in, including guests
+            {{else if eq .Kind "signed-in"}}Anyone signed in
+            {{else if eq .Kind "domains"}}Anyone signed in with an address at {{range $i, $d := .Values}}{{if $i}}, {{end}}{{$d}}{{end}}
+            {{else if eq .Kind "groups"}}{{range $i, $g := .Values}}{{if $i}}, {{end}}{{if eq $g "admin"}}Administrators{{else}}{{if not $i}}Members of {{end}}<a href="/admin/groups?open={{$g}}#g-{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}{{end}}
+            {{end}}
+          </div>
+          {{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+</div>
+{{end}}
 {{end}}
 {{end}}

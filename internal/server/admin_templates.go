@@ -194,6 +194,9 @@ type overviewView struct {
 	UnusedGroups      []string
 	TOTPEnabled       bool
 	AdminsWithoutTOTP []string
+	// Sites is the "who can reach what" table (ROUTE_ACCESS_FILE); nil
+	// leaves the table out.
+	Sites []siteAccessView
 }
 
 // Attention reports whether anything on the overview needs action.
