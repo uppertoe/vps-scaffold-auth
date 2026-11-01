@@ -305,6 +305,12 @@ func Load() (*Config, error) {
 		}
 	}
 	c.FeedAlertURL = strings.TrimSpace(getenv("GROUP_FEED_ALERT_URL", ""))
+	if c.FeedAlertURL != "" {
+		u, perr := url.Parse(c.FeedAlertURL)
+		if perr != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !(c.CookieInsecure && u.Scheme == "http")) {
+			return nil, fmt.Errorf("GROUP_FEED_ALERT_URL must be an https URL")
+		}
+	}
 
 	if err := c.validate(); err != nil {
 		return nil, err

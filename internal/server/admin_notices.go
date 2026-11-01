@@ -30,12 +30,13 @@ var adminNotices = map[string]string{
 // adminWarnings are notices that report an action was NOT taken, shown in
 // the error style.
 var adminWarnings = map[string]string{
-	"member-invalid": "The member has not been added. Enter a full email address, such as name@example.org.",
-	"members-none":   "No members have been added, because none were ticked.",
-	"include-cycle":  "The group has not been included, because that would make a group include itself.",
-	"group-synced":   "The members of this group come from its feed, so they cannot be changed here. To add people alongside them, include this group in another group.",
-	"sync-held":      "The members have been kept as they were, because the feed would remove more than half of them. Check the feed, then accept the change if it is right.",
-	"sync-failed":    "The members have been kept as they were, because the feed could not be used. The group shows the reason.",
+	"member-invalid":    "The member has not been added. Enter a full email address, such as name@example.org.",
+	"members-none":      "No members have been added, because none were ticked.",
+	"include-cycle":     "The group has not been included, because that would make a group include itself.",
+	"group-synced":      "The members of this group come from its feed, so they cannot be changed here. To add people alongside them, include this group in another group.",
+	"sync-held":         "The members have been kept as they were, because the change is large enough to need checking. The group lists what would change; accept it there if it is right.",
+	"sync-nothing-held": "No change is held for this group, so nothing has been applied.",
+	"sync-failed":       "The members have been kept as they were, because the feed could not be used. The group shows the reason.",
 }
 
 // noticeCookie carries the notice code from an admin action to the page it

@@ -840,6 +840,10 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 					fv.LastSuccess = s.stampMin(st.LastSuccess)
 				}
 				fv.Pending = st.Status == store.GroupSyncHeld
+				if fv.Pending {
+					fv.PendingAdd, fv.PendingAddMore = capList(st.PendingAddList, feedShowMax)
+					fv.PendingRemove, fv.PendingRemoveMore = capList(st.PendingRemoveList, feedShowMax)
+				}
 			}
 		}
 		view = append(view, groupView{

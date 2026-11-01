@@ -1,10 +1,12 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
@@ -79,7 +81,7 @@ func (s *Server) planBulkAdd(r *http.Request, group, raw string) (*bulkPlan, err
 		}
 		seen[e] = true
 		switch {
-		case !validEmail(e):
+		case !plainAddress(e):
 			plan.Invalid = append(plan.Invalid, tok)
 		case existing[e]:
 			plan.Already = append(plan.Already, e)
@@ -107,7 +109,7 @@ func (s *Server) handleAdminConfirmMembers(w http.ResponseWriter, r *http.Reques
 	var emails []string
 	for _, e := range r.PostForm["add"] {
 		e = normalizeEmail(e)
-		if validEmail(e) && len(emails) < maxBulkAddresses {
+		if plainAddress(e) && len(emails) < maxBulkAddresses {
 			emails = append(emails, e)
 		}
 	}
@@ -143,8 +145,14 @@ func (s *Server) handleAdminAddInclude(w http.ResponseWriter, r *http.Request) {
 	}
 	group := normalizeGroupName(r.PathValue("name"))
 	included := normalizeGroupName(r.PostFormValue("included"))
-	if !s.groupExists(r, group) || !s.groupExists(r, included) {
+	if authz.IsReservedGroup(group) || authz.IsReservedGroup(included) || !s.groupExists(r, group) || !s.groupExists(r, included) {
 		http.NotFound(w, r)
+		return
+	}
+	// A synced group means "whoever the feed lists"; it must not admit a
+	// hand-managed group as well.
+	if _, synced := s.feedFor(group); synced {
+		s.redirectDone(w, r, "/admin/groups", "group-synced", group)
 		return
 	}
 	if err := s.store.AddGroupInclude(r.Context(), group, included); err != nil {
@@ -186,21 +194,41 @@ func (s *Server) handleAdminSyncGroup(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	accept := r.PostFormValue("accept") == "1"
-	st, err := s.syncFeed(r.Context(), group, accept)
-	if err != nil {
+	actor := "group feed"
+	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
+		actor = id.Email
+	}
+	// Detached from the request: closing the tab must not fail the sync.
+	ctx, cancel := context.WithTimeout(context.Background(), feedFetchTimeout+10*time.Second)
+	defer cancel()
+	st, err := s.syncFeed(ctx, group, actor, r.PostFormValue("accept") == "1")
+	switch {
+	case errors.Is(err, errNothingHeld):
+		s.redirectDone(w, r, "/admin/groups", "sync-nothing-held", group)
+	case err != nil:
 		s.adminError(w, r)
-		return
-	}
-	if accept {
-		s.auditAdmin(r, store.AdminActionGroupSync, group, "accepted a held change")
-	}
-	switch st.Status {
-	case store.GroupSyncOK:
+	case st.Status == store.GroupSyncOK:
 		s.redirectDone(w, r, "/admin/groups", "sync-ok", group)
-	case store.GroupSyncHeld:
+	case st.Status == store.GroupSyncHeld:
 		s.redirectDone(w, r, "/admin/groups", "sync-held", group)
 	default:
 		s.redirectDone(w, r, "/admin/groups", "sync-failed", group)
 	}
+}
+
+// plainAddress is validEmail restricted to printable ASCII with a dotted
+// domain name: no look-alike Unicode, invisible characters, IP literals or
+// bare hosts. Used where many addresses arrive at once (bulk add, feeds).
+func plainAddress(e string) bool {
+	if !validEmail(e) {
+		return false
+	}
+	for i := 0; i < len(e); i++ {
+		if e[i] < 0x21 || e[i] > 0x7e {
+			return false
+		}
+	}
+	at := strings.LastIndexByte(e, '@')
+	domain := e[at+1:]
+	return strings.Contains(domain, ".") && !strings.ContainsAny(domain, "[]:")
 }

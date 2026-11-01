@@ -213,3 +213,16 @@ func TestGroupRecheckIgnoresStaleRead(t *testing.T) {
 		t.Error("a read that raced a membership change was cached")
 	}
 }
+
+func TestPlainAddress(t *testing.T) {
+	for _, ok := range []string{"a@example.com", "jane.citizen+x@rch.org.au"} {
+		if !plainAddress(ok) {
+			t.Errorf("refused %q", ok)
+		}
+	}
+	for _, bad := range []string{"a‮@x.org", "a@x.org​", "а@rch.org.au", "a@ｘ.org", "a@[127.0.0.1]", "a@localhost"} {
+		if plainAddress(bad) {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}

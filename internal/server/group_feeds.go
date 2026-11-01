@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,10 +33,17 @@ const (
 	feedMaxBody      = 1 << 20 // 1 MiB: tens of thousands of addresses
 	feedMaxAddresses = 20000
 	feedFirstDelay   = time.Minute
-	// A sync that would remove more than this share of the current members
-	// (of a group with at least feedShrinkFloor members) is held.
-	feedShrinkFloor = 4
+	// feedShowMax caps how many held addresses the Groups page lists each way.
+	feedShowMax = 200
 )
+
+// capList returns at most n items and how many were left out.
+func capList(xs []string, n int) ([]string, int) {
+	if len(xs) <= n {
+		return xs, 0
+	}
+	return xs[:n], len(xs) - n
+}
 
 type feedSyncer struct {
 	feeds  map[string]config.GroupFeed
@@ -84,7 +93,7 @@ func (s *Server) StartFeeds(ctx context.Context) {
 			}
 			sort.Strings(groups)
 			for _, g := range groups {
-				if _, err := s.syncFeed(ctx, g, false); err != nil {
+				if _, err := s.syncFeed(ctx, g, "group feed", false); err != nil {
 					log.Printf("group feed %s: %v", g, err)
 				}
 			}
@@ -93,21 +102,36 @@ func (s *Server) StartFeeds(ctx context.Context) {
 	}()
 }
 
-var errNoFeed = errors.New("group has no feed")
+var (
+	errNoFeed      = errors.New("group has no feed")
+	errNothingHeld = errors.New("no change is held for this group")
+)
 
-// syncFeed fetches group's feed and applies it. accept applies a change that
-// would otherwise be held for being too large a shrink.
-func (s *Server) syncFeed(ctx context.Context, group string, accept bool) (store.GroupSyncState, error) {
-	feed, ok := s.feedFor(group)
-	if !ok {
+// feedHoldAdds and feedHoldRemoves are the largest change applied without an
+// administrator: the larger of a fixed count and a quarter of the group.
+func feedHoldAdds(current int) int    { return max(5, current/4) }
+func feedHoldRemoves(current int) int { return max(2, current/4) }
+
+// syncFeed fetches group's feed and applies it, unless the change is large
+// enough to hold for an administrator. actor is recorded in the audit ("group
+// feed" for the hourly sync, the admin's email for "Sync now"). accept applies
+// the held change, and only if the feed still returns exactly the set that was
+// held.
+func (s *Server) syncFeed(ctx context.Context, group, actor string, accept bool) (store.GroupSyncState, error) {
+	if _, ok := s.feedFor(group); !ok {
 		return store.GroupSyncState{}, errNoFeed
 	}
+	feed, _ := s.feedFor(group)
 	s.feeds.mu.Lock()
 	defer s.feeds.mu.Unlock()
 
 	now := s.now()
-	prev, _ := s.store.ListGroupSyncStates(ctx)
-	st := store.GroupSyncState{Group: group, LastAttempt: now}
+	states, _ := s.store.ListGroupSyncStates(ctx)
+	prev := states[group]
+	if accept && prev.Status != store.GroupSyncHeld {
+		return prev, errNothingHeld
+	}
+	st := store.GroupSyncState{Group: group, LastAttempt: now, Baseline: prev.Baseline}
 	finish := func(status, detail string) (store.GroupSyncState, error) {
 		st.Status, st.Detail = status, detail
 		if status == store.GroupSyncOK {
@@ -116,8 +140,10 @@ func (s *Server) syncFeed(ctx context.Context, group string, accept bool) (store
 		if err := s.store.SetGroupSyncState(ctx, st); err != nil {
 			return st, err
 		}
-		if status != store.GroupSyncOK && prev[group].Status != status {
-			s.alertFeed(group, status, detail)
+		// Alert on entering a problem state, and again when a held change
+		// is replaced by a different one.
+		if status != store.GroupSyncOK && (prev.Status != status || (status == store.GroupSyncHeld && prev.PendingHash != st.PendingHash)) {
+			s.alertFeed(group, detail)
 		}
 		return st, nil
 	}
@@ -127,9 +153,8 @@ func (s *Server) syncFeed(ctx context.Context, group string, accept bool) (store
 		return finish(store.GroupSyncFailed, "The feed could not be used: "+err.Error()+".")
 	}
 	if len(emails) == 0 {
-		return finish(store.GroupSyncEmpty, "The feed returned no addresses.")
+		return finish(store.GroupSyncEmpty, "The feed returned no usable addresses.")
 	}
-
 	exists, err := s.groupExistsCtx(ctx, group)
 	if err != nil {
 		return finish(store.GroupSyncFailed, "The gateway could not read groups.")
@@ -143,44 +168,82 @@ func (s *Server) syncFeed(ctx context.Context, group string, accept bool) (store
 	if err != nil {
 		return finish(store.GroupSyncFailed, "The gateway could not read members.")
 	}
-	want := make(map[string]bool, len(emails))
-	for _, e := range emails {
-		want[e] = true
+	add, remove := diffMembers(current, emails)
+	hash := feedSetHash(emails)
+	skippedNote := ""
+	if skipped > 0 {
+		skippedNote = fmt.Sprintf(" %d entries were skipped because they were not plain email addresses or not on the allow-list.", skipped)
 	}
-	have := make(map[string]bool, len(current))
-	var remove []string
-	for _, e := range current {
-		have[e] = true
-		if !want[e] {
-			remove = append(remove, e)
+
+	if accept && hash != prev.PendingHash {
+		st.PendingHash, st.PendingAddList, st.PendingRemoveList = hash, add, remove
+		return finish(store.GroupSyncHeld, "The feed has changed since the change was held, so the new change is held for checking instead.")
+	}
+	if !accept && len(add)+len(remove) > 0 {
+		reasons := []string{}
+		if len(add) > feedHoldAdds(len(current)) {
+			reasons = append(reasons, fmt.Sprintf("it would add %d members", len(add)))
 		}
-	}
-	var add []string
-	for _, e := range emails {
-		if !have[e] {
-			add = append(add, e)
+		if len(remove) > feedHoldRemoves(len(current)) {
+			reasons = append(reasons, fmt.Sprintf("it would remove %d of %d members", len(remove), len(current)))
 		}
-	}
-	if !accept && len(current) >= feedShrinkFloor && 2*len(remove) > len(current) {
-		st.PendingAdd, st.PendingRemove = len(add), len(remove)
-		return finish(store.GroupSyncHeld, fmt.Sprintf("The feed would remove %d of %d members.", len(remove), len(current)))
+		if prev.Baseline > 0 && 2*len(emails) < prev.Baseline {
+			reasons = append(reasons, fmt.Sprintf("the group would fall to %d from %d since the last accepted change", len(emails), prev.Baseline))
+		}
+		if len(reasons) > 0 {
+			st.PendingHash, st.PendingAddList, st.PendingRemoveList = hash, add, remove
+			return finish(store.GroupSyncHeld, "The change is held for checking because "+strings.Join(reasons, ", and ")+"."+skippedNote)
+		}
 	}
 	if len(add)+len(remove) > 0 {
 		if err := s.store.ApplyGroupSync(ctx, group, add, remove); err != nil {
 			return finish(store.GroupSyncFailed, "The gateway could not update members.")
 		}
 		s.groupRecheck.forgetAll()
+		// One audit row per address, so any change can be rebuilt.
+		for _, e := range add {
+			_ = s.store.RecordAdminEvent(ctx, store.AdminEvent{Actor: actor, Action: store.AdminActionGroupAddMember, Target: group, Detail: e, CreatedAt: now})
+		}
+		for _, e := range remove {
+			_ = s.store.RecordAdminEvent(ctx, store.AdminEvent{Actor: actor, Action: store.AdminActionGroupRemoveMember, Target: group, Detail: e, CreatedAt: now})
+		}
 		_ = s.store.RecordAdminEvent(ctx, store.AdminEvent{
-			Actor: "group feed", Action: store.AdminActionGroupSync, Target: group,
-			Detail:    feedChangeDetail(add, remove),
-			CreatedAt: now,
+			Actor: actor, Action: store.AdminActionGroupSync, Target: group,
+			Detail: fmt.Sprintf("added %d, removed %d%s", len(add), len(remove), map[bool]string{true: " (accepted a held change)"}[accept]), CreatedAt: now,
 		})
 	}
-	detail := fmt.Sprintf("%d members; %d added, %d removed.", len(emails), len(add), len(remove))
-	if skipped > 0 {
-		detail += fmt.Sprintf(" %d entries were not email addresses and were skipped.", skipped)
+	// The high-water mark resets on an accepted change and otherwise rises.
+	if accept || len(emails) > st.Baseline {
+		st.Baseline = len(emails)
 	}
-	return finish(store.GroupSyncOK, detail)
+	return finish(store.GroupSyncOK, fmt.Sprintf("%d members; %d added, %d removed.%s", len(emails), len(add), len(remove), skippedNote))
+}
+
+func diffMembers(current, want []string) (add, remove []string) {
+	inWant := make(map[string]bool, len(want))
+	for _, e := range want {
+		inWant[e] = true
+	}
+	inCur := make(map[string]bool, len(current))
+	for _, e := range current {
+		inCur[e] = true
+		if !inWant[e] {
+			remove = append(remove, e)
+		}
+	}
+	for _, e := range want {
+		if !inCur[e] {
+			add = append(add, e)
+		}
+	}
+	sort.Strings(remove)
+	return add, remove
+}
+
+// feedSetHash identifies a fetched address set (sorted, de-duplicated).
+func feedSetHash(emails []string) string {
+	h := sha256.Sum256([]byte(strings.Join(emails, "\n")))
+	return hex.EncodeToString(h[:])
 }
 
 // fetchFeed GETs the feed and returns its valid, de-duplicated, lower-cased
@@ -226,7 +289,10 @@ func (s *Server) fetchFeed(ctx context.Context, feed config.GroupFeed) ([]string
 	skipped := 0
 	for _, raw := range list {
 		e := normalizeEmail(raw)
-		if !validEmail(e) {
+		// Only plain addresses the allow-list admits: a feed never brings in
+		// an outside address, which would otherwise reach group-gated apps
+		// through a guest session.
+		if !plainAddress(e) || !s.policy.Allowed(e) {
 			skipped++
 			continue
 		}
@@ -252,28 +318,9 @@ func (s *Server) groupExistsCtx(ctx context.Context, name string) (bool, error) 
 	return false, nil
 }
 
-// feedChangeDetail summarises a sync for the audit log, listing up to 20
-// addresses each way.
-func feedChangeDetail(add, remove []string) string {
-	list := func(xs []string) string {
-		if len(xs) > 20 {
-			return strings.Join(xs[:20], ", ") + fmt.Sprintf(" and %d more", len(xs)-20)
-		}
-		return strings.Join(xs, ", ")
-	}
-	parts := []string{}
-	if len(add) > 0 {
-		parts = append(parts, fmt.Sprintf("added %d: %s", len(add), list(add)))
-	}
-	if len(remove) > 0 {
-		parts = append(parts, fmt.Sprintf("removed %d: %s", len(remove), list(remove)))
-	}
-	return strings.Join(parts, "; ")
-}
-
 // alertFeed posts a short notice to GROUP_FEED_ALERT_URL (an ntfy topic, for
 // example) when a feed moves into a failed, empty or held state.
-func (s *Server) alertFeed(group, status, detail string) {
+func (s *Server) alertFeed(group, detail string) {
 	if s.cfg.FeedAlertURL == "" {
 		return
 	}

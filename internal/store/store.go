@@ -87,13 +87,19 @@ const (
 // Status is one of the GroupSync* values; PendingAdd/PendingRemove describe a
 // change that was held back for an administrator to accept.
 type GroupSyncState struct {
-	Group         string
-	LastAttempt   time.Time
-	LastSuccess   time.Time
-	Status        string
-	Detail        string
-	PendingAdd    int
-	PendingRemove int
+	Group       string
+	LastAttempt time.Time
+	LastSuccess time.Time
+	Status      string
+	Detail      string
+	// A held change, exactly as it would be applied: the hash of the fetched
+	// set, and the addresses it would add and remove.
+	PendingHash       string
+	PendingAddList    []string
+	PendingRemoveList []string
+	// Baseline is the group's high-water mark since the last accepted
+	// change; falling below half of it is held.
+	Baseline int
 }
 
 // Feed sync outcomes.

@@ -180,6 +180,11 @@ func BuildGroups(role string, dbGroups []string) string {
 	}
 	add(role)
 	for _, g := range dbGroups {
+		// A stored group named after a role (legacy data, manual SQL) must
+		// never confer that role through Remote-Groups.
+		if IsReservedGroup(g) {
+			continue
+		}
 		add(g)
 	}
 	return strings.Join(out, ",")

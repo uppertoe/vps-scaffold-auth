@@ -52,10 +52,12 @@
           <button type="submit" class="ghost">Sync now</button>
         </form>
         {{if .Pending}}
+        {{if .PendingAdd}}<p style="margin:8px 0 2px">The change would add:</p><p class="muted" style="margin:0">{{range $i, $e := .PendingAdd}}{{if $i}}, {{end}}{{$e}}{{end}}{{if .PendingAddMore}} and {{.PendingAddMore}} more{{end}}</p>{{end}}
+        {{if .PendingRemove}}<p style="margin:8px 0 2px">The change would remove:</p><p class="muted" style="margin:0">{{range $i, $e := .PendingRemove}}{{if $i}}, {{end}}{{$e}}{{end}}{{if .PendingRemoveMore}} and {{.PendingRemoveMore}} more{{end}}</p>{{end}}
         <details class="confirm">
           <summary>Accept the change</summary>
           <div class="confirmbody">
-            <p>Accepting applies the feed as it stands now, removing the members it no longer lists. Do this only once you have checked that the feed is right.</p>
+            <p>Accepting applies exactly the change listed above. If the feed has changed since, nothing is applied and the new change is held for checking instead.</p>
             <form class="inline" method="post" action="/admin/groups/{{$group}}/sync">
               <input type="hidden" name="csrf" value="{{$csrf}}">
               <input type="hidden" name="accept" value="1">
@@ -113,7 +115,7 @@
         {{else}}
         <p class="muted" style="margin:0">No other groups are included.</p>
         {{end}}
-        {{if .IncludeOptions}}
+        {{if and .IncludeOptions (not .Feed)}}
         <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/includes">
           <input type="hidden" name="csrf" value="{{$csrf}}">
           <select name="included" aria-label="Group to include in {{.Name}}" required>

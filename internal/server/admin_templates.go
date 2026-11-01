@@ -200,6 +200,11 @@ type feedView struct {
 	LastAttempt string
 	LastSuccess string
 	Pending     bool
+	// The held change, as it would be applied (shown up to feedShowMax each).
+	PendingAdd        []string
+	PendingRemove     []string
+	PendingAddMore    int
+	PendingRemoveMore int
 }
 
 // overviewView is the admin home page: counts, and the items that need an
