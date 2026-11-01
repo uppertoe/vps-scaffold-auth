@@ -154,3 +154,53 @@ func TestMissingPolicyFailsClosed(t *testing.T) {
 		t.Fatalf("explicit any /verify = %d, want 200", rec.Code)
 	}
 }
+
+// A person added to a group after signing in is let through at once: the
+// refused request re-reads their groups and renews the session cookie.
+func TestGroupGateAdmitsNewMemberWithoutRelogin(t *testing.T) {
+	srv, sender := testServer(t)
+	ctx := context.Background()
+	if err := srv.store.CreateGroup(ctx, "planka-users", ""); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "user@example.com", nil)
+
+	if rec := c.get("/verify", requireGroups("planka-users")); rec.Code != http.StatusFound {
+		t.Fatalf("before joining = %d, want 302 (denied)", rec.Code)
+	}
+	if err := srv.store.AddGroupMember(ctx, "planka-users", "user@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	rec := c.get("/verify", requireGroups("planka-users"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("after joining = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Header().Get("Remote-Groups"), "planka-users") {
+		t.Errorf("Remote-Groups = %q, want planka-users", rec.Header().Get("Remote-Groups"))
+	}
+	if !strings.Contains(rec.Header().Get("Set-Cookie"), session.SessionCookie+"=") {
+		t.Error("renewed session cookie not issued")
+	}
+	// The renewed cookie now carries the group, so the next request passes
+	// without another lookup.
+	if rec := c.get("/verify", requireGroups("planka-users")); rec.Code != http.StatusOK {
+		t.Fatalf("next request = %d, want 200", rec.Code)
+	}
+}
+
+// A refusal with unchanged groups issues no cookie, so a person repeatedly
+// refused does not slide their session forward.
+func TestGroupGateRefusalWithUnchangedGroupsKeepsCookie(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "user@example.com", nil)
+
+	rec := c.get("/verify", requireGroups("finance"))
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/denied") {
+		t.Fatalf("refusal = %d %q, want 302 to /denied", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec.Header().Get("Set-Cookie") != "" {
+		t.Errorf("refusal issued a cookie: %q", rec.Header().Get("Set-Cookie"))
+	}
+}

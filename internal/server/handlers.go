@@ -22,6 +22,48 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/totp"
 )
 
+// renewSession re-checks policy and reissues the session cookie with freshly
+// computed groups. It is the scheduled sliding renewal, and also runs when a
+// group rule refuses a session whose groups have since changed. Revocation
+// takes effect here: a principal no longer permitted, or an admin who now
+// needs the TOTP step, is cleared and sent to sign in, and ok is false (the
+// response has been written).
+func (s *Server) renewSession(w http.ResponseWriter, r *http.Request, id *session.Identity, now time.Time) bool {
+	role := s.renewalRole(id)
+	if role == authz.RoleDeny {
+		s.sessions.ClearSession(w)
+		s.redirectToLogin(w, r)
+		return false
+	}
+	// Re-challenge for the admin second factor before extending the session:
+	// an admin whose cookie predates TOTP being enabled, or a principal only
+	// just promoted to admin, carries totp=false and must complete the TOTP
+	// step rather than sliding forward on the email code alone.
+	if s.needsAdminStepUp(role == authz.RoleAdmin, id.TOTP) {
+		s.sessions.ClearSession(w)
+		s.redirectToLogin(w, r)
+		return false
+	}
+	groups := s.computeGroups(r.Context(), id.Email, role)
+	// id.Kind is passed through, so a guest stays a guest across renewals (and
+	// so stays confined to guests=allow routes).
+	_ = s.sessions.IssueSessionTTL(w, id.Email, groups, id.Kind, id.TOTP, s.sessions.SessionTTL(id), now)
+	// Reflect the freshly computed set in this response too, not just the
+	// renewed cookie, so a demotion takes effect immediately.
+	id.Groups = groups
+	return true
+}
+
+// groupsChanged reports whether the principal's current groups differ from the
+// snapshot in their session.
+func (s *Server) groupsChanged(r *http.Request, id *session.Identity) bool {
+	role := s.renewalRole(id)
+	if role == authz.RoleDeny {
+		return true // let renewSession clear the session
+	}
+	return s.computeGroups(r.Context(), id.Email, role) != id.Groups
+}
+
 // handleVerify is the forward_auth target. Caddy calls it on every request to a
 // protected app. A valid session yields 200 + identity headers; otherwise the
 // user is redirected to the login page.
@@ -39,37 +81,12 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			s.redirectToLogin(w, r)
 			return
 		}
+		renewed := false
 		if s.sessions.NeedsRenew(id, now) {
-			// Re-check policy at renewal so access revocation actually takes
-			// effect: a principal who is no longer permitted (removed from the
-			// admin list, or whose domain was de-listed) has their session
-			// cleared instead of silently extended. Recomputing groups also
-			// picks up membership and demotion changes. Break-glass sessions
-			// never reach here (NeedsRenew is false for them).
-			role := s.renewalRole(id)
-			if role == authz.RoleDeny {
-				s.sessions.ClearSession(w)
-				s.redirectToLogin(w, r)
+			if !s.renewSession(w, r, id, now) {
 				return
 			}
-			// Re-challenge for the admin second factor before extending the
-			// session: an admin whose cookie predates TOTP being enabled — or a
-			// principal only just promoted to admin — carries totp=false and must
-			// complete the TOTP step rather than sliding forward on the email code
-			// alone. Clearing + redirecting sends them through the normal login,
-			// which runs startTOTP for an admin when TOTP is enabled.
-			if s.needsAdminStepUp(role == authz.RoleAdmin, id.TOTP) {
-				s.sessions.ClearSession(w)
-				s.redirectToLogin(w, r)
-				return
-			}
-			groups := s.computeGroups(r.Context(), id.Email, role)
-			// id.Kind is passed through, so a guest stays a guest across renewals
-			// (and so stays confined to guests=allow routes).
-			_ = s.sessions.IssueSessionTTL(w, id.Email, groups, id.Kind, id.TOTP, s.sessions.SessionTTL(id), now)
-			// Reflect the freshly computed set in this response too, not just
-			// the renewed cookie, so a demotion takes effect immediately.
-			id.Groups = groups
+			renewed = true
 		} else if s.needsAdminStepUp(isAdminSession(id), id.TOTP) {
 			// Not yet due for renewal, but an existing admin session that lacks the
 			// second factor (TOTP was enabled after it was minted) must step up now
@@ -101,10 +118,31 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			s.redirectToDenied(w, r)
 			return
 		}
-		if !authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass, id.Kind == session.KindGuest,
-			reqDomains, reqGroups, allowGuests) {
-			s.redirectToDenied(w, r)
-			return
+		allowed := func(id *session.Identity) bool {
+			return authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass, id.Kind == session.KindGuest,
+				reqDomains, reqGroups, allowGuests)
+		}
+		if !allowed(id) {
+			// A group rule refused the session. Its groups are a snapshot taken
+			// when the cookie was last issued, so someone an administrator has
+			// just added to a group would otherwise wait for the next renewal.
+			// Read the current groups; if they changed, renew the session now
+			// (with the same checks as a scheduled renewal) and decide again.
+			// Unchanged groups cost one small query and no new cookie, so a
+			// person repeatedly refused does not slide their session forward.
+			// Break-glass sessions carry a fixed target group and never renew.
+			if renewed || id.Kind == session.KindBreakGlass || strings.TrimSpace(reqGroups) == "" ||
+				!s.groupsChanged(r, id) {
+				s.redirectToDenied(w, r)
+				return
+			}
+			if !s.renewSession(w, r, id, now) {
+				return
+			}
+			if !allowed(id) {
+				s.redirectToDenied(w, r)
+				return
+			}
 		}
 		// Audit that this principal reached this app, deduplicated to one row per
 		// hour so the per-request hot path stays a memory lookup (see accessAudit).
