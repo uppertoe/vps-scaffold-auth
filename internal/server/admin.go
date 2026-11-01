@@ -697,6 +697,7 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	ov.Sites = s.routeAccess()
 	s.renderAdmin(w, r, http.StatusOK, "admin_home", adminData{Title: "Overview", Overview: ov})
 }
 
