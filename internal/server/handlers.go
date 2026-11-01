@@ -57,7 +57,11 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 	}
 	// id.Kind is passed through, so a guest stays a guest across renewals (and
 	// so stays confined to guests=allow routes).
-	_ = s.sessions.IssueSessionTTL(w, id.Email, *groups, id.Kind, id.TOTP, s.sessions.SessionTTL(id), now)
+	if err := s.sessions.IssueSessionTTL(w, id.Email, *groups, id.Kind, id.TOTP, s.sessions.SessionTTL(id), now); err != nil {
+		// Most likely a cookie over the browser's size limit (very many
+		// groups through includes); the old cookie stays in place.
+		log.Printf("session renewal for %s: %v", id.Email, err)
+	}
 	// Reflect the freshly computed set in this response too, not just the
 	// renewed cookie, so a demotion takes effect immediately.
 	id.Groups = *groups

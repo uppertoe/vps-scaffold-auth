@@ -292,3 +292,9 @@ func TestGuestIsReservedGroup(t *testing.T) {
 		t.Error(`"guest" must be reserved so a DB group or card cannot pose as a guest`)
 	}
 }
+
+func TestBuildGroupsDropsReservedStoredGroups(t *testing.T) {
+	if got := BuildGroups("user", []string{"admin", "guest", "user", "team"}); got != "user,team" {
+		t.Errorf("BuildGroups = %q, want user,team", got)
+	}
+}

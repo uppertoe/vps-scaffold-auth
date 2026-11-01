@@ -26,7 +26,9 @@ type adminData struct {
 	OpenGroup string
 	// Overview page.
 	Overview *overviewView
-	Groups   []groupView
+	// Bulk add confirmation page.
+	Bulk   *bulkPlan
+	Groups []groupView
 	// Groups page: groups the routes require that do not exist yet, and
 	// whether the route manifest (ROUTE_GROUPS_FILE) was read at all.
 	MissingGroups []missingGroupView
@@ -177,9 +179,32 @@ type groupView struct {
 	Members []memberView
 	// Hosts whose routes require this group, from the route manifest.
 	Hosts []string
-	// Unused: the manifest was read and no route names this group, and no
-	// break-glass card targets it.
+	// Unused: the manifest was read and no route names this group, no
+	// break-glass card targets it, and no other group includes it.
 	Unused bool
+	// Includes are the groups whose members this group also admits;
+	// IncludedIn the groups that admit this group's members. IncludeOptions
+	// are the other groups offered in the "include" menu.
+	Includes       []string
+	IncludedIn     []string
+	IncludeOptions []string
+	// Feed is set for a group filled from an endpoint.
+	Feed *feedView
+}
+
+// feedView is a feed-filled group's source and last sync, for the Groups page.
+type feedView struct {
+	Host        string // host of the feed URL only; the path may carry secrets
+	Status      string
+	Detail      string
+	LastAttempt string
+	LastSuccess string
+	Pending     bool
+	// The held change, exactly as it would be applied, and its hash (sent
+	// back with Accept so only the change on screen can be accepted).
+	PendingAdd    []string
+	PendingRemove []string
+	PendingHash   string
 }
 
 // overviewView is the admin home page: counts, and the items that need an
@@ -194,6 +219,12 @@ type overviewView struct {
 	UnusedGroups      []string
 	TOTPEnabled       bool
 	AdminsWithoutTOTP []string
+	// FeedProblems are feed-filled groups whose last sync failed, came back
+	// empty or was held.
+	FeedProblems []string
+	// FeedIncludes are synced groups that still include other groups (made
+	// before the group was synced), which widens "whoever the feed lists".
+	FeedIncludes []string
 	// Sites is the "who can reach what" table (ROUTE_ACCESS_FILE); nil
 	// leaves the table out.
 	Sites []siteAccessView
@@ -201,7 +232,7 @@ type overviewView struct {
 
 // Attention reports whether anything on the overview needs action.
 func (o *overviewView) Attention() bool {
-	return len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0
+	return len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0 || len(o.FeedProblems) > 0 || len(o.FeedIncludes) > 0
 }
 
 // missingGroupView is a group a route requires that has not been created.
@@ -266,19 +297,22 @@ type adminEventView struct {
 // adminActionLabels names each audited action for the audit page. An action
 // missing here (from a newer build) is shown by its code.
 var adminActionLabels = map[string]string{
-	store.AdminActionBreakCreate:       "Card created",
-	store.AdminActionBreakRevoke:       "Card revoked",
-	store.AdminActionBreakRemint:       "Card re-minted",
-	store.AdminActionCodeBranding:      "Card design changed",
-	store.AdminActionGroupCreate:       "Group created",
-	store.AdminActionGroupDelete:       "Group deleted",
-	store.AdminActionGroupLabel:        "Group label changed",
-	store.AdminActionGroupAddMember:    "Member added",
-	store.AdminActionGroupRemoveMember: "Member removed",
-	store.AdminActionTOTPGenerate:      "Two-factor secret issued",
-	store.AdminActionTOTPRemove:        "Two-factor removed",
-	store.AdminActionSettingsUpdate:    "Settings changed",
-	store.AdminActionBrandingUpdate:    "Branding changed",
+	store.AdminActionBreakCreate:        "Card created",
+	store.AdminActionBreakRevoke:        "Card revoked",
+	store.AdminActionBreakRemint:        "Card re-minted",
+	store.AdminActionCodeBranding:       "Card design changed",
+	store.AdminActionGroupCreate:        "Group created",
+	store.AdminActionGroupDelete:        "Group deleted",
+	store.AdminActionGroupLabel:         "Group label changed",
+	store.AdminActionGroupAddMember:     "Member added",
+	store.AdminActionGroupRemoveMember:  "Member removed",
+	store.AdminActionGroupIncludeAdd:    "Group included",
+	store.AdminActionGroupIncludeRemove: "Group no longer included",
+	store.AdminActionGroupSync:          "Group synced from feed",
+	store.AdminActionTOTPGenerate:       "Two-factor secret issued",
+	store.AdminActionTOTPRemove:         "Two-factor removed",
+	store.AdminActionSettingsUpdate:     "Settings changed",
+	store.AdminActionBrandingUpdate:     "Branding changed",
 }
 
 func adminActionLabel(action string) string {
@@ -317,7 +351,7 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
+	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err

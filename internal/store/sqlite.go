@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go, CGO-free SQLite driver
@@ -81,6 +83,35 @@ CREATE TABLE IF NOT EXISTS group_members (
 	PRIMARY KEY (group_name, email)
 );
 CREATE INDEX IF NOT EXISTS idx_group_members_email ON group_members(email);
+-- A group can include other groups: every member of an included group is a
+-- member of the including group too (resolved in GroupsForEmail).
+CREATE TABLE IF NOT EXISTS group_includes (
+	group_name TEXT NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+	included   TEXT NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (group_name, included)
+);
+CREATE INDEX IF NOT EXISTS idx_group_includes_included ON group_includes(included);
+-- The last sync of each feed-filled group, for the admin pages. Not tied to
+-- groups by a foreign key: a feed's state outlives a deleted group row.
+CREATE TABLE IF NOT EXISTS group_sync_state (
+	group_name   TEXT PRIMARY KEY,
+	last_attempt INTEGER NOT NULL,
+	last_success INTEGER NOT NULL DEFAULT 0,
+	status       TEXT NOT NULL,
+	detail       TEXT NOT NULL DEFAULT '',
+	pending_add    INTEGER NOT NULL DEFAULT 0,
+	pending_remove INTEGER NOT NULL DEFAULT 0,
+	-- A held change: the hash of the fetched address set and the addresses
+	-- it would add and remove (newline-separated), so an admin reviews and
+	-- accepts exactly that change.
+	pending_hash        TEXT NOT NULL DEFAULT '',
+	pending_add_list    TEXT NOT NULL DEFAULT '',
+	pending_remove_list TEXT NOT NULL DEFAULT '',
+	-- The member set an administrator last accepted (or the first small
+	-- fill), newline-separated: drift from it, however gradual, is held.
+	accepted_list TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS break_glass_codes (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
 	label        TEXT NOT NULL UNIQUE,
@@ -550,6 +581,193 @@ func (s *SQLite) UpdateGroupLabel(ctx context.Context, name, label string) (bool
 	return n > 0, err
 }
 
+// ErrIncludeCycle is returned when including a group would make a group
+// include itself, directly or through others.
+var ErrIncludeCycle = errors.New("group include would create a cycle")
+
+// AddGroupInclude makes every member of included a member of group too.
+// Both groups must exist. A self-include, or one that would close a cycle, is
+// refused with ErrIncludeCycle.
+func (s *SQLite) AddGroupInclude(ctx context.Context, group, included string) error {
+	if group == included {
+		return ErrIncludeCycle
+	}
+	// Check and insert in one transaction, so two opposite includes posted at
+	// once cannot both pass the check.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	// A cycle forms if group is already reachable downwards from included.
+	var n int
+	if err := tx.QueryRowContext(ctx,
+		`WITH RECURSIVE d(name) AS (
+		   SELECT included FROM group_includes WHERE group_name = ?
+		   UNION
+		   SELECT gi.included FROM group_includes gi JOIN d ON gi.group_name = d.name
+		 )
+		 SELECT COUNT(*) FROM d WHERE name = ?`, included, group).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrIncludeCycle
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO group_includes (group_name, included, created_at) VALUES (?, ?, ?)
+		 ON CONFLICT(group_name, included) DO NOTHING`,
+		group, included, time.Now().Unix()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RemoveGroupInclude stops group including included.
+func (s *SQLite) RemoveGroupInclude(ctx context.Context, group, included string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM group_includes WHERE group_name = ? AND included = ?`, group, included)
+	return err
+}
+
+// ListGroupIncludes returns every include as group -> included groups.
+func (s *SQLite) ListGroupIncludes(ctx context.Context) (map[string][]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT group_name, included FROM group_includes ORDER BY group_name, included`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var g, inc string
+		if err := rows.Scan(&g, &inc); err != nil {
+			return nil, err
+		}
+		out[g] = append(out[g], inc)
+	}
+	return out, rows.Err()
+}
+
+// AddGroupMembers adds several addresses to a group in one transaction and
+// returns the ones that were not already members.
+func (s *SQLite) AddGroupMembers(ctx context.Context, group string, emails []string) ([]string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	now := time.Now().Unix()
+	var added []string
+	for _, e := range emails {
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO group_members (group_name, email, created_at) VALUES (?, ?, ?)
+			 ON CONFLICT(group_name, email) DO NOTHING`, group, e, now)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			added = append(added, e)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return added, nil
+}
+
+// ApplyGroupSync adds and removes members of a feed-filled group, and records
+// the audit events, in one transaction: the change and its record succeed or
+// fail together.
+func (s *SQLite) ApplyGroupSync(ctx context.Context, group string, add, remove []string, events []AdminEvent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	now := time.Now().Unix()
+	for _, e := range add {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO group_members (group_name, email, created_at) VALUES (?, ?, ?)
+			 ON CONFLICT(group_name, email) DO NOTHING`, group, e, now); err != nil {
+			return err
+		}
+	}
+	for _, e := range remove {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM group_members WHERE group_name = ? AND email = ?`, group, e); err != nil {
+			return err
+		}
+	}
+	for _, e := range events {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO admin_events (actor, action, target, detail, client_ip, user_agent, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			e.Actor, e.Action, e.Target, e.Detail, e.ClientIP, e.UserAgent, e.CreatedAt.Unix()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SetGroupSyncState records the outcome of a feed sync.
+func (s *SQLite) SetGroupSyncState(ctx context.Context, st GroupSyncState) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO group_sync_state (group_name, last_attempt, last_success, status, detail, pending_add, pending_remove,
+		   pending_hash, pending_add_list, pending_remove_list, accepted_list)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(group_name) DO UPDATE SET
+		   last_attempt = excluded.last_attempt,
+		   last_success = CASE WHEN excluded.last_success > 0 THEN excluded.last_success ELSE group_sync_state.last_success END,
+		   status = excluded.status, detail = excluded.detail,
+		   pending_add = excluded.pending_add, pending_remove = excluded.pending_remove,
+		   pending_hash = excluded.pending_hash, pending_add_list = excluded.pending_add_list,
+		   pending_remove_list = excluded.pending_remove_list, accepted_list = excluded.accepted_list`,
+		st.Group, st.LastAttempt.Unix(), unixOrZero(st.LastSuccess), st.Status, st.Detail, len(st.PendingAddList), len(st.PendingRemoveList),
+		st.PendingHash, strings.Join(st.PendingAddList, "\n"), strings.Join(st.PendingRemoveList, "\n"), strings.Join(st.AcceptedList, "\n"))
+	return err
+}
+
+// ListGroupSyncStates returns the last sync outcome per group.
+func (s *SQLite) ListGroupSyncStates(ctx context.Context) (map[string]GroupSyncState, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT group_name, last_attempt, last_success, status, detail, pending_add, pending_remove,
+		        pending_hash, pending_add_list, pending_remove_list, accepted_list FROM group_sync_state`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]GroupSyncState{}
+	for rows.Next() {
+		var st GroupSyncState
+		var attempt, success int64
+		var nAdd, nRemove int
+		var addList, removeList, acceptedList string
+		if err := rows.Scan(&st.Group, &attempt, &success, &st.Status, &st.Detail, &nAdd, &nRemove,
+			&st.PendingHash, &addList, &removeList, &acceptedList); err != nil {
+			return nil, err
+		}
+		st.PendingAddList, st.PendingRemoveList = splitLines(addList), splitLines(removeList)
+		st.AcceptedList = splitLines(acceptedList)
+		st.LastAttempt = time.Unix(attempt, 0)
+		if success > 0 {
+			st.LastSuccess = time.Unix(success, 0)
+		}
+		out[st.Group] = st
+	}
+	return out, rows.Err()
+}
+
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
 // DeleteGroup removes a group; memberships cascade.
 func (s *SQLite) DeleteGroup(ctx context.Context, name string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM groups WHERE name = ?`, name)
@@ -593,8 +811,16 @@ func (s *SQLite) ListGroupMembers(ctx context.Context, group string) ([]string, 
 
 // GroupsForEmail returns the group names an email belongs to.
 func (s *SQLite) GroupsForEmail(ctx context.Context, email string) ([]string, error) {
+	// Direct memberships, then every group that includes one of them, and so
+	// on upwards. UNION (not UNION ALL) drops repeats, so the walk ends even
+	// if a cycle ever slipped past AddGroupInclude's check.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT group_name FROM group_members WHERE email = ? ORDER BY group_name`, email)
+		`WITH RECURSIVE g(name) AS (
+		   SELECT group_name FROM group_members WHERE email = ?
+		   UNION
+		   SELECT gi.group_name FROM group_includes gi JOIN g ON gi.included = g.name
+		 )
+		 SELECT name FROM g ORDER BY name`, email)
 	if err != nil {
 		return nil, err
 	}
