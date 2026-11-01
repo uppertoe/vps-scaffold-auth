@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,5 +112,38 @@ func TestGroupsPageUnchangedWithoutManifest(t *testing.T) {
 	body := c.get("/admin/groups", nil).Body.String()
 	if strings.Contains(body, "do not exist yet") || strings.Contains(body, "not used by any app") {
 		t.Error("route-group content shown with the feature off")
+	}
+}
+
+func TestGroupLabelEdit(t *testing.T) {
+	srv, sender := testServer(t)
+	ctx := context.Background()
+	if err := srv.store.CreateGroup(ctx, "planka-users", ""); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+
+	rec := c.postForm("/admin/groups/planka-users/label", url.Values{"csrf": {tok}, "label": {"  Planka board users  "}})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("label update = %d, want 302", rec.Code)
+	}
+	groups, _ := srv.store.ListGroups(ctx)
+	if len(groups) != 1 || groups[0].Label != "Planka board users" {
+		t.Errorf("groups = %+v", groups)
+	}
+	events, _ := srv.store.ListAdminEvents(ctx, 10, 0)
+	if len(events) == 0 || events[0].Action != store.AdminActionGroupLabel || events[0].Target != "planka-users" {
+		t.Errorf("label change not audited: %+v", events)
+	}
+	if rec := c.postForm("/admin/groups/nope/label", url.Values{"csrf": {tok}, "label": {"x"}}); rec.Code != http.StatusNotFound {
+		t.Errorf("label on missing group = %d, want 404", rec.Code)
+	}
+	if rec := c.postForm("/admin/groups/planka-users/label", url.Values{"label": {"no csrf"}}); rec.Code != http.StatusForbidden {
+		t.Errorf("label update without CSRF token = %d, want 403", rec.Code)
+	}
+	if groups, _ := srv.store.ListGroups(ctx); groups[0].Label != "Planka board users" {
+		t.Errorf("label changed without CSRF: %q", groups[0].Label)
 	}
 }

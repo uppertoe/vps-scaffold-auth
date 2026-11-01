@@ -1,94 +1,109 @@
 {{define "title"}}{{.Title}}{{end}}
 {{define "content"}}
 <h1>Groups</h1>
-<p class="sub">Named groups surfaced to apps via the <code class="mono">Remote-Groups</code> header. Add members by email.</p>
+<p class="sub">Group membership decides who can open the apps that require a group. Apps see the group name; the label is for administrators only.</p>
 
 {{$csrf := .CSRF}}
+{{$open := .OpenGroup}}
 {{if .MissingGroups}}
 <div class="panel">
   <h2 style="margin-top:0">Groups the apps use that do not exist yet</h2>
   <p class="muted">An app's sign-in rule names each of these groups, but nobody can be admitted through a group until it has been created.</p>
-  <table>
-    <tbody>
-    {{range .MissingGroups}}
-      <tr>
-        <td>
-          <code class="mono">{{.Name}}</code>
-          <div class="muted">Used by {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}</div>
-          {{if .CardTarget}}<div class="muted">Break-glass cards target this group. Create it only if people should also be members.</div>{{end}}
-        </td>
-        <td style="text-align:right">
-          <form class="inline" method="post" action="/admin/groups">
-            <input type="hidden" name="csrf" value="{{$csrf}}">
-            <input type="hidden" name="name" value="{{.Name}}">
-            <button type="submit">Create group</button>
-          </form>
-        </td>
-      </tr>
-    {{end}}
-    </tbody>
-  </table>
-</div>
-{{end}}
-{{range .Groups}}
-{{$group := .Name}}
-<div class="panel">
-  <div class="row" style="align-items:baseline">
-    <div style="flex:1 1 auto">
-      <h2 style="margin:0"><code class="mono">{{.Name}}</code>{{if .Label}} <span class="muted">— {{.Label}}</span>{{end}}{{if .Unused}} <span class="pill guest" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">not used by any app</span>{{end}}</h2>
-      {{if .Hosts}}<div class="muted">Used by {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}</div>{{end}}
-    </div>
-    <form class="inline" method="post" action="/admin/groups/{{.Name}}/delete" style="flex:0 0 auto">
+  {{range .MissingGroups}}
+  <div class="grouprow missingrow">
+    <div class="what"><code class="mono"><strong>{{.Name}}</strong></code> <span class="muted">Used by {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}</span>
+    {{if .CardTarget}}<div class="muted">Break-glass cards target this group. Create it only if people should also be members.</div>{{end}}</div>
+    <form class="inlineform" method="post" action="/admin/groups">
       <input type="hidden" name="csrf" value="{{$csrf}}">
-      <button type="submit" class="danger">Delete group</button>
+      <input type="hidden" name="name" value="{{.Name}}">
+      <input name="label" type="text" maxlength="200" aria-label="Label for {{.Name}} (optional)" placeholder="Label (optional)">
+      <button type="submit">Create group</button>
     </form>
   </div>
-  {{if .Members}}
-  <table>
-    <thead><tr><th>Member</th><th></th></tr></thead>
-    <tbody>
-    {{range .Members}}
-      <tr>
-        <td>{{.Email}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</td>
-        <td style="text-align:right">
-          <form class="inline" method="post" action="/admin/groups/{{$group}}/members/delete">
-            <input type="hidden" name="csrf" value="{{$csrf}}">
-            <input type="hidden" name="email" value="{{.Email}}">
-            <button type="submit" class="ghost">Remove</button>
-          </form>
-        </td>
-      </tr>
-    {{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <p class="muted">No members.</p>
   {{end}}
-  <form method="post" action="/admin/groups/{{.Name}}/members">
-    <input type="hidden" name="csrf" value="{{$csrf}}">
-    <label for="m-{{.Name}}">Add member email</label>
-    <div class="row">
-      <div><input id="m-{{.Name}}" name="email" type="email" placeholder="user@example.com"></div>
-    </div>
-    <button type="submit">Add member</button>
-  </form>
 </div>
 {{end}}
 
 <div class="panel">
+  <h2 style="margin-top:0">Groups</h2>
+  {{if .Groups}}
+  {{range .Groups}}
+  {{$group := .Name}}
+  <details class="grouprow" id="g-{{.Name}}"{{if eq .Name $open}} open{{end}}>
+    <summary>
+      <code class="mono name">{{.Name}}</code>
+      {{if .Label}}<span class="meta">{{.Label}}</span>{{end}}
+      {{if .Unused}}<span class="pill guest" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">not used by any app</span>{{end}}
+      <span class="count">{{len .Members}} {{if eq (len .Members) 1}}member{{else}}members{{end}}</span>
+    </summary>
+    <div class="body">
+      {{if .Hosts}}<p class="muted" style="margin:0 0 8px">Used by {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}</p>{{end}}
+      {{if .Members}}
+      <div class="tablewrap">
+      <table>
+        <tbody>
+        {{range .Members}}
+          <tr>
+            <td>{{.Email}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</td>
+            <td style="text-align:right">
+              <form class="inline" method="post" action="/admin/groups/{{$group}}/members/delete">
+                <input type="hidden" name="csrf" value="{{$csrf}}">
+                <input type="hidden" name="email" value="{{.Email}}">
+                <button type="submit" class="ghost" aria-label="Remove {{.Email}} from {{$group}}">Remove</button>
+              </form>
+            </td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+      </div>
+      {{else}}
+      <p class="muted" style="margin:0">No members.</p>
+      {{end}}
+      <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/members">
+        <input type="hidden" name="csrf" value="{{$csrf}}">
+        <input name="email" type="email" required aria-label="Email address to add to {{.Name}}" placeholder="name@example.org">
+        <button type="submit">Add member</button>
+      </form>
+      <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/label">
+        <input type="hidden" name="csrf" value="{{$csrf}}">
+        <input name="label" type="text" maxlength="200" value="{{.Label}}" aria-label="Label for {{.Name}}" placeholder="Label (optional)">
+        <button type="submit" class="ghost">Save label</button>
+      </form>
+      <details class="confirm">
+        <summary>Delete this group</summary>
+        <div class="confirmbody">
+          <p>Deleting <code class="mono">{{.Name}}</code> removes {{if eq (len .Members) 1}}its member{{else}}all {{len .Members}} of its members{{end}} from it. Apps that require this group will then refuse {{if eq (len .Members) 1}}that person{{else}}them{{end}}.</p>
+          <form class="inline" method="post" action="/admin/groups/{{.Name}}/delete">
+            <input type="hidden" name="csrf" value="{{$csrf}}">
+            <button type="submit" class="danger">Delete {{.Name}}</button>
+          </form>
+        </div>
+      </details>
+    </div>
+  </details>
+  {{end}}
+  {{else}}
+  <p class="muted" style="margin:0">No groups yet.</p>
+  {{end}}
+</div>
+
+<div class="panel">
   <h2 style="margin-top:0">New group</h2>
+  <p class="muted">Use this for a group no app's sign-in rule names yet, such as one an app reads to decide what a person may do inside it.</p>
   <form method="post" action="/admin/groups">
     <input type="hidden" name="csrf" value="{{$csrf}}">
     <div class="row">
       <div>
         <label for="name">Group name</label>
-        <input id="name" name="name" type="text" required placeholder="whitelisted">
+        <input id="name" name="name" type="text" required pattern="[a-z0-9_\-]+" placeholder="reports_team">
       </div>
       <div>
         <label for="label">Label (optional)</label>
-        <input id="label" name="label" type="text" placeholder="Whitelisted users">
+        <input id="label" name="label" type="text" maxlength="200" placeholder="Reports team">
       </div>
     </div>
+    <p class="muted" style="margin:8px 0 0">Lowercase letters, numbers, hyphens and underscores only.</p>
     <button type="submit">Create group</button>
   </form>
 </div>

@@ -16,7 +16,17 @@ type adminData struct {
 	Title   string
 	Message string
 	CSRF    string
-	Groups  []groupView
+	// Shell: the page being shown (highlights its menu item), the signed-in
+	// administrator, and a one-line confirmation of the action just taken.
+	Active     string
+	AdminEmail string
+	Notice     string
+	Warning    string
+	// Groups page: the group to show expanded (the one just acted on).
+	OpenGroup string
+	// Overview page.
+	Overview *overviewView
+	Groups   []groupView
 	// Groups page: groups the routes require that do not exist yet, and
 	// whether the route manifest (ROUTE_GROUPS_FILE) was read at all.
 	MissingGroups []missingGroupView
@@ -172,6 +182,25 @@ type groupView struct {
 	Unused bool
 }
 
+// overviewView is the admin home page: counts, and the items that need an
+// administrator's attention. Break-glass target groups are left out of
+// MissingGroups, because a card needs no group to exist.
+type overviewView struct {
+	Groups            int
+	Members           int
+	ActiveCards       int
+	RouteGroupsOn     bool
+	MissingGroups     []string
+	UnusedGroups      []string
+	TOTPEnabled       bool
+	AdminsWithoutTOTP []string
+}
+
+// Attention reports whether anything on the overview needs action.
+func (o *overviewView) Attention() bool {
+	return len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0
+}
+
 // missingGroupView is a group a route requires that has not been created.
 // CardTarget marks a group a break-glass card targets, which needs no members
 // to work.
@@ -221,26 +250,53 @@ func (s *Server) toCodeView(c store.BreakGlassCode) codeView {
 
 // adminEventView is one administrative-action row on the admin audit page.
 type adminEventView struct {
-	Time      string
-	Actor     string
-	Action    string
-	Target    string
-	Detail    string
-	ClientIP  string
-	UserAgent string
+	Time        string
+	Actor       string
+	Action      string
+	ActionLabel string // plain-English name of Action
+	Target      string
+	Detail      string
+	ClientIP    string
+	UserAgent   string
+}
+
+// adminActionLabels names each audited action for the audit page. An action
+// missing here (from a newer build) is shown by its code.
+var adminActionLabels = map[string]string{
+	store.AdminActionBreakCreate:       "Card created",
+	store.AdminActionBreakRevoke:       "Card revoked",
+	store.AdminActionBreakRemint:       "Card re-minted",
+	store.AdminActionCodeBranding:      "Card design changed",
+	store.AdminActionGroupCreate:       "Group created",
+	store.AdminActionGroupDelete:       "Group deleted",
+	store.AdminActionGroupLabel:        "Group label changed",
+	store.AdminActionGroupAddMember:    "Member added",
+	store.AdminActionGroupRemoveMember: "Member removed",
+	store.AdminActionTOTPGenerate:      "Two-factor secret issued",
+	store.AdminActionTOTPRemove:        "Two-factor removed",
+	store.AdminActionSettingsUpdate:    "Settings changed",
+	store.AdminActionBrandingUpdate:    "Branding changed",
+}
+
+func adminActionLabel(action string) string {
+	if l, ok := adminActionLabels[action]; ok {
+		return l
+	}
+	return action
 }
 
 func (s *Server) toAdminEventViews(es []store.AdminEvent) []adminEventView {
 	out := make([]adminEventView, 0, len(es))
 	for _, e := range es {
 		out = append(out, adminEventView{
-			Time:      s.stamp(e.CreatedAt),
-			Actor:     e.Actor,
-			Action:    e.Action,
-			Target:    e.Target,
-			Detail:    e.Detail,
-			ClientIP:  e.ClientIP,
-			UserAgent: e.UserAgent,
+			Time:        s.stamp(e.CreatedAt),
+			Actor:       e.Actor,
+			Action:      e.Action,
+			ActionLabel: adminActionLabel(e.Action),
+			Target:      e.Target,
+			Detail:      e.Detail,
+			ClientIP:    e.ClientIP,
+			UserAgent:   e.UserAgent,
 		})
 	}
 	return out
@@ -258,7 +314,7 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_message", "admin_groups", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
+	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err
@@ -281,6 +337,13 @@ func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, status int,
 	}
 	if tok, err := s.sessions.EnsureCSRF(w, r, csrfTTL, s.now()); err == nil {
 		data.CSRF = tok
+	}
+	data.Active = page
+	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
+		data.AdminEmail = id.Email
+	}
+	if data.Notice == "" && data.Warning == "" {
+		data.Notice, data.Warning = s.takeNotice(w, r)
 	}
 	w.Header().Set("Content-Security-Policy", s.csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

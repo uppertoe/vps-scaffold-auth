@@ -18,7 +18,7 @@
 
 <div class="panel">
   <h2>Administrators</h2>
-  <table>
+  <div class="tablewrap"><table>
     <thead><tr><th>Email</th><th>Two-factor</th><th></th></tr></thead>
     <tbody>
     {{range .TOTPAdmins}}
@@ -44,7 +44,7 @@
       <tr><td colspan="3" class="muted">No admin emails configured (ADMIN_EMAILS).</td></tr>
     {{end}}
     </tbody>
-  </table>
+  </table></div>
 </div>
 
 <p class="muted">First admin / bootstrap: run <code class="mono">auth -totp-enroll you@example.com</code> on the server (same container and environment) to provision a secret without being signed in.</p>

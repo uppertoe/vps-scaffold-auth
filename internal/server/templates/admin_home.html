@@ -1,0 +1,41 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+<h1>Overview</h1>
+<p class="sub">What the gateway holds, and anything that needs an administrator.</p>
+
+{{with .Overview}}
+<div class="stats">
+  <a class="stat" href="/admin/groups"><span class="n">{{.Groups}}</span><span class="l">Groups</span></a>
+  <a class="stat" href="/admin/groups"><span class="n">{{.Members}}</span><span class="l">Group memberships</span></a>
+  <a class="stat" href="/admin/break"><span class="n">{{.ActiveCards}}</span><span class="l">Active break-glass codes</span></a>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">Needs attention</h2>
+  {{if .Attention}}
+  <ul class="todo">
+    {{if .MissingGroups}}
+    <li>Apps require {{if eq (len .MissingGroups) 1}}a group that has{{else}}groups that have{{end}} not been created:
+      {{range $i, $g := .MissingGroups}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}.
+      Nobody can be admitted through a group until it exists. <a href="/admin/groups">Create it on the Groups page</a>.</li>
+    {{end}}
+    {{if .UnusedGroups}}
+    <li>No app uses {{if eq (len .UnusedGroups) 1}}this group{{else}}these groups{{end}}:
+      {{range $i, $g := .UnusedGroups}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}.
+      If {{if eq (len .UnusedGroups) 1}}it is{{else}}they are{{end}} left over from a removed app, you can delete {{if eq (len .UnusedGroups) 1}}it{{else}}them{{end}} on the <a href="/admin/groups">Groups page</a>.</li>
+    {{end}}
+    {{if .AdminsWithoutTOTP}}
+    <li>{{if eq (len .AdminsWithoutTOTP) 1}}This administrator has{{else}}These administrators have{{end}} not set up two-factor sign-in:
+      {{range $i, $a := .AdminsWithoutTOTP}}{{if $i}}, {{end}}{{$a}}{{end}}.
+      Issue a secret on the <a href="/admin/totp">Admin 2FA page</a>.</li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="muted" style="margin:0">Nothing needs attention.</p>
+  {{end}}
+  {{if not .RouteGroupsOn}}
+  <p class="muted" style="margin:12px 0 0">The gateway has not been given the list of groups the apps use (ROUTE_GROUPS_FILE), so it cannot check for missing or unused groups.</p>
+  {{end}}
+</div>
+{{end}}
+{{end}}
