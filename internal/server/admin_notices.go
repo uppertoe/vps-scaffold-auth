@@ -10,23 +10,28 @@ import (
 // adminNotices maps the notice code an admin action sets to the confirmation
 // shown at the top of the next page. Only these fixed strings are ever shown.
 var adminNotices = map[string]string{
-	"group-created":  "The group has been created.",
-	"group-deleted":  "The group has been deleted.",
-	"label-saved":    "The label has been saved.",
-	"member-added":   "The member has been added.",
-	"member-removed": "The member has been removed.",
-	"card-created":   "The code has been created. Open it to print the card.",
-	"card-revoked":   "The code has been revoked. Scans of it are now refused.",
-	"card-reminted":  "The code has been re-minted. Cards printed before now no longer work.",
-	"card-branding":  "The card design for this code has been saved.",
-	"branding-saved": "The branding has been saved.",
-	"settings-saved": "The settings have been saved.",
+	"group-created":   "The group has been created.",
+	"group-deleted":   "The group has been deleted.",
+	"label-saved":     "The label has been saved.",
+	"member-added":    "The member has been added.",
+	"member-removed":  "The member has been removed.",
+	"members-added":   "The members have been added.",
+	"include-added":   "The group now admits the members of the included group.",
+	"include-removed": "The group no longer admits the members of that group.",
+	"card-created":    "The code has been created. Open it to print the card.",
+	"card-revoked":    "The code has been revoked. Scans of it are now refused.",
+	"card-reminted":   "The code has been re-minted. Cards printed before now no longer work.",
+	"card-branding":   "The card design for this code has been saved.",
+	"branding-saved":  "The branding has been saved.",
+	"settings-saved":  "The settings have been saved.",
 }
 
 // adminWarnings are notices that report an action was NOT taken, shown in
 // the error style.
 var adminWarnings = map[string]string{
 	"member-invalid": "The member has not been added. Enter a full email address, such as name@example.org.",
+	"members-none":   "No members have been added, because none were ticked.",
+	"include-cycle":  "The group has not been included, because that would make a group include itself.",
 }
 
 // noticeCookie carries the notice code from an admin action to the page it

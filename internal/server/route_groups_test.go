@@ -76,7 +76,7 @@ func TestGroupsPageShowsRouteGroups(t *testing.T) {
 	loginAs(t, c, sender, "admin@example.com", nil)
 	body := c.get("/admin/groups", nil).Body.String()
 
-	missing := body[strings.Index(body, "do not exist yet"):strings.Index(body, "New group")]
+	missing := body[strings.Index(body, "do not exist yet"):strings.Index(body, `<h2 style="margin-top:0">Groups</h2>`)]
 	if !strings.Contains(missing, `value="planka-users"`) {
 		t.Error("missing group planka-users not offered for creation")
 	}

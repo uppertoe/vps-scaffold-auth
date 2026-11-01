@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -81,6 +82,15 @@ CREATE TABLE IF NOT EXISTS group_members (
 	PRIMARY KEY (group_name, email)
 );
 CREATE INDEX IF NOT EXISTS idx_group_members_email ON group_members(email);
+-- A group can include other groups: every member of an included group is a
+-- member of the including group too (resolved in GroupsForEmail).
+CREATE TABLE IF NOT EXISTS group_includes (
+	group_name TEXT NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+	included   TEXT NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (group_name, included)
+);
+CREATE INDEX IF NOT EXISTS idx_group_includes_included ON group_includes(included);
 CREATE TABLE IF NOT EXISTS break_glass_codes (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
 	label        TEXT NOT NULL UNIQUE,
@@ -550,6 +560,89 @@ func (s *SQLite) UpdateGroupLabel(ctx context.Context, name, label string) (bool
 	return n > 0, err
 }
 
+// ErrIncludeCycle is returned when including a group would make a group
+// include itself, directly or through others.
+var ErrIncludeCycle = errors.New("group include would create a cycle")
+
+// AddGroupInclude makes every member of included a member of group too.
+// Both groups must exist. A self-include, or one that would close a cycle, is
+// refused with ErrIncludeCycle.
+func (s *SQLite) AddGroupInclude(ctx context.Context, group, included string) error {
+	if group == included {
+		return ErrIncludeCycle
+	}
+	// A cycle forms if group is already reachable downwards from included.
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`WITH RECURSIVE d(name) AS (
+		   SELECT included FROM group_includes WHERE group_name = ?
+		   UNION
+		   SELECT gi.included FROM group_includes gi JOIN d ON gi.group_name = d.name
+		 )
+		 SELECT COUNT(*) FROM d WHERE name = ?`, included, group).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrIncludeCycle
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO group_includes (group_name, included, created_at) VALUES (?, ?, ?)
+		 ON CONFLICT(group_name, included) DO NOTHING`,
+		group, included, time.Now().Unix())
+	return err
+}
+
+// RemoveGroupInclude stops group including included.
+func (s *SQLite) RemoveGroupInclude(ctx context.Context, group, included string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM group_includes WHERE group_name = ? AND included = ?`, group, included)
+	return err
+}
+
+// ListGroupIncludes returns every include as group -> included groups.
+func (s *SQLite) ListGroupIncludes(ctx context.Context) (map[string][]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT group_name, included FROM group_includes ORDER BY group_name, included`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var g, inc string
+		if err := rows.Scan(&g, &inc); err != nil {
+			return nil, err
+		}
+		out[g] = append(out[g], inc)
+	}
+	return out, rows.Err()
+}
+
+// AddGroupMembers adds several addresses to a group in one transaction and
+// returns the ones that were not already members.
+func (s *SQLite) AddGroupMembers(ctx context.Context, group string, emails []string) ([]string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	now := time.Now().Unix()
+	var added []string
+	for _, e := range emails {
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO group_members (group_name, email, created_at) VALUES (?, ?, ?)
+			 ON CONFLICT(group_name, email) DO NOTHING`, group, e, now)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			added = append(added, e)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return added, nil
+}
+
 // DeleteGroup removes a group; memberships cascade.
 func (s *SQLite) DeleteGroup(ctx context.Context, name string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM groups WHERE name = ?`, name)
@@ -593,8 +686,16 @@ func (s *SQLite) ListGroupMembers(ctx context.Context, group string) ([]string, 
 
 // GroupsForEmail returns the group names an email belongs to.
 func (s *SQLite) GroupsForEmail(ctx context.Context, email string) ([]string, error) {
+	// Direct memberships, then every group that includes one of them, and so
+	// on upwards. UNION (not UNION ALL) drops repeats, so the walk ends even
+	// if a cycle ever slipped past AddGroupInclude's check.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT group_name FROM group_members WHERE email = ? ORDER BY group_name`, email)
+		`WITH RECURSIVE g(name) AS (
+		   SELECT group_name FROM group_members WHERE email = ?
+		   UNION
+		   SELECT gi.group_name FROM group_includes gi JOIN g ON gi.included = g.name
+		 )
+		 SELECT name FROM g ORDER BY name`, email)
 	if err != nil {
 		return nil, err
 	}

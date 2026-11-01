@@ -1,0 +1,38 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+{{with .Bulk}}
+<p><a href="/admin/groups?open={{.Group}}#g-{{.Group}}">&larr; Groups</a></p>
+<h1>Add members to <code class="mono">{{.Group}}</code></h1>
+<p class="sub">Check the addresses below, then confirm. Untick any address you do not want to add. Addresses that are not on the allow-list start unticked.</p>
+
+{{if .TooMany}}<div class="notice warn">Only the first 1,000 addresses have been read. Add the rest in a second paste.</div>{{end}}
+
+<form method="post" action="/admin/groups/{{.Group}}/members/confirm">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <div class="panel">
+    <h2 style="margin-top:0">To be added ({{len .Add}})</h2>
+    {{if .Add}}
+    {{range .Add}}
+    <label class="ck"><input type="checkbox" name="add" value="{{.Email}}"{{if .Permitted}} checked{{end}}> {{.Email}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</label>
+    {{end}}
+    {{else}}
+    <p class="muted" style="margin:0">There are no new addresses to add.</p>
+    {{end}}
+  </div>
+  {{if .Already}}
+  <div class="panel">
+    <h2 style="margin-top:0">Already members ({{len .Already}})</h2>
+    <p class="muted" style="margin:0">{{range $i, $e := .Already}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
+  </div>
+  {{end}}
+  {{if .Invalid}}
+  <div class="panel">
+    <h2 style="margin-top:0">Not email addresses ({{len .Invalid}})</h2>
+    <p class="muted" style="margin:0">These will be skipped: {{range $i, $e := .Invalid}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
+  </div>
+  {{end}}
+  {{if .Add}}<button type="submit">Add the ticked addresses</button>{{end}}
+  <a href="/admin/groups?open={{.Group}}#g-{{.Group}}" style="margin-left:12px">Cancel</a>
+</form>
+{{end}}
+{{end}}

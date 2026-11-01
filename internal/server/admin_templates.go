@@ -26,7 +26,9 @@ type adminData struct {
 	OpenGroup string
 	// Overview page.
 	Overview *overviewView
-	Groups   []groupView
+	// Bulk add confirmation page.
+	Bulk   *bulkPlan
+	Groups []groupView
 	// Groups page: groups the routes require that do not exist yet, and
 	// whether the route manifest (ROUTE_GROUPS_FILE) was read at all.
 	MissingGroups []missingGroupView
@@ -177,9 +179,15 @@ type groupView struct {
 	Members []memberView
 	// Hosts whose routes require this group, from the route manifest.
 	Hosts []string
-	// Unused: the manifest was read and no route names this group, and no
-	// break-glass card targets it.
+	// Unused: the manifest was read and no route names this group, no
+	// break-glass card targets it, and no other group includes it.
 	Unused bool
+	// Includes are the groups whose members this group also admits;
+	// IncludedIn the groups that admit this group's members. IncludeOptions
+	// are the other groups offered in the "include" menu.
+	Includes       []string
+	IncludedIn     []string
+	IncludeOptions []string
 }
 
 // overviewView is the admin home page: counts, and the items that need an
@@ -266,19 +274,21 @@ type adminEventView struct {
 // adminActionLabels names each audited action for the audit page. An action
 // missing here (from a newer build) is shown by its code.
 var adminActionLabels = map[string]string{
-	store.AdminActionBreakCreate:       "Card created",
-	store.AdminActionBreakRevoke:       "Card revoked",
-	store.AdminActionBreakRemint:       "Card re-minted",
-	store.AdminActionCodeBranding:      "Card design changed",
-	store.AdminActionGroupCreate:       "Group created",
-	store.AdminActionGroupDelete:       "Group deleted",
-	store.AdminActionGroupLabel:        "Group label changed",
-	store.AdminActionGroupAddMember:    "Member added",
-	store.AdminActionGroupRemoveMember: "Member removed",
-	store.AdminActionTOTPGenerate:      "Two-factor secret issued",
-	store.AdminActionTOTPRemove:        "Two-factor removed",
-	store.AdminActionSettingsUpdate:    "Settings changed",
-	store.AdminActionBrandingUpdate:    "Branding changed",
+	store.AdminActionBreakCreate:        "Card created",
+	store.AdminActionBreakRevoke:        "Card revoked",
+	store.AdminActionBreakRemint:        "Card re-minted",
+	store.AdminActionCodeBranding:       "Card design changed",
+	store.AdminActionGroupCreate:        "Group created",
+	store.AdminActionGroupDelete:        "Group deleted",
+	store.AdminActionGroupLabel:         "Group label changed",
+	store.AdminActionGroupAddMember:     "Member added",
+	store.AdminActionGroupRemoveMember:  "Member removed",
+	store.AdminActionGroupIncludeAdd:    "Group included",
+	store.AdminActionGroupIncludeRemove: "Group no longer included",
+	store.AdminActionTOTPGenerate:       "Two-factor secret issued",
+	store.AdminActionTOTPRemove:         "Two-factor removed",
+	store.AdminActionSettingsUpdate:     "Settings changed",
+	store.AdminActionBrandingUpdate:     "Branding changed",
 }
 
 func adminActionLabel(action string) string {
@@ -317,7 +327,7 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
+	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err

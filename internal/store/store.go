@@ -65,19 +65,21 @@ const (
 // group changes, another admin's 2FA removal, and settings edits leave a
 // reviewable trail (previously only break-glass *scans* were audited).
 const (
-	AdminActionBreakCreate       = "break_glass_create"
-	AdminActionBreakRevoke       = "break_glass_revoke"
-	AdminActionBreakRemint       = "break_glass_remint"
-	AdminActionGroupCreate       = "group_create"
-	AdminActionGroupDelete       = "group_delete"
-	AdminActionGroupAddMember    = "group_add_member"
-	AdminActionGroupRemoveMember = "group_remove_member"
-	AdminActionGroupLabel        = "group_label"
-	AdminActionTOTPGenerate      = "totp_generate"
-	AdminActionTOTPRemove        = "totp_remove"
-	AdminActionSettingsUpdate    = "settings_update"
-	AdminActionBrandingUpdate    = "branding_update"
-	AdminActionCodeBranding      = "break_glass_branding"
+	AdminActionBreakCreate        = "break_glass_create"
+	AdminActionBreakRevoke        = "break_glass_revoke"
+	AdminActionBreakRemint        = "break_glass_remint"
+	AdminActionGroupCreate        = "group_create"
+	AdminActionGroupDelete        = "group_delete"
+	AdminActionGroupAddMember     = "group_add_member"
+	AdminActionGroupRemoveMember  = "group_remove_member"
+	AdminActionGroupLabel         = "group_label"
+	AdminActionGroupIncludeAdd    = "group_include_add"
+	AdminActionGroupIncludeRemove = "group_include_remove"
+	AdminActionTOTPGenerate       = "totp_generate"
+	AdminActionTOTPRemove         = "totp_remove"
+	AdminActionSettingsUpdate     = "settings_update"
+	AdminActionBrandingUpdate     = "branding_update"
+	AdminActionCodeBranding       = "break_glass_branding"
 )
 
 // AdminEvent records one administrative mutation for attribution: which admin
@@ -281,6 +283,15 @@ type Store interface {
 	ListGroups(ctx context.Context) ([]Group, error)
 	// CreateGroup inserts a group (no-op if it already exists).
 	CreateGroup(ctx context.Context, name, label string) error
+	// AddGroupInclude makes every member of included a member of group too;
+	// ErrIncludeCycle refuses a self-include or a cycle.
+	AddGroupInclude(ctx context.Context, group, included string) error
+	RemoveGroupInclude(ctx context.Context, group, included string) error
+	// ListGroupIncludes returns group -> included groups.
+	ListGroupIncludes(ctx context.Context) (map[string][]string, error)
+	// AddGroupMembers adds several addresses at once and returns those that
+	// were not already members.
+	AddGroupMembers(ctx context.Context, group string, emails []string) ([]string, error)
 	// UpdateGroupLabel changes an existing group's display label. It reports
 	// whether the group exists.
 	UpdateGroupLabel(ctx context.Context, name, label string) (bool, error)

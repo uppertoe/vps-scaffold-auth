@@ -82,7 +82,7 @@
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 6px; }
-  input[type=text], input[type=email], input[type=url], input[type=number], textarea {
+  input[type=text], input[type=email], input[type=url], input[type=number], textarea, select {
     width: 100%; padding: 10px 12px; font-size: 15px; border: 1px solid var(--input-border); border-radius: 9px;
     background: var(--input-bg); color: inherit; font-family: inherit;
   }
@@ -149,6 +149,7 @@
   .inlineform { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
   .inlineform input[type=text], .inlineform input[type=email] { flex: 1 1 220px; width: auto; padding: 8px 10px; font-size: 14px; }
   .inlineform button { margin-top: 0; padding: 8px 14px; }
+  .inlineform select { flex: 1 1 220px; width: auto; padding: 8px 10px; font-size: 14px; }
   .confirm { margin-top: 14px; }
   .confirm > summary { color: var(--danger); font-size: 14px; font-weight: 600; display: inline-block; }
   .confirm > summary::before { content: none; }

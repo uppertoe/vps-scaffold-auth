@@ -29,6 +29,9 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/groups/{name}/delete", s.handleAdminDeleteGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/label", s.handleAdminGroupLabel)
 	mux.HandleFunc("POST /admin/groups/{name}/members", s.handleAdminAddMember)
+	mux.HandleFunc("POST /admin/groups/{name}/members/confirm", s.handleAdminConfirmMembers)
+	mux.HandleFunc("POST /admin/groups/{name}/includes", s.handleAdminAddInclude)
+	mux.HandleFunc("POST /admin/groups/{name}/includes/delete", s.handleAdminRemoveInclude)
 	mux.HandleFunc("POST /admin/groups/{name}/members/delete", s.handleAdminRemoveMember)
 	mux.HandleFunc("GET /admin/access", s.handleAdminAccess)
 	mux.HandleFunc("GET /admin/audit", s.handleAdminAudit)
@@ -671,6 +674,17 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 	}
 	routeGroups, routeGroupsOn := s.routeGroups()
 	ov.RouteGroupsOn = routeGroupsOn
+	includes, err := s.store.ListGroupIncludes(ctx)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	includedSomewhere := map[string]bool{}
+	for _, incs := range includes {
+		for _, i := range incs {
+			includedSomewhere[i] = true
+		}
+	}
 	existing := map[string]bool{}
 	for _, g := range groups {
 		existing[g.Name] = true
@@ -680,7 +694,7 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ov.Members += len(members)
-		if routeGroupsOn && len(routeGroups[g.Name]) == 0 && !cardTargets[g.Name] {
+		if routeGroupsOn && len(routeGroups[g.Name]) == 0 && !cardTargets[g.Name] && !includedSomewhere[g.Name] {
 			ov.UnusedGroups = append(ov.UnusedGroups, g.Name)
 		}
 	}
@@ -763,6 +777,17 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 			cardTargets[normalizeGroupName(c.TargetGroup)] = true
 		}
 	}
+	includes, err := s.store.ListGroupIncludes(r.Context())
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	includedIn := map[string][]string{}
+	for g, incs := range includes {
+		for _, inc := range incs {
+			includedIn[inc] = append(includedIn[inc], g)
+		}
+	}
 	existing := make(map[string]bool, len(groups))
 	view := make([]groupView, 0, len(groups))
 	for _, g := range groups {
@@ -777,10 +802,24 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 			mv = append(mv, memberView{Email: m, Permitted: s.policy.Allowed(m)})
 		}
 		hosts := routeGroups[g.Name]
+		inc := map[string]bool{}
+		for _, i := range includes[g.Name] {
+			inc[i] = true
+		}
+		var options []string
+		for _, o := range groups {
+			if o.Name != g.Name && !inc[o.Name] {
+				options = append(options, o.Name)
+			}
+		}
+		sort.Strings(includedIn[g.Name])
 		view = append(view, groupView{
 			Name: g.Name, Label: g.Label, Members: mv,
-			Hosts:  hosts,
-			Unused: routeGroupsOn && len(hosts) == 0 && !cardTargets[g.Name],
+			Hosts:          hosts,
+			Unused:         routeGroupsOn && len(hosts) == 0 && !cardTargets[g.Name] && len(includedIn[g.Name]) == 0,
+			Includes:       includes[g.Name],
+			IncludedIn:     includedIn[g.Name],
+			IncludeOptions: options,
 		})
 	}
 	missing := make([]missingGroupView, 0)
@@ -846,18 +885,31 @@ func (s *Server) handleAdminAddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	group := normalizeGroupName(r.PathValue("name"))
-	emailAddr := normalizeEmail(r.PostFormValue("email"))
-	if !validEmail(emailAddr) {
-		s.redirectDone(w, r, "/admin/groups", "member-invalid", group)
+	if !s.groupExists(r, group) {
+		http.NotFound(w, r)
 		return
 	}
-	if err := s.store.AddGroupMember(r.Context(), group, emailAddr); err != nil {
+	// One field takes one address or many (pasted, one per line or separated
+	// by commas or semicolons). A single valid new address is added at once;
+	// anything more goes through a confirmation page.
+	raw := r.PostFormValue("emails")
+	if raw == "" {
+		raw = r.PostFormValue("email")
+	}
+	plan, err := s.planBulkAdd(r, group, raw)
+	if err != nil {
 		s.adminError(w, r)
 		return
 	}
-	s.groupRecheck.forgetAll()
-	s.auditAdmin(r, store.AdminActionGroupAddMember, group, emailAddr)
-	s.redirectDone(w, r, "/admin/groups", "member-added", group)
+	if plan.total() == 0 || (len(plan.Invalid) > 0 && plan.total() == len(plan.Invalid)) {
+		s.redirectDone(w, r, "/admin/groups", "member-invalid", group)
+		return
+	}
+	if plan.total() == 1 && len(plan.Add) == 1 && plan.Add[0].Permitted {
+		s.addMembers(w, r, group, []string{plan.Add[0].Email})
+		return
+	}
+	s.renderAdmin(w, r, http.StatusOK, "admin_bulk_add", adminData{Title: "Add members", Bulk: plan})
 }
 
 // clampLabel trims a group label and caps it at 200 characters.

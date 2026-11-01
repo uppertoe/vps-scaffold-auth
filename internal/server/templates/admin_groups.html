@@ -33,6 +33,7 @@
     <summary>
       <code class="mono name">{{.Name}}</code>
       {{if .Label}}<span class="meta">{{.Label}}</span>{{end}}
+      {{if .Includes}}<span class="meta">includes {{range $i, $g := .Includes}}{{if $i}}, {{end}}{{$g}}{{end}}</span>{{end}}
       {{if .Unused}}<span class="pill guest" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">not used by any app</span>{{end}}
       <span class="count">{{len .Members}} {{if eq (len .Members) 1}}member{{else}}members{{end}}</span>
     </summary>
@@ -60,11 +61,39 @@
       {{else}}
       <p class="muted" style="margin:0">No members.</p>
       {{end}}
-      <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/members">
+      <form method="post" action="/admin/groups/{{.Name}}/members" style="margin-top:12px">
         <input type="hidden" name="csrf" value="{{$csrf}}">
-        <input name="email" type="email" required aria-label="Email address to add to {{.Name}}" placeholder="name@example.org">
-        <button type="submit">Add member</button>
+        <label for="add-{{.Name}}">Add members</label>
+        <textarea id="add-{{.Name}}" name="emails" rows="2" required placeholder="name@example.org"></textarea>
+        <p class="muted" style="margin:4px 0 0">Add one address, or paste several, one per line or separated by commas.</p>
+        <button type="submit">Add members</button>
       </form>
+      <div style="margin-top:16px">
+        <label style="margin-top:0">Also admits the members of</label>
+        {{if .Includes}}
+        {{range .Includes}}
+        <form class="inlineform" method="post" action="/admin/groups/{{$group}}/includes/delete" style="margin-top:4px">
+          <input type="hidden" name="csrf" value="{{$csrf}}">
+          <input type="hidden" name="included" value="{{.}}">
+          <code class="mono" style="flex:1 1 auto">{{.}}</code>
+          <button type="submit" class="ghost">Stop including</button>
+        </form>
+        {{end}}
+        {{else}}
+        <p class="muted" style="margin:0">No other groups are included.</p>
+        {{end}}
+        {{if .IncludeOptions}}
+        <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/includes">
+          <input type="hidden" name="csrf" value="{{$csrf}}">
+          <select name="included" aria-label="Group to include in {{.Name}}" required>
+            <option value="">Choose a group to include</option>
+            {{range .IncludeOptions}}<option value="{{.}}">{{.}}</option>{{end}}
+          </select>
+          <button type="submit" class="ghost">Include</button>
+        </form>
+        {{end}}
+        {{if .IncludedIn}}<p class="muted" style="margin:8px 0 0">Members of this group are also admitted by {{range $i, $g := .IncludedIn}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}.</p>{{end}}
+      </div>
       <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/label">
         <input type="hidden" name="csrf" value="{{$csrf}}">
         <input name="label" type="text" maxlength="200" value="{{.Label}}" aria-label="Label for {{.Name}}" placeholder="Label (optional)">
