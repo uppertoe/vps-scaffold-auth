@@ -64,9 +64,14 @@ func (s *Server) takeNotice(w http.ResponseWriter, r *http.Request) (notice, war
 	if err != nil {
 		return "", ""
 	}
+	s.clearNotice(w)
+	return adminNotices[ck.Value], adminWarnings[ck.Value]
+}
+
+// clearNotice deletes the notice cookie.
+func (s *Server) clearNotice(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name: s.noticeCookieName(), Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: !s.cfg.CookieInsecure, SameSite: http.SameSiteStrictMode,
 	})
-	return adminNotices[ck.Value], adminWarnings[ck.Value]
 }

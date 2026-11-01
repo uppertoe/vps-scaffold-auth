@@ -255,6 +255,9 @@ func TestGroupRecheckRequiresTOTPForNewAdmin(t *testing.T) {
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
 		t.Fatalf("new admin without TOTP = %d %q, want a redirect to sign in", rec.Code, rec.Header().Get("Location"))
 	}
+	if !strings.Contains(rec.Header().Get("Set-Cookie"), "Max-Age=0") {
+		t.Error("new admin's first-factor session not cleared")
+	}
 }
 
 func TestGroupRecheckKeepsGuestKind(t *testing.T) {

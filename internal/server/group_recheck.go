@@ -17,6 +17,10 @@ const groupRecheckTTL = 30 * time.Second
 type groupRecheck struct {
 	mu    sync.Mutex
 	until map[string]time.Time
+	// gen counts forgetAll calls. A request captures it before reading the
+	// database and records its result only if no membership change happened
+	// in between, so a read that raced an admin's change cannot be cached.
+	gen uint64
 }
 
 func newGroupRecheck() *groupRecheck {
@@ -40,14 +44,25 @@ func (g *groupRecheck) forgetAll() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	clear(g.until)
+	g.gen++
+}
+
+// generation returns the current forgetAll count (see gen).
+func (g *groupRecheck) generation() uint64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.gen
 }
 
 // confirm records that the snapshot matched the database at now. Expired
 // entries are swept when the map grows, so it stays bounded by the number of
 // people refused within one TTL.
-func (g *groupRecheck) confirm(email, groups string, now time.Time) {
+func (g *groupRecheck) confirm(email, groups string, now time.Time, gen uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if gen != g.gen {
+		return // a membership changed while this request was reading
+	}
 	if len(g.until) >= 1024 {
 		for k, t := range g.until {
 			if !now.Before(t) {

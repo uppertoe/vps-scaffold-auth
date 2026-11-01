@@ -157,13 +157,14 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				s.redirectToDenied(w, r)
 				return
 			}
+			gen := s.groupRecheck.generation()
 			current, ok := s.currentGroups(r, id)
 			if !ok {
 				s.redirectToDenied(w, r)
 				return
 			}
 			if current == id.Groups {
-				s.groupRecheck.confirm(id.Email, id.Groups, now)
+				s.groupRecheck.confirm(id.Email, id.Groups, now, gen)
 				s.redirectToDenied(w, r)
 				return
 			}
@@ -1275,6 +1276,9 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	rd := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
 	s.sessions.ClearSession(w)
+	// A pending admin notice belongs to the person signing out; on a shared
+	// browser the next admin must not see it.
+	s.clearNotice(w)
 	http.Redirect(w, r, s.loginURL(rd), http.StatusFound)
 }
 

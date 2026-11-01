@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
@@ -122,8 +124,11 @@ func TestCreateGroupCapsLabel(t *testing.T) {
 	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
 	c.postForm("/admin/groups", url.Values{"csrf": {tok}, "name": {"team"}, "label": {"  " + strings.Repeat("x", 500) + "  "}})
 	groups, _ := srv.store.ListGroups(context.Background())
-	if len(groups) != 1 || len([]rune(groups[0].Label)) != 200 {
-		t.Errorf("label not trimmed and capped: %d runes", len([]rune(groups[0].Label)))
+	if len(groups) != 1 {
+		t.Fatalf("groups = %+v, want one", groups)
+	}
+	if n := len([]rune(groups[0].Label)); n != 200 {
+		t.Errorf("label not trimmed and capped: %d runes", n)
 	}
 }
 
@@ -142,4 +147,69 @@ func TestAuditShowsReadableActions(t *testing.T) {
 func httptestRecorder() *httptest.ResponseRecorder { return httptest.NewRecorder() }
 func httptestRequest() *http.Request {
 	return httptest.NewRequest(http.MethodPost, "/admin/groups/x/members", nil)
+}
+
+func TestNoticeCookieAttributesWithTLS(t *testing.T) {
+	srv, _ := testServerWith(t, func(c *config.Config) { c.CookieInsecure = false })
+	rec := httptestRecorder()
+	srv.redirectDone(rec, httptestRequest(), "/admin/groups", "member-added", "team")
+	ck := rec.Result().Cookies()
+	if len(ck) != 1 {
+		t.Fatalf("cookies = %d, want 1", len(ck))
+	}
+	c := ck[0]
+	if c.Name != "__Host-admin_notice" || !c.Secure || !c.HttpOnly || c.Path != "/" || c.Domain != "" || c.SameSite != http.SameSiteStrictMode {
+		t.Errorf("notice cookie = %+v", c)
+	}
+}
+
+func TestLogoutClearsNotice(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	rec := c.postForm("/logout", url.Values{})
+	if !strings.Contains(strings.Join(rec.Header().Values("Set-Cookie"), "\n"), "admin_notice=;") {
+		t.Errorf("logout did not clear the notice cookie: %q", rec.Header().Values("Set-Cookie"))
+	}
+}
+
+func TestMembershipChangesClearGroupRecheck(t *testing.T) {
+	srv, sender := testServer(t)
+	ctx := context.Background()
+	for _, g := range []string{"a", "b"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := srv.store.AddGroupMember(ctx, "a", "x@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	for _, step := range []struct {
+		path string
+		form url.Values
+	}{
+		{"/admin/groups/a/members/delete", url.Values{"csrf": {tok}, "email": {"x@example.com"}}},
+		{"/admin/groups/b/delete", url.Values{"csrf": {tok}}},
+	} {
+		now := srv.now()
+		srv.groupRecheck.confirm("y@example.com", "user", now, srv.groupRecheck.generation())
+		c.postForm(step.path, step.form)
+		if srv.groupRecheck.fresh("y@example.com", "user", now) {
+			t.Errorf("%s did not clear the remembered refusal", step.path)
+		}
+	}
+}
+
+func TestGroupRecheckIgnoresStaleRead(t *testing.T) {
+	g := newGroupRecheck()
+	now := time.Now()
+	gen := g.generation()
+	g.forgetAll() // an admin changed a membership mid-read
+	g.confirm("y@example.com", "user", now, gen)
+	if g.fresh("y@example.com", "user", now) {
+		t.Error("a read that raced a membership change was cached")
+	}
 }
