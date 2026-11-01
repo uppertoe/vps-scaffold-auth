@@ -61,6 +61,11 @@ type Config struct {
 	// groups the routes use, offers to create missing ones, and marks groups no
 	// route uses. Empty turns the feature off.
 	RouteGroupsFile string
+
+	// RouteAccessFile is the scaffold-rendered manifest of each site's access
+	// rules ("host<TAB>kind<TAB>value", .generated/caddy/route-access.tsv).
+	// When set, the admin overview shows a "who can reach what" table.
+	RouteAccessFile string
 	DisplayLocation *time.Location
 
 	SessionTTL         time.Duration
@@ -194,6 +199,7 @@ func Load() (*Config, error) {
 	}
 	c.DisplayTimezone = strings.TrimSpace(getenv("DISPLAY_TIMEZONE", ""))
 	c.RouteGroupsFile = strings.TrimSpace(getenv("ROUTE_GROUPS_FILE", ""))
+	c.RouteAccessFile = strings.TrimSpace(getenv("ROUTE_ACCESS_FILE", ""))
 	c.DisplayLocation = time.UTC
 	if c.DisplayTimezone != "" {
 		loc, lerr := time.LoadLocation(c.DisplayTimezone)
