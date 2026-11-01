@@ -35,7 +35,8 @@ type Server struct {
 	breakLimiter *ratelimit.Limiter // per-IP limiter for break-glass scans
 	totpReplay   *totpReplay
 	access       *accessAudit
-	csp          string // precomputed Content-Security-Policy (see cspPolicy)
+	groupRecheck *groupRecheck // refusal-path group re-reads (group_recheck.go)
+	csp          string        // precomputed Content-Security-Policy (see cspPolicy)
 	pages        pages
 	adminPages   pages
 	emailTmpl    *texttemplate.Template
@@ -81,6 +82,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		wrongCodes:   limiterOr(cfg.RateLimitWrongCodesPerIP, cfg.RateLimitPerIP),
 		breakLimiter: newBreakLimiter(cfg),
 		access:       newAccessAudit(st, cfg.AuditRetention),
+		groupRecheck: newGroupRecheck(),
 		csp:          cspPolicy(cfg.Domain, cfg.AllowApexRedirect),
 		pages:        tmpls,
 		adminPages:   adminTmpls,

@@ -140,7 +140,10 @@ func TestGroupLabelEdit(t *testing.T) {
 	if rec := c.postForm("/admin/groups/nope/label", url.Values{"csrf": {tok}, "label": {"x"}}); rec.Code != http.StatusNotFound {
 		t.Errorf("label on missing group = %d, want 404", rec.Code)
 	}
-	if rec := c.postForm("/admin/groups/planka-users/label", url.Values{"label": {"no csrf"}}); rec.Code == http.StatusFound {
-		t.Error("label update without CSRF token accepted")
+	if rec := c.postForm("/admin/groups/planka-users/label", url.Values{"label": {"no csrf"}}); rec.Code != http.StatusForbidden {
+		t.Errorf("label update without CSRF token = %d, want 403", rec.Code)
+	}
+	if groups, _ := srv.store.ListGroups(ctx); groups[0].Label != "Planka board users" {
+		t.Errorf("label changed without CSRF: %q", groups[0].Label)
 	}
 }

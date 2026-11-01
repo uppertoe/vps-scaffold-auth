@@ -343,8 +343,7 @@ func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, status int,
 		data.AdminEmail = id.Email
 	}
 	if data.Notice == "" && data.Warning == "" {
-		done := r.URL.Query().Get("done")
-		data.Notice, data.Warning = adminNotices[done], adminWarnings[done]
+		data.Notice, data.Warning = s.takeNotice(w, r)
 	}
 	w.Header().Set("Content-Security-Policy", s.csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

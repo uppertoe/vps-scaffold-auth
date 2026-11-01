@@ -29,6 +29,13 @@ import (
 // needs the TOTP step, is cleared and sent to sign in, and ok is false (the
 // response has been written).
 func (s *Server) renewSession(w http.ResponseWriter, r *http.Request, id *session.Identity, now time.Time) bool {
+	return s.renewSessionWith(w, r, id, now, nil)
+}
+
+// renewSessionWith is renewSession with the person's current groups already
+// read (the refusal path), so a renewal there costs one query, not two. A nil
+// groups reads them here.
+func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *session.Identity, now time.Time, groups *string) bool {
 	role := s.renewalRole(id)
 	if role == authz.RoleDeny {
 		s.sessions.ClearSession(w)
@@ -44,24 +51,34 @@ func (s *Server) renewSession(w http.ResponseWriter, r *http.Request, id *sessio
 		s.redirectToLogin(w, r)
 		return false
 	}
-	groups := s.computeGroups(r.Context(), id.Email, role)
+	if groups == nil {
+		g := s.computeGroups(r.Context(), id.Email, role)
+		groups = &g
+	}
 	// id.Kind is passed through, so a guest stays a guest across renewals (and
 	// so stays confined to guests=allow routes).
-	_ = s.sessions.IssueSessionTTL(w, id.Email, groups, id.Kind, id.TOTP, s.sessions.SessionTTL(id), now)
+	_ = s.sessions.IssueSessionTTL(w, id.Email, *groups, id.Kind, id.TOTP, s.sessions.SessionTTL(id), now)
 	// Reflect the freshly computed set in this response too, not just the
 	// renewed cookie, so a demotion takes effect immediately.
-	id.Groups = groups
+	id.Groups = *groups
 	return true
 }
 
-// groupsChanged reports whether the principal's current groups differ from the
-// snapshot in their session.
-func (s *Server) groupsChanged(r *http.Request, id *session.Identity) bool {
+// currentGroups reads the principal's groups from the database for the
+// refusal path. ok is false when they cannot be read reliably; the caller then
+// refuses without renewing, rather than mistaking a database error for a
+// change of groups.
+func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups string, ok bool) {
 	role := s.renewalRole(id)
 	if role == authz.RoleDeny {
-		return true // let renewSession clear the session
+		return "", true // renewSessionWith clears the session
 	}
-	return s.computeGroups(r.Context(), id.Email, role) != id.Groups
+	dbGroups, err := s.store.GroupsForEmail(r.Context(), id.Email)
+	if err != nil {
+		log.Printf("refusal-path groups for %s: %v", id.Email, err)
+		return "", false
+	}
+	return authz.BuildGroups(role, dbGroups), true
 }
 
 // handleVerify is the forward_auth target. Caddy calls it on every request to a
@@ -128,15 +145,33 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			// just added to a group would otherwise wait for the next renewal.
 			// Read the current groups; if they changed, renew the session now
 			// (with the same checks as a scheduled renewal) and decide again.
-			// Unchanged groups cost one small query and no new cookie, so a
-			// person repeatedly refused does not slide their session forward.
-			// Break-glass sessions carry a fixed target group and never renew.
-			if renewed || id.Kind == session.KindBreakGlass || strings.TrimSpace(reqGroups) == "" ||
-				!s.groupsChanged(r, id) {
+			// Unchanged groups issue no cookie, so a person repeatedly refused
+			// does not slide their session forward, and the "unchanged" result
+			// is remembered briefly (groupRecheck) so repeated refusals stay in
+			// memory.
+			// Only normal and guest sessions are re-read: any other kind
+			// (break-glass, or one a later build adds) stays refused, so the
+			// exclusion does not hang on a single check.
+			if renewed || (id.Kind != "" && id.Kind != session.KindGuest) || strings.TrimSpace(reqGroups) == "" ||
+				s.groupRecheck.fresh(id.Email, id.Groups, now) {
 				s.redirectToDenied(w, r)
 				return
 			}
-			if !s.renewSession(w, r, id, now) {
+			current, ok := s.currentGroups(r, id)
+			if !ok {
+				s.redirectToDenied(w, r)
+				return
+			}
+			if current == id.Groups {
+				s.groupRecheck.confirm(id.Email, id.Groups, now)
+				s.redirectToDenied(w, r)
+				return
+			}
+			var groups *string
+			if current != "" {
+				groups = &current
+			}
+			if !s.renewSessionWith(w, r, id, now, groups) {
 				return
 			}
 			if !allowed(id) {

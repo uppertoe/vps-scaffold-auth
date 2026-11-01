@@ -359,7 +359,7 @@ func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.auditAdmin(r, store.AdminActionBrandingUpdate, "global", "")
-	redirectDone(w, r, "/admin/branding", "branding-saved", "")
+	s.redirectDone(w, r, "/admin/branding", "branding-saved", "")
 }
 
 // allowSlowUpload gives an admin's branding upload two minutes to arrive. The
@@ -544,7 +544,7 @@ func (s *Server) handleAdminSaveSettings(w http.ResponseWriter, r *http.Request)
 	// Record whether a webhook is set, not the URL itself (it may carry a token).
 	s.auditAdmin(r, store.AdminActionSettingsUpdate, "break_glass",
 		fmt.Sprintf("ttl=%gh notify_emails=%d webhook=%t", hours, len(emails), webhook != ""))
-	redirectDone(w, r, "/admin/settings", "settings-saved", "")
+	s.redirectDone(w, r, "/admin/settings", "settings-saved", "")
 }
 
 func (s *Server) settingsError(w http.ResponseWriter, r *http.Request, msg string) {
@@ -818,42 +818,54 @@ func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
-	if err := s.store.CreateGroup(r.Context(), name, r.PostFormValue("label")); err != nil {
+	if err := s.store.CreateGroup(r.Context(), name, clampLabel(r.PostFormValue("label"))); err != nil {
 		s.adminError(w, r)
 		return
 	}
 	s.auditAdmin(r, store.AdminActionGroupCreate, name, "")
-	redirectDone(w, r, "/admin/groups", "group-created", name)
+	s.redirectDone(w, r, "/admin/groups", "group-created", name)
 }
 
 func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	if !s.checkCSRF(w, r) {
 		return
 	}
-	if err := s.store.DeleteGroup(r.Context(), r.PathValue("name")); err != nil {
+	name := normalizeGroupName(r.PathValue("name"))
+	if err := s.store.DeleteGroup(r.Context(), name); err != nil {
 		s.adminError(w, r)
 		return
 	}
-	s.auditAdmin(r, store.AdminActionGroupDelete, r.PathValue("name"), "")
-	redirectDone(w, r, "/admin/groups", "group-deleted", "")
+	s.groupRecheck.forgetAll()
+	s.auditAdmin(r, store.AdminActionGroupDelete, name, "")
+	s.redirectDone(w, r, "/admin/groups", "group-deleted", "")
 }
 
 func (s *Server) handleAdminAddMember(w http.ResponseWriter, r *http.Request) {
 	if !s.checkCSRF(w, r) {
 		return
 	}
-	group := r.PathValue("name")
+	group := normalizeGroupName(r.PathValue("name"))
 	emailAddr := normalizeEmail(r.PostFormValue("email"))
 	if !validEmail(emailAddr) {
-		redirectDone(w, r, "/admin/groups", "member-invalid", group)
+		s.redirectDone(w, r, "/admin/groups", "member-invalid", group)
 		return
 	}
 	if err := s.store.AddGroupMember(r.Context(), group, emailAddr); err != nil {
 		s.adminError(w, r)
 		return
 	}
+	s.groupRecheck.forgetAll()
 	s.auditAdmin(r, store.AdminActionGroupAddMember, group, emailAddr)
-	redirectDone(w, r, "/admin/groups", "member-added", group)
+	s.redirectDone(w, r, "/admin/groups", "member-added", group)
+}
+
+// clampLabel trims a group label and caps it at 200 characters.
+func clampLabel(label string) string {
+	label = trimField(label)
+	if r := []rune(label); len(r) > 200 {
+		label = string(r[:200])
+	}
+	return label
 }
 
 // handleAdminGroupLabel changes a group's display label. The label is shown to
@@ -863,10 +875,7 @@ func (s *Server) handleAdminGroupLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	group := normalizeGroupName(r.PathValue("name"))
-	label := trimField(r.PostFormValue("label"))
-	if r := []rune(label); len(r) > 200 {
-		label = string(r[:200])
-	}
+	label := clampLabel(r.PostFormValue("label"))
 	found, err := s.store.UpdateGroupLabel(r.Context(), group, label)
 	if err != nil {
 		s.adminError(w, r)
@@ -877,21 +886,22 @@ func (s *Server) handleAdminGroupLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditAdmin(r, store.AdminActionGroupLabel, group, label)
-	redirectDone(w, r, "/admin/groups", "label-saved", group)
+	s.redirectDone(w, r, "/admin/groups", "label-saved", group)
 }
 
 func (s *Server) handleAdminRemoveMember(w http.ResponseWriter, r *http.Request) {
 	if !s.checkCSRF(w, r) {
 		return
 	}
-	group := r.PathValue("name")
+	group := normalizeGroupName(r.PathValue("name"))
 	emailAddr := normalizeEmail(r.PostFormValue("email"))
 	if err := s.store.RemoveGroupMember(r.Context(), group, emailAddr); err != nil {
 		s.adminError(w, r)
 		return
 	}
+	s.groupRecheck.forgetAll()
 	s.auditAdmin(r, store.AdminActionGroupRemoveMember, group, emailAddr)
-	redirectDone(w, r, "/admin/groups", "member-removed", group)
+	s.redirectDone(w, r, "/admin/groups", "member-removed", group)
 }
 
 // --- Break-glass codes ---
@@ -957,7 +967,7 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.auditAdmin(r, store.AdminActionBreakCreate, label, "group="+group)
-	redirectDone(w, r, "/admin/break", "card-created", "")
+	s.redirectDone(w, r, "/admin/break", "card-created", "")
 }
 
 func (s *Server) handleAdminBreakDetail(w http.ResponseWriter, r *http.Request) {
@@ -1064,7 +1074,7 @@ func (s *Server) handleAdminSaveCodeBranding(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.auditAdmin(r, store.AdminActionCodeBranding, "code#"+strconv.FormatInt(id, 10), "")
-	redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-branding", "")
+	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-branding", "")
 }
 
 // handleAdminCodeBrandingImage serves a code's override logo or glyph preview.
@@ -1111,7 +1121,7 @@ func (s *Server) handleAdminBreakRevoke(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.auditAdmin(r, store.AdminActionBreakRevoke, "code#"+strconv.FormatInt(id, 10), "")
-	redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-revoked", "")
+	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-revoked", "")
 }
 
 func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) {
@@ -1133,7 +1143,7 @@ func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.auditAdmin(r, store.AdminActionBreakRemint, "code#"+strconv.FormatInt(id, 10), "")
-	redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-reminted", "")
+	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-reminted", "")
 }
 
 func (s *Server) handleAdminBreakQR(w http.ResponseWriter, r *http.Request) {

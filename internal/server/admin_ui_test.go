@@ -41,17 +41,31 @@ func TestAdminHomeOverview(t *testing.T) {
 	}
 }
 
-func TestAdminNoticesAreFixedStrings(t *testing.T) {
+func TestAdminNoticeComesFromTheActionNotTheURL(t *testing.T) {
 	srv, sender := testServer(t)
+	ctx := context.Background()
+	if err := srv.store.CreateGroup(ctx, "team", ""); err != nil {
+		t.Fatal(err)
+	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 
-	if body := c.get("/admin/groups?done=member-added", nil).Body.String(); !strings.Contains(body, "The member has been added.") {
-		t.Error("known notice not shown")
+	// A crafted link cannot show a confirmation.
+	if body := c.get("/admin/groups?done=member-added", nil).Body.String(); strings.Contains(body, `class="notice`) {
+		t.Error("?done= in the URL produced a notice")
 	}
-	body := c.get("/admin/groups?done=%3Cscript%3Ealert(1)%3C%2Fscript%3E", nil).Body.String()
-	if strings.Contains(body, "<script>") || strings.Contains(body, `class="notice`) {
-		t.Error("unknown done code rendered something")
+	// A real action does, once.
+	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	rec := c.postForm("/admin/groups/team/members", url.Values{"csrf": {tok}, "email": {"a@example.com"}})
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusFound || !strings.Contains(loc, "open=team") || strings.Contains(loc, "done=") {
+		t.Fatalf("add member = %d %q", rec.Code, loc)
+	}
+	body := c.get("/admin/groups?open=team", nil).Body.String()
+	if !strings.Contains(body, "The member has been added.") || !strings.Contains(body, `id="g-team" open`) {
+		t.Error("notice or open group missing after the action")
+	}
+	if body := c.get("/admin/groups", nil).Body.String(); strings.Contains(body, `class="notice`) {
+		t.Error("notice shown a second time")
 	}
 }
 
@@ -66,34 +80,50 @@ func TestAdminAddMemberRefusesBadEmailWithWarning(t *testing.T) {
 	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
 
 	rec := c.postForm("/admin/groups/team/members", url.Values{"csrf": {tok}, "email": {"not an email"}})
-	loc := rec.Header().Get("Location")
-	if rec.Code != http.StatusFound || !strings.Contains(loc, "done=member-invalid") || !strings.Contains(loc, "open=team") {
-		t.Fatalf("bad email = %d %q", rec.Code, loc)
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "open=team") {
+		t.Fatalf("bad email = %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 	if members, _ := srv.store.ListGroupMembers(ctx, "team"); len(members) != 0 {
 		t.Errorf("bad email stored: %v", members)
 	}
-	page := c.get("/admin/groups?done=member-invalid&open=team", nil).Body.String()
-	if !strings.Contains(page, `class="notice warn"`) || !strings.Contains(page, `id="g-team" open`) {
-		t.Error("warning or open group missing")
+	if page := c.get("/admin/groups?open=team", nil).Body.String(); !strings.Contains(page, `class="notice warn"`) {
+		t.Error("warning missing")
 	}
 }
 
 func TestAdminOpenGroupMustExist(t *testing.T) {
 	srv, sender := testServer(t)
+	if err := srv.store.CreateGroup(context.Background(), "team", ""); err != nil {
+		t.Fatal(err)
+	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	body := c.get("/admin/groups?open=%22%3E%3Cb%3E", nil).Body.String()
-	if strings.Contains(body, "<b>") {
-		t.Error("open parameter reflected into the page")
+	if body := c.get("/admin/groups?open=nope", nil).Body.String(); strings.Contains(body, " open>") {
+		t.Error("a group that does not exist caused a group to open")
+	}
+	if body := c.get("/admin/groups?open=TEAM", nil).Body.String(); !strings.Contains(body, `id="g-team" open`) {
+		t.Error("existing group (normalised) not opened")
 	}
 }
 
 func TestRedirectDoneDropsMalformedGroup(t *testing.T) {
+	srv, _ := testServer(t)
 	rec := httptestRecorder()
-	redirectDone(rec, httptestRequest(), "/admin/groups", "member-added", "bad name\r\nX: y")
-	if loc := rec.Header().Get("Location"); strings.Contains(loc, "open=") || strings.Contains(loc, "#") {
+	srv.redirectDone(rec, httptestRequest(), "/admin/groups", "member-added", "bad name\r\nX: y")
+	if loc := rec.Header().Get("Location"); loc != "/admin/groups" {
 		t.Errorf("malformed group carried into Location: %q", loc)
+	}
+}
+
+func TestCreateGroupCapsLabel(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	c.postForm("/admin/groups", url.Values{"csrf": {tok}, "name": {"team"}, "label": {"  " + strings.Repeat("x", 500) + "  "}})
+	groups, _ := srv.store.ListGroups(context.Background())
+	if len(groups) != 1 || len([]rune(groups[0].Label)) != 200 {
+		t.Errorf("label not trimmed and capped: %d runes", len([]rune(groups[0].Label)))
 	}
 }
 
