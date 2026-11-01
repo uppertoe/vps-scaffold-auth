@@ -128,6 +128,12 @@ reports.{$DOMAIN}   { import protected_groups  "reports_team" reports:3000 }
 dash.{$DOMAIN}      { import protected_access   "rch.org.au" "dash_guests" dash:3000 }
 ```
 
+In a scaffold server repo, the route renderer also writes
+`.generated/caddy/route-groups.tsv`, which lists every group a guard requires.
+Mount it read-only and set `ROUTE_GROUPS_FILE`, and the admin Groups page lists
+the groups the routes use, offers to create any that are missing, and marks
+groups that no route uses, so group names are picked rather than typed.
+
 Guard summary (domains/groups are space- or comma-separated; `<up>` is the app's
 upstream `host:port`, always the **last** argument):
 

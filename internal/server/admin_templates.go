@@ -13,16 +13,20 @@ import (
 
 // adminData carries everything the admin templates might need.
 type adminData struct {
-	Title        string
-	Message      string
-	CSRF         string
-	Groups       []groupView
-	Codes        []codeView
-	Code         codeView
-	Events       []store.BreakGlassEvent
-	Branding     brandingView
-	Settings     settingsView
-	CodeBranding codeBrandingView
+	Title   string
+	Message string
+	CSRF    string
+	Groups  []groupView
+	// Groups page: groups the routes require that do not exist yet, and
+	// whether the route manifest (ROUTE_GROUPS_FILE) was read at all.
+	MissingGroups []missingGroupView
+	RouteGroupsOn bool
+	Codes         []codeView
+	Code          codeView
+	Events        []store.BreakGlassEvent
+	Branding      brandingView
+	Settings      settingsView
+	CodeBranding  codeBrandingView
 	// Admin two-factor page.
 	TOTPEnabled bool
 	TOTPAdmins  []totpAdminView
@@ -161,6 +165,20 @@ type groupView struct {
 	Name    string
 	Label   string
 	Members []memberView
+	// Hosts whose routes require this group, from the route manifest.
+	Hosts []string
+	// Unused: the manifest was read and no route names this group, and no
+	// break-glass card targets it.
+	Unused bool
+}
+
+// missingGroupView is a group a route requires that has not been created.
+// CardTarget marks a group a break-glass card targets, which needs no members
+// to work.
+type missingGroupView struct {
+	Name       string
+	Hosts      []string
+	CardTarget bool
 }
 
 // memberView is one row of a group's member list. Permitted reports whether the

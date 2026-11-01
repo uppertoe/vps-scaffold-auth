@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -699,8 +700,22 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
+	routeGroups, routeGroupsOn := s.routeGroups()
+	cardTargets := map[string]bool{}
+	if routeGroupsOn {
+		codes, err := s.store.ListBreakGlassCodes(r.Context())
+		if err != nil {
+			s.adminError(w, r)
+			return
+		}
+		for _, c := range codes {
+			cardTargets[normalizeGroupName(c.TargetGroup)] = true
+		}
+	}
+	existing := make(map[string]bool, len(groups))
 	view := make([]groupView, 0, len(groups))
 	for _, g := range groups {
+		existing[g.Name] = true
 		members, err := s.store.ListGroupMembers(r.Context(), g.Name)
 		if err != nil {
 			s.adminError(w, r)
@@ -710,9 +725,24 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 		for _, m := range members {
 			mv = append(mv, memberView{Email: m, Permitted: s.policy.Allowed(m)})
 		}
-		view = append(view, groupView{Name: g.Name, Label: g.Label, Members: mv})
+		hosts := routeGroups[g.Name]
+		view = append(view, groupView{
+			Name: g.Name, Label: g.Label, Members: mv,
+			Hosts:  hosts,
+			Unused: routeGroupsOn && len(hosts) == 0 && !cardTargets[g.Name],
+		})
 	}
-	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{Title: "Groups", Groups: view})
+	missing := make([]missingGroupView, 0)
+	for name, hosts := range routeGroups {
+		if !existing[name] {
+			missing = append(missing, missingGroupView{Name: name, Hosts: hosts, CardTarget: cardTargets[name]})
+		}
+	}
+	sort.Slice(missing, func(i, j int) bool { return missing[i].Name < missing[j].Name })
+	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{
+		Title: "Groups", Groups: view,
+		MissingGroups: missing, RouteGroupsOn: routeGroupsOn,
+	})
 }
 
 func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) {
