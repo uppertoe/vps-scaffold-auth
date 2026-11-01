@@ -4,12 +4,39 @@
 <p class="sub">Named groups surfaced to apps via the <code class="mono">Remote-Groups</code> header. Add members by email.</p>
 
 {{$csrf := .CSRF}}
+{{if .MissingGroups}}
+<div class="panel">
+  <h2 style="margin-top:0">Groups the apps use that do not exist yet</h2>
+  <p class="muted">An app's sign-in rule names each of these groups, but nobody can be admitted through a group until it has been created.</p>
+  <table>
+    <tbody>
+    {{range .MissingGroups}}
+      <tr>
+        <td>
+          <code class="mono">{{.Name}}</code>
+          <div class="muted">Used by {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}</div>
+          {{if .CardTarget}}<div class="muted">Break-glass cards target this group. Create it only if people should also be members.</div>{{end}}
+        </td>
+        <td style="text-align:right">
+          <form class="inline" method="post" action="/admin/groups">
+            <input type="hidden" name="csrf" value="{{$csrf}}">
+            <input type="hidden" name="name" value="{{.Name}}">
+            <button type="submit">Create group</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
 {{range .Groups}}
 {{$group := .Name}}
 <div class="panel">
   <div class="row" style="align-items:baseline">
     <div style="flex:1 1 auto">
-      <h2 style="margin:0"><code class="mono">{{.Name}}</code>{{if .Label}} <span class="muted">— {{.Label}}</span>{{end}}</h2>
+      <h2 style="margin:0"><code class="mono">{{.Name}}</code>{{if .Label}} <span class="muted">— {{.Label}}</span>{{end}}{{if .Unused}} <span class="pill guest" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">not used by any app</span>{{end}}</h2>
+      {{if .Hosts}}<div class="muted">Used by {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}</div>{{end}}
     </div>
     <form class="inline" method="post" action="/admin/groups/{{.Name}}/delete" style="flex:0 0 auto">
       <input type="hidden" name="csrf" value="{{$csrf}}">

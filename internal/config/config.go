@@ -54,6 +54,13 @@ type Config struct {
 	// timestamps in the admin UI; empty means UTC. DisplayLocation is the parsed
 	// form, resolved once at load (always non-nil).
 	DisplayTimezone string
+
+	// RouteGroupsFile is the path of the scaffold-rendered manifest of the
+	// gateway groups each route requires ("group<TAB>host" lines,
+	// .generated/caddy/route-groups.tsv). When set, the Groups page lists the
+	// groups the routes use, offers to create missing ones, and marks groups no
+	// route uses. Empty turns the feature off.
+	RouteGroupsFile string
 	DisplayLocation *time.Location
 
 	SessionTTL         time.Duration
@@ -186,6 +193,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	c.DisplayTimezone = strings.TrimSpace(getenv("DISPLAY_TIMEZONE", ""))
+	c.RouteGroupsFile = strings.TrimSpace(getenv("ROUTE_GROUPS_FILE", ""))
 	c.DisplayLocation = time.UTC
 	if c.DisplayTimezone != "" {
 		loc, lerr := time.LoadLocation(c.DisplayTimezone)
