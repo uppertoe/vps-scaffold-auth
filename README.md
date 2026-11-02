@@ -358,14 +358,15 @@ page. Passkeys are bound to the auth host (the relying-party ID is the host of
 `AUTH_PUBLIC_URL`), accept only ES256 with user verification and no
 attestation, and need no new dependency: the verifier is `internal/passkey`.
 
-- Adding a passkey needs a sign-in within the last 15 minutes; an
-  administrator also needs the second factor, from that sign-in or from an
-  authenticator code entered with the request.
-- An administrator's passkey, added that way, satisfies the admin second
-  factor at sign-in. One added before its owner became an administrator does
-  not.
-- A session started with a passkey ends at its next renewal once the passkey
-  is removed.
+- Adding a passkey needs an emailed-code sign-in within the last 15 minutes
+  (a passkey sign-in never counts); an administrator also needs the second
+  factor, from that sign-in or from an authenticator code entered first.
+- An administrator's passkey, added that way with `TOTP_ENABLED=true`,
+  satisfies the admin second factor at sign-in. One added before its owner
+  became an administrator, or while TOTP was off, does not.
+- A session started with a passkey loses the admin pages and `/passkeys` at
+  once when the passkey is removed, and the apps at its next renewal.
+- The account holder is emailed whenever a passkey is added.
 - This is the only setting that puts a script on the sign-in pages:
   `/passkey.js`, allowed by `script-src 'self'` on the pages that run a
   ceremony and nowhere else.

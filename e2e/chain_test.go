@@ -611,6 +611,13 @@ func TestChain(t *testing.T) {
 		if added.status != http.StatusOK || !strings.Contains(added.body, "A passkey has been added to this phone.") {
 			t.Fatalf("add a passkey: %d: %.300s", added.status, added.body)
 		}
+		// The account holder is told by email.
+		notice := regexp.MustCompile(`to=carol@example\.org subject="A passkey has been added to your account"`)
+		for deadline := time.Now().Add(10 * time.Second); !notice.MatchString(compose(t, "logs", "--no-log-prefix", "auth")); time.Sleep(200 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("no email told the account holder that a passkey was added")
+			}
+		}
 
 		signIn := func(b *browser, rp string) reply {
 			login := b.startAt(app)

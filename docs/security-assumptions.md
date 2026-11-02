@@ -119,8 +119,9 @@ These risks are known. The design docs explain each one for the department.
   asks for it, which is why G18 requires a recent sign-in.
 - A stolen session cookie used within 15 minutes of an emailed-code sign-in
   can register a software key, since attestation is "none" and nothing at
-  registration is signed. The key is listed on the person's passkeys page and
-  the access page until removed.
+  registration is signed. The account holder is emailed whenever a passkey
+  is added (`notifyPasskeyAdded`, `TestAddingAPasskeySendsANotice`), and the
+  key is listed on their passkeys page and the access page until removed.
 - The single-use guard on challenges is in memory: a restart forgets it, so a
   captured sign-in post and its challenge cookie could be replayed within ten
   minutes of a restart. Capturing them needs the TLS session.

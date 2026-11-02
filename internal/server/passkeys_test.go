@@ -16,6 +16,7 @@ import (
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
+	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 	"github.com/uppertoe/vps-scaffold-auth/internal/passkey/passkeytest"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 )
@@ -515,5 +516,46 @@ func TestChallengeGuardExpiryAndCap(t *testing.T) {
 	}
 	if g.use([]byte("b")) {
 		t.Fatal("a full guard accepted a new challenge")
+	}
+}
+
+// Adding a passkey emails the account holder, in the approved wording, with a
+// link to their passkeys page.
+func TestAddingAPasskeySendsANotice(t *testing.T) {
+	srv, sender := pkServer(t, nil)
+	srv.loc = time.UTC
+	at := time.Date(2026, 11, 2, 15, 14, 0, 0, time.UTC)
+	srv.now = func() time.Time { return at }
+	c := newClient(t, srv.Handler())
+	if rec := register(t, c, passkeytest.New(), phoneSignIn(t, c, sender, "user@example.com").Body.String(), nil); rec.Code != http.StatusOK {
+		t.Fatalf("register: %d", rec.Code)
+	}
+	var notice *email.Message
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline) && notice == nil; time.Sleep(10 * time.Millisecond) {
+		sender.mu.Lock()
+		if len(sender.notices) > 0 {
+			n := sender.notices[0]
+			notice = &n
+		}
+		sender.mu.Unlock()
+	}
+	if notice == nil {
+		t.Fatal("no notice sent when a passkey was added")
+	}
+	if notice.To != "user@example.com" || notice.Subject != "A passkey has been added to your account" {
+		t.Fatalf("notice to %q, subject %q", notice.To, notice.Subject)
+	}
+	for _, want := range []string{
+		"A passkey was added to your account at auth.example.com on 2 November 2026 at 3:14 pm, on an iPhone.",
+		"If you added this passkey, there is nothing more to do.",
+		"If you did not add it, open Your passkeys, remove it, then contact an administrator for assistance.",
+		"https://auth.example.com/passkeys",
+	} {
+		if !strings.Contains(notice.Text, want) {
+			t.Errorf("notice text lacks %q:\n%s", want, notice.Text)
+		}
+	}
+	if !strings.Contains(notice.HTML, `href="https://auth.example.com/passkeys"`) {
+		t.Error("notice HTML has no link to the passkeys page")
 	}
 }

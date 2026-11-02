@@ -28,7 +28,9 @@ then offers to add a passkey, once every ninety days on each phone, and the
 person can decline. Their passkeys page lists each passkey with the date it
 was added and when it was last used, and a passkey can be removed there. If a
 person loses a phone, they remove its passkey and sign in with an emailed code
-until they add a new one.
+until they add a new one. Whenever a passkey is added, the gateway emails the
+person to say so, with the date, the time and the kind of phone, and a link to
+their passkeys page.
 
 Adding a passkey needs a sign-in with an emailed code within the last fifteen
 minutes. A sign-in with a passkey does not count, so a thief holding one
@@ -102,8 +104,9 @@ ordinary form, and the gateway checks everything.
 The gateway asks the phone for no proof of what made a passkey, as is usual
 for passkeys. A program that has stolen a person's session cookie within
 fifteen minutes of their sign-in could therefore register a key of its own,
-which would then work until it is removed. The person's passkeys page and the
-access page would list it.
+which would then work until it is removed. The gateway emails the person
+whenever a passkey is added, so they would be told, and their passkeys page
+and the access page would list it.
 
 A passkey is only as safe as the phone and the account it syncs to. Anyone who
 can unlock the person's phone, or who controls the Apple or Google account

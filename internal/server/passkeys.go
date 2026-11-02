@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"net/url"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
+	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 	"github.com/uppertoe/vps-scaffold-auth/internal/passkey"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
@@ -495,6 +498,7 @@ func (s *Server) handlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAuth(r, id.Email, store.AuthEventPasskeyAdd, store.AuthOutcomeOK)
+	s.notifyPasskeyAdded(r, id.Email, now)
 	s.render(w, http.StatusOK, "passkey_added", pageData{Identity: id.Email, Redirect: s.loginRedirect(rd), Passkey: &passkeyPage{Next: s.passkeysURL()}})
 }
 
@@ -762,4 +766,53 @@ func renewWithin(d time.Duration) string {
 		return fmt.Sprintf("%d minutes", int(d/time.Minute))
 	}
 	return d.String()
+}
+
+// notifyPasskeyAdded emails the account holder whenever a passkey is added.
+// A passkey needs no proof of the device that made it, so a session cookie
+// stolen soon after a sign-in could register a key of the thief's; this email
+// is how the person learns of it. It is sent on a detached goroutine, like the
+// sign-in code, so mail delivery never delays the page.
+func (s *Server) notifyPasskeyAdded(r *http.Request, to string, now time.Time) {
+	msg := s.passkeyAddedEmail(to, passkeyDevice(r.UserAgent()), now)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := s.sender.Send(ctx, msg); err != nil {
+			log.Printf("send passkey notice to %s: %v", to, err)
+		}
+	}()
+}
+
+// passkeyDevice names the kind of phone for the notice, or "" if unknown.
+func passkeyDevice(ua string) string {
+	switch {
+	case strings.Contains(ua, "iPhone"):
+		return "an iPhone"
+	case strings.Contains(ua, "Android"):
+		return "an Android phone"
+	}
+	return ""
+}
+
+func (s *Server) passkeyAddedEmail(to, device string, now time.Time) email.Message {
+	when := now.In(s.loc)
+	stamp := when.Format("2 January 2006") + " at " + strings.ToLower(when.Format("3:04 pm"))
+	first := fmt.Sprintf("A passkey was added to your account at %s on %s", s.relyingParty().ID, stamp)
+	if device != "" {
+		first += ", on " + device
+	}
+	first += "."
+	const ok = "If you added this passkey, there is nothing more to do."
+	const notYou = "If you did not add it, open Your passkeys, remove it, then contact an administrator for assistance."
+	link := s.passkeysURL()
+	text := first + "\n\n" + ok + "\n\n" + notYou + "\n\nYour passkeys: " + link + "\n"
+	esc := html.EscapeString
+	htmlBody := `<!DOCTYPE html><html lang="en"><body style="margin:0;padding:24px;background:#f6f7f9;font:16px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1c1e21">` +
+		`<div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:14px;padding:28px 24px">` +
+		`<p style="margin:0 0 12px">` + esc(first) + `</p>` +
+		`<p style="margin:0 0 12px">` + esc(ok) + `</p>` +
+		`<p style="margin:0 0 20px">If you did not add it, open <a href="` + esc(link) + `" style="color:#2563eb">Your passkeys</a>, remove it, then contact an administrator for assistance.</p>` +
+		`</div></body></html>`
+	return email.Message{To: to, Subject: "A passkey has been added to your account", Text: text, HTML: htmlBody}
 }
