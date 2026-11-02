@@ -58,6 +58,7 @@ type feedSyncer struct {
 	retryMu    sync.Mutex
 	retrying   map[string]feedRetry
 	retryDelay time.Duration
+	retrySeq   uint64 // the last sequence number handed out
 }
 
 // feedRetry is a retry waiting to run, shown on the Groups page.
@@ -66,6 +67,48 @@ type feedRetry struct {
 	Next    time.Time // when the next attempt runs
 	Reason  string    // what went wrong, in the gateway's words
 	Attempt int       // attempts made so far
+	Seq     uint64    // which retry sequence this is
+}
+
+// startRetry records a new sequence for group and returns its number.
+func (f *feedSyncer) startRetry(group string, r feedRetry) uint64 {
+	f.retryMu.Lock()
+	defer f.retryMu.Unlock()
+	f.retrySeq++
+	r.Seq = f.retrySeq
+	f.retrying[group] = r
+	return r.Seq
+}
+
+// ownsRetry reports whether sequence seq is still the one waiting for group.
+// Clearing the entry (a recorded result) or a newer sequence ends it.
+func (f *feedSyncer) ownsRetry(group string, seq uint64) bool {
+	f.retryMu.Lock()
+	defer f.retryMu.Unlock()
+	r, ok := f.retrying[group]
+	return ok && r.Seq == seq
+}
+
+// advanceRetry updates sequence seq's entry, only if it still owns it, so a
+// result recorded while an attempt was running is never undone.
+func (f *feedSyncer) advanceRetry(group string, seq uint64, r feedRetry) bool {
+	f.retryMu.Lock()
+	defer f.retryMu.Unlock()
+	if cur, ok := f.retrying[group]; !ok || cur.Seq != seq {
+		return false
+	}
+	r.Seq = seq
+	f.retrying[group] = r
+	return true
+}
+
+// endRetry drops sequence seq's entry, only if it still owns it.
+func (f *feedSyncer) endRetry(group string, seq uint64) {
+	f.retryMu.Lock()
+	defer f.retryMu.Unlock()
+	if cur, ok := f.retrying[group]; ok && cur.Seq == seq {
+		delete(f.retrying, group)
+	}
 }
 
 func (f *feedSyncer) retryFor(group string) (feedRetry, bool) {
@@ -73,12 +116,6 @@ func (f *feedSyncer) retryFor(group string) (feedRetry, bool) {
 	defer f.retryMu.Unlock()
 	r, ok := f.retrying[group]
 	return r, ok
-}
-
-func (f *feedSyncer) setRetry(group string, r feedRetry) {
-	f.retryMu.Lock()
-	f.retrying[group] = r
-	f.retryMu.Unlock()
 }
 
 // clearRetry drops a waiting retry; any recorded sync does this, so a
@@ -151,8 +188,9 @@ func (s *Server) scheduledSync(ctx context.Context, group string) {
 	_, err := s.syncFeedAttempt(ctx, group, "group feed", "", true)
 	var tr *feedRetryErr
 	if errors.As(err, &tr) {
-		s.feeds.setRetry(group, feedRetry{At: s.now(), Next: s.now().Add(s.feeds.retryDelay), Reason: tr.detail, Attempt: 1})
-		go s.retryFeed(ctx, group)
+		log.Printf("group feed %s: attempt 1 of %d failed, retrying: %s", group, 1+feedRetries, tr.detail)
+		seq := s.feeds.startRetry(group, feedRetry{At: s.now(), Next: s.now().Add(s.feeds.retryDelay), Reason: tr.detail, Attempt: 1})
+		go s.retryFeed(ctx, group, seq)
 		return
 	}
 	s.logScheduled(group, err)
@@ -161,30 +199,35 @@ func (s *Server) scheduledSync(ctx context.Context, group string) {
 // retryFeed runs the retries for one group. The last attempt records its
 // result whatever it is, so a feed that stays down is reported after
 // 1+feedRetries attempts and not before.
-func (s *Server) retryFeed(ctx context.Context, group string) {
+//
+// seq identifies the sequence. A result recorded meanwhile (Sync now or
+// Accept) clears the entry, and a sequence that no longer owns its entry
+// stops, so a later round cannot leave two sequences running for one group.
+func (s *Server) retryFeed(ctx context.Context, group string, seq uint64) {
 	t := time.NewTimer(s.feeds.retryDelay)
 	defer t.Stop()
 	for attempt := 2; attempt <= 1+feedRetries; attempt++ {
 		select {
 		case <-ctx.Done():
-			s.feeds.clearRetry(group)
+			s.feeds.endRetry(group, seq)
 			return
 		case <-t.C:
 		}
-		// A result recorded meanwhile (an administrator's Sync now) ends the
-		// sequence: the group's state is already current.
-		if _, waiting := s.feeds.retryFor(group); !waiting {
+		if !s.feeds.ownsRetry(group, seq) {
 			return
 		}
 		last := attempt == 1+feedRetries
 		_, err := s.syncFeedAttempt(ctx, group, "group feed", "", !last)
 		var tr *feedRetryErr
 		if !last && errors.As(err, &tr) {
-			s.feeds.setRetry(group, feedRetry{At: s.now(), Next: s.now().Add(s.feeds.retryDelay), Reason: tr.detail, Attempt: attempt})
+			log.Printf("group feed %s: attempt %d of %d failed, retrying: %s", group, attempt, 1+feedRetries, tr.detail)
+			if !s.feeds.advanceRetry(group, seq, feedRetry{At: s.now(), Next: s.now().Add(s.feeds.retryDelay), Reason: tr.detail, Attempt: attempt}) {
+				return
+			}
 			t.Reset(s.feeds.retryDelay)
 			continue
 		}
-		s.feeds.clearRetry(group)
+		s.feeds.endRetry(group, seq)
 		s.logScheduled(group, err)
 		return
 	}
@@ -418,7 +461,15 @@ func (s *Server) fetchFeed(ctx context.Context, feed config.GroupFeed) ([]string
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, 0, &feedUnreachable{fmt.Sprintf("the feed answered %d", resp.StatusCode)}
+		msg := fmt.Sprintf("the feed answered %d", resp.StatusCode)
+		// Only an answer that says "try later" is retried: a server error,
+		// a timeout or a rate limit. A refused token (401, 403), a moved feed
+		// (404, or a redirect, which is never followed) and the like will not
+		// change by waiting, and are reported at once.
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
+			return nil, 0, &feedUnreachable{msg}
+		}
+		return nil, 0, errors.New(msg)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, feedMaxBody+1))
 	if err != nil {

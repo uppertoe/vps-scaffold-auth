@@ -747,3 +747,58 @@ func TestGroupsPageShowsAWaitingRetry(t *testing.T) {
 		}
 	}
 }
+
+// Found in review: Sync now ended a waiting retry without stopping its
+// goroutine, so the next round started a second sequence while the first was
+// asleep, and both kept fetching. Each sequence now owns its entry by number.
+func TestSyncNowThenRoundRunsOneSequence(t *testing.T) {
+	srv, body, hits, _ := retryServer(t, 100*time.Millisecond)
+	body.Store("500")
+	h0 := hits.Load()
+	srv.scheduledSync(context.Background(), "rch-consultants")                     // first sequence
+	srv.syncFeed(context.Background(), "rch-consultants", "admin@example.com", "") // Sync now ends it
+	srv.scheduledSync(context.Background(), "rch-consultants")                     // a new one
+	waitFor(t, func() bool { return !retrying(srv) })
+	time.Sleep(300 * time.Millisecond)
+	// One attempt, Sync now, then one full sequence.
+	if n := hits.Load() - h0; n != int32(2+1+feedRetries) {
+		t.Errorf("%d fetches, want %d: more than one sequence ran", n, 2+1+feedRetries)
+	}
+}
+
+// Only an answer that says "try later" is retried. A refused token or a moved
+// feed is reported at once, since waiting will not change it.
+func TestFeedRefusalsAreReportedAtOnce(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusFound} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if code == http.StatusFound {
+					w.Header().Set("Location", "https://elsewhere.example/")
+				}
+				w.WriteHeader(code)
+			}))
+			t.Cleanup(ts.Close)
+			srv, _ := feedServer(t, ts.URL, "")
+			srv.feeds.retryDelay = time.Hour
+			srv.scheduledSync(context.Background(), "rch-consultants")
+			if retrying(srv) {
+				t.Fatalf("a %d was retried", code)
+			}
+			if st := syncState(t, srv); st.Status != store.GroupSyncFailed {
+				t.Fatalf("a %d was not recorded: %+v", code, st)
+			}
+		})
+	}
+	for _, code := range []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusRequestTimeout} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) }))
+			t.Cleanup(ts.Close)
+			srv, _ := feedServer(t, ts.URL, "")
+			srv.feeds.retryDelay = time.Hour
+			srv.scheduledSync(context.Background(), "rch-consultants")
+			if !retrying(srv) {
+				t.Fatalf("a %d was not retried", code)
+			}
+		})
+	}
+}
