@@ -1,0 +1,17 @@
+{{define "title"}}Sign in faster on this phone{{end}}
+{{define "content"}}
+<div class="ok">Your email has been confirmed, and you are signed in.</div>
+<div class="pk-icon">{{template "pk-key-icon" 26}}</div>
+<h1>Sign in faster on this phone</h1>
+<p class="lead">Next time, you can sign in on this phone with a passkey instead of an email code. Your phone will check your face, fingerprint or PIN.</p>
+<p class="sub">Your face, fingerprint and PIN never leave your phone.</p>
+<div class="err" id="passkey-error" hidden>Your passkey has not been added. Please try again.</div>
+<div class="ok" id="passkey-exists" hidden>This phone already has a passkey for your account.</div>
+{{with .Passkey}}
+<form id="passkey-register" method="post" action="/passkeys/register" {{template "pk-register-attrs" .}}>
+  {{template "pk-register-fields" $}}
+  <div id="passkey-add-wrap" hidden><button type="button" id="passkey-add">Add a passkey</button></div>
+</form>
+<div class="links"><a href="{{.Next}}" id="passkey-skip" class="pk-link">Not now</a></div>
+{{end}}
+{{end}}

@@ -207,7 +207,20 @@ CREATE TABLE IF NOT EXISTS admin_events (
 	created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_admin_events_created ON admin_events(created_at);
-CREATE INDEX IF NOT EXISTS idx_admin_events_actor ON admin_events(actor, created_at);`
+CREATE INDEX IF NOT EXISTS idx_admin_events_actor ON admin_events(actor, created_at);
+CREATE TABLE IF NOT EXISTS passkeys (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	email         TEXT NOT NULL,
+	credential_id BLOB NOT NULL UNIQUE,
+	public_key    BLOB NOT NULL,
+	user_handle   BLOB NOT NULL,
+	sign_count    INTEGER NOT NULL DEFAULT 0,
+	label         TEXT NOT NULL DEFAULT '',
+	admin_grade   INTEGER NOT NULL DEFAULT 0,
+	created_at    INTEGER NOT NULL,
+	last_used_at  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
@@ -455,6 +468,109 @@ ON CONFLICT(email) DO UPDATE SET secret = excluded.secret`, email, secret)
 func (s *SQLite) DeleteTOTPSecret(ctx context.Context, email string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM totp_secrets WHERE email = ?`, email)
 	return err
+}
+
+// --- Passkeys ---
+//
+// AUTOINCREMENT, not a plain rowid: a session records the ID of the passkey
+// that started it, and renewal ends the session once that ID is gone. A
+// reused ID would let a new passkey keep an old, removed one's sessions alive.
+
+const passkeyCols = `id, email, credential_id, public_key, user_handle, sign_count, label, admin_grade, created_at, last_used_at`
+
+func scanPasskey(sc interface{ Scan(...any) error }) (Passkey, error) {
+	var p Passkey
+	var grade int
+	var created, used int64
+	if err := sc.Scan(&p.ID, &p.Email, &p.CredentialID, &p.PublicKey, &p.UserHandle, &p.SignCount, &p.Label, &grade, &created, &used); err != nil {
+		return Passkey{}, err
+	}
+	p.AdminGrade = grade != 0
+	p.CreatedAt = time.Unix(created, 0)
+	if used != 0 {
+		p.LastUsedAt = time.Unix(used, 0)
+	}
+	return p, nil
+}
+
+// CreatePasskey stores a verified passkey.
+func (s *SQLite) CreatePasskey(ctx context.Context, p Passkey) (int64, error) {
+	grade := 0
+	if p.AdminGrade {
+		grade = 1
+	}
+	res, err := s.db.ExecContext(ctx, `
+INSERT INTO passkeys (email, credential_id, public_key, user_handle, sign_count, label, admin_grade, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, p.Email, p.CredentialID, p.PublicKey, p.UserHandle, p.SignCount, p.Label, grade, p.CreatedAt.Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *SQLite) onePasskey(ctx context.Context, where string, arg any) (Passkey, bool, error) {
+	p, err := scanPasskey(s.db.QueryRowContext(ctx, `SELECT `+passkeyCols+` FROM passkeys WHERE `+where, arg))
+	if err == sql.ErrNoRows {
+		return Passkey{}, false, nil
+	}
+	if err != nil {
+		return Passkey{}, false, err
+	}
+	return p, true, nil
+}
+
+// PasskeyByCredentialID finds the passkey a sign-in names.
+func (s *SQLite) PasskeyByCredentialID(ctx context.Context, credentialID []byte) (Passkey, bool, error) {
+	return s.onePasskey(ctx, `credential_id = ?`, credentialID)
+}
+
+// GetPasskey returns one passkey by ID.
+func (s *SQLite) GetPasskey(ctx context.Context, id int64) (Passkey, bool, error) {
+	return s.onePasskey(ctx, `id = ?`, id)
+}
+
+// ListPasskeys returns a person's passkeys, newest first.
+func (s *SQLite) ListPasskeys(ctx context.Context, email string) ([]Passkey, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+passkeyCols+` FROM passkeys WHERE email = ? ORDER BY id DESC`, email)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Passkey
+	for rows.Next() {
+		p, err := scanPasskey(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// TouchPasskey records a sign-in.
+func (s *SQLite) TouchPasskey(ctx context.Context, id int64, signCount uint32, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE passkeys SET sign_count = ?, last_used_at = ? WHERE id = ?`, signCount, now.Unix(), id)
+	return err
+}
+
+// DeletePasskey removes one of email's passkeys.
+func (s *SQLite) DeletePasskey(ctx context.Context, email string, id int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM passkeys WHERE id = ? AND email = ?`, id, email)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// DeletePasskeys removes all of email's passkeys.
+func (s *SQLite) DeletePasskeys(ctx context.Context, email string) (int, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM passkeys WHERE email = ?`, email)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }
 
 // TOTPFailureCount returns the number of failed TOTP verifications recorded for

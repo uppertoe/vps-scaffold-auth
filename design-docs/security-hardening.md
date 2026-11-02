@@ -2,7 +2,7 @@
 title: Security hardening
 summary: The defences in one place, from refusing to start on a bad setting to the limits that keep one visitor from taking every tool offline.
 weight: 7
-lastmod: 2026-10-31
+lastmod: 2026-11-02
 ---
 
 ## Failing closed
@@ -69,7 +69,10 @@ the test that proves it, is listed in the repository's security register.
 ## The pages
 
 The sign-in and admin pages contain no scripts, and the gateway's content
-policy forbids scripts, frames and outside resources. Forms may be sent only
+policy forbids scripts, frames and outside resources. The one exception comes
+with passkeys: when a server switches them on, the pages that use a passkey
+load one script from the gateway itself, and their policy allows that script
+alone. [Passkeys](passkeys.md) explains why. Forms may be sent only
 to the gateway itself and to hosts on the server's domain. The pages send no
 referrer and are never cached. Uploaded images are served with a policy that
 stops them from acting as a page, so a malicious image cannot run code even

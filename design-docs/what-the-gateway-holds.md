@@ -2,7 +2,7 @@
 title: What the gateway holds
 summary: The records in the gateway's database, how each is protected, how long it is kept, and what a stolen copy would reveal.
 weight: 6
-lastmod: 2026-10-31
+lastmod: 2026-11-02
 ---
 
 ## The records
@@ -16,6 +16,7 @@ and no passwords.
 | Authenticator secrets | Each administrator's secret | Encryption | Until removed |
 | Break-glass cards | Each card's label, note, group, destination and code | A hash for looking the code up, and an encrypted copy for reprinting the card | Indefinitely, since a revoked card stays on record |
 | Break-glass scans | The card, network address, browser and time of each scan | Access to the admin pages | Indefinitely |
+| Passkeys | Each passkey's public key, account ID, label, and the dates it was added and last used | Nothing further is needed, since a public key cannot sign anyone in | Until removed |
 | Groups | Group names and their members' addresses | Access to the admin pages | Until removed |
 | Sign-in log | Address, network address, browser, step and outcome of each attempt | Access to the admin pages | One year |
 | Access log | Address, tool and hour, one row for each combination | Access to the admin pages | One year |

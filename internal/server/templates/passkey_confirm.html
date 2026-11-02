@@ -1,0 +1,15 @@
+{{define "title"}}Add a passkey to your admin account{{end}}
+{{define "content"}}
+<h1>Add a passkey to your admin account</h1>
+<p class="lead">Before a passkey can be added to an admin account, enter the 6-digit code from your authenticator app.</p>
+<p class="sub">Once the passkey is added, you can sign in on this phone with the passkey alone, without an email code or an authenticator code.</p>
+{{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+<form method="post" action="/passkeys/confirm" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label for="code">Authenticator code</label>
+  <input id="code" name="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*"
+         autocomplete="off" autofocus required placeholder="000000">
+  <button type="submit">Continue</button>
+</form>
+<div class="links"><a href="{{.Passkey.Next}}" class="pk-link">Cancel</a></div>
+{{end}}

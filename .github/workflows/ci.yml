@@ -58,6 +58,7 @@ jobs:
             go test ./internal/authz/ -run '^$' -fuzz "^$f\$" -fuzztime 30s
           done
           go test ./internal/server/ -run '^$' -fuzz '^FuzzParsePolicy$' -fuzztime 30s
+          go test ./internal/passkey/ -run '^$' -fuzz '^FuzzVerifyNeverAcceptsWithoutTheKey$' -fuzztime 30s
 
   e2e:
     # The whole chain: the production Caddy with deploy/auth.caddy, the image

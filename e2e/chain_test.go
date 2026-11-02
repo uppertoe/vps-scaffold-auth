@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"html"
 	"io"
@@ -30,6 +31,8 @@ import (
 	"time"
 
 	"github.com/pquerna/otp/totp"
+
+	"github.com/uppertoe/vps-scaffold-auth/internal/passkey/passkeytest"
 )
 
 const (
@@ -354,8 +357,14 @@ func TestChain(t *testing.T) {
 				t.Errorf("%s = %q, want %q", k, got, want)
 			}
 		}
-		if csp := r.header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") || strings.Contains(csp, "script-src") {
-			t.Errorf("Content-Security-Policy = %q", csp)
+		// Passkeys are on in this stack, so the sign-in page may run exactly one
+		// kind of script: its own, from this host. A page with no passkey
+		// ceremony runs none.
+		if csp := r.header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") || !strings.HasSuffix(csp, "; script-src 'self'") || strings.Count(csp, "script-src") != 1 {
+			t.Errorf("sign-in page Content-Security-Policy = %q", csp)
+		}
+		if csp := newBrowser(t).get(authHost+"/logout", nil).header.Get("Content-Security-Policy"); strings.Contains(csp, "script-src") {
+			t.Errorf("a page with no passkey ceremony allows scripts: %q", csp)
 		}
 	})
 
@@ -554,6 +563,99 @@ func TestChain(t *testing.T) {
 		r := newBrowser(t).get(authHost+"/verify", map[string]string{"X-Auth-Policy": "any", "X-Forwarded-Host": "app." + domain})
 		if r.header.Get("Remote-User") != "" || r.status == http.StatusOK {
 			t.Errorf("an anonymous /verify on the public host answered %d with Remote-User %q", r.status, r.header.Get("Remote-User"))
+		}
+	})
+
+	t.Run("a passkey made on a phone signs in on its own, only on the sign-in host, until it is removed", func(t *testing.T) {
+		phone := map[string]string{
+			"Origin": "null", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate",
+			"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+		}
+		const rpID = "auth." + domain
+		app := "https://app." + domain + "/"
+		dataAttr := func(page, name string) []byte {
+			m := regexp.MustCompile(`data-` + name + `="([^"]*)"`).FindStringSubmatch(page)
+			if m == nil {
+				t.Fatalf("page has no data-%s", name)
+			}
+			b, err := base64.RawURLEncoding.DecodeString(m[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}
+		enc := base64.RawURLEncoding.EncodeToString
+
+		// An email code on a phone ends on the offer, served through Caddy.
+		owner := newBrowser(t)
+		before := mailsTo(t, "carol@example.org")
+		codePage := owner.requestCode(owner.startAt(app), "carol@example.org", false)
+		code, _ := codeFor(t, "carol@example.org", before)
+		form := hidden(codePage.body)
+		form.Set("code", code)
+		offer := owner.do(http.MethodPost, authHost+"/verify-code", form, phone)
+		if offer.status != http.StatusOK || !strings.Contains(offer.body, "Sign in faster on this phone") {
+			t.Fatalf("no passkey offer on a phone: %d", offer.status)
+		}
+		js := owner.get(authHost+"/passkey.js", nil)
+		if js.status != http.StatusOK || !strings.HasPrefix(js.header.Get("Content-Type"), "text/javascript") || !strings.Contains(js.body, "navigator.credentials") {
+			t.Fatalf("passkey.js through Caddy: %d %q", js.status, js.header.Get("Content-Type"))
+		}
+
+		a := passkeytest.New()
+		reg := a.Register(rpID, authHost, dataAttr(offer.body, "challenge"), dataAttr(offer.body, "userid"))
+		added := owner.do(http.MethodPost, authHost+"/passkeys/register", url.Values{
+			"rd": {app}, "id": {enc(reg.CredentialID)}, "clientDataJSON": {enc(reg.ClientDataJSON)},
+			"authenticatorData": {enc(reg.AuthenticatorData)}, "publicKey": {enc(reg.PublicKey)}, "publicKeyAlg": {"-7"},
+		}, phone)
+		if added.status != http.StatusOK || !strings.Contains(added.body, "A passkey has been added to this phone.") {
+			t.Fatalf("add a passkey: %d: %.300s", added.status, added.body)
+		}
+		// The account holder is told by email.
+		notice := regexp.MustCompile(`to=carol@example\.org subject="A passkey has been added to your account"`)
+		for deadline := time.Now().Add(10 * time.Second); !notice.MatchString(compose(t, "logs", "--no-log-prefix", "auth")); time.Sleep(200 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("no email told the account holder that a passkey was added")
+			}
+		}
+
+		signIn := func(b *browser, rp string) reply {
+			login := b.startAt(app)
+			as := a.SignIn(rp, authHost, dataAttr(login.body, "challenge"))
+			return b.do(http.MethodPost, authHost+"/passkey/login", url.Values{
+				"rd": {hidden(login.body).Get("rd")}, "id": {enc(as.CredentialID)}, "clientDataJSON": {enc(as.ClientDataJSON)},
+				"authenticatorData": {enc(as.AuthenticatorData)}, "signature": {enc(as.Signature)}, "userHandle": {enc(as.UserHandle)},
+			}, phone)
+		}
+		// A key scoped to the whole domain, which a sibling app could ask for,
+		// is refused.
+		if r := signIn(newBrowser(t), domain); r.status == http.StatusFound {
+			t.Fatal("a ceremony for the whole domain signed in")
+		}
+		other := newBrowser(t)
+		if r := signIn(other, rpID); r.status != http.StatusFound || r.location() != app {
+			t.Fatalf("passkey sign-in: %d to %q: %.300s", r.status, r.location(), r.body)
+		}
+		if h := appSees(t, other.get(app, nil)); h.Get("Remote-User") != "carol@example.org" {
+			t.Fatalf("the app sees %q after a passkey sign-in", h.Get("Remote-User"))
+		}
+
+		// The owner removes the passkey; the session it started ends at its
+		// next renewal (SESSION_RENEW_AFTER is 3s here).
+		list := owner.get(authHost+"/passkeys", phone)
+		action := regexp.MustCompile(`action="(/passkeys/\d+/remove)"`).FindStringSubmatch(list.body)
+		if action == nil {
+			t.Fatalf("the passkeys page lists no passkey: %.300s", list.body)
+		}
+		if r := owner.do(http.MethodPost, authHost+action[1], hidden(list.body), phone); r.status != http.StatusFound {
+			t.Fatalf("remove the passkey: %d", r.status)
+		}
+		time.Sleep(4 * time.Second)
+		if r := other.get(app, nil); r.status != http.StatusFound || !strings.Contains(r.location(), "/login?") {
+			t.Fatalf("a removed passkey's session still reaches the app: %d", r.status)
+		}
+		if r := signIn(newBrowser(t), rpID); r.status == http.StatusFound {
+			t.Fatal("a removed passkey still signs in")
 		}
 	})
 

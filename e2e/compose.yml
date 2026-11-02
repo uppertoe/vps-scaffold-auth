@@ -53,6 +53,7 @@ services:
       - EMAIL_FROM=Sign-in <auth@e2e.test>
       - COOKIE_INSECURE=true
       - TOTP_ENABLED=true
+      - PASSKEYS_ENABLED=true
       - OTP_LENGTH=8
       # Short renewal so the test can watch a session renew.
       - SESSION_TTL=10m

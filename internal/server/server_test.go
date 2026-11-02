@@ -29,9 +29,10 @@ var reDigits = regexp.MustCompile(`\d{6}`)
 // Sends now happen on a detached goroutine (see sendCode), so code() blocks
 // briefly for a message to arrive rather than assuming one is already present.
 type captureSender struct {
-	mu   sync.Mutex
-	last *email.Message
-	sent chan email.Message
+	mu      sync.Mutex
+	last    *email.Message
+	sent    chan email.Message
+	notices []email.Message // messages with no code (the passkey notice)
 }
 
 func newCaptureSender() *captureSender {
@@ -40,6 +41,11 @@ func newCaptureSender() *captureSender {
 
 func (c *captureSender) Send(_ context.Context, msg email.Message) error {
 	c.mu.Lock()
+	if !reDigits.MatchString(msg.Text) {
+		c.notices = append(c.notices, msg)
+		c.mu.Unlock()
+		return nil
+	}
 	m := msg
 	c.last = &m
 	c.mu.Unlock()

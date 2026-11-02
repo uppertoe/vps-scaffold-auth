@@ -51,6 +51,11 @@ type adminData struct {
 	AppAccess   []appAccessView
 	// Admin-action audit page.
 	AdminEvents []adminEventView
+	// Access page, filtered to one person, with passkeys on.
+	PasskeysOn      bool
+	Passkeys        []passkeyRow
+	PasskeyRenew    string
+	PasskeysRemoved bool
 }
 
 // authEventView is one login-flow attempt row on the access-log page.

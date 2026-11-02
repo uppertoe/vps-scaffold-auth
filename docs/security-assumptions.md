@@ -71,6 +71,11 @@ has its own test, named in the table.
 | G14 | The gateway refuses to start on an unsafe or malformed setting. | `config.validate` | the `TestLoad…` tests, `TestMalformedBooleanRefused` |
 | G15 | One anonymous visitor cannot exhaust the gateway. | Body and header caps, upload checks, the logo cache | `TestPublicFormsCapBodies`, `TestDeclaredOversizeIsRefused`, `TestCheckRasterRefusesCraftedPNGs`, `TestCheckSVG` |
 | G16 | Mail is never sent unencrypted, and a notification webhook cannot reach the host or cloud metadata. | `email/smtp.go`, `breakglass.dialGuarded` | `TestWebhookRefusesNameResolvingToBlockedAddress`, `TestWebhookDoesNotFollowRedirects` |
+| G17 | A passkey signs in only through a ceremony on the sign-in host itself, with the person verified, answering a fresh single-use challenge, signed by the stored key. | `passkey.VerifyAssertion`, `challengeGuard`, `handlePasskeyLogin` | `TestSignInRefusals`, `TestRegistrationRefusals`, `FuzzVerifyNeverAcceptsWithoutTheKey`, `TestPasskeySignInRefusals`; e2e: *a passkey made on a phone signs in on its own…* (a whole-domain ceremony is refused) |
+| G18 | Adding a passkey needs a recent sign-in with an emailed code (a passkey sign-in never counts), the challenge minted for that account, and for an administrator the second factor, checked before any ceremony. | `freshSignIn`, `mayAddPasskeyNow`, `handlePasskeyConfirmCode`, `handlePasskeyRegister` | `TestAddingAPasskeyNeedsARecentSignIn`, `TestAPasskeySessionCannotAddAnotherPasskey`, `TestRegistrationChallengeIsBoundToItsAccount`, `TestAdminPasskeys`, `TestRegistrationPostsDoNotSpendAdminCodeAttempts` |
+| G19 | A passkey satisfies the admin second factor only if it was added, with TOTP on, by an administrator who had passed it; a passkey sign-in re-checks the current rules and never makes a guest. | `adminGrade` in `handlePasskeyRegister`, `handlePasskeyLogin` | `TestPasskeyFromBeforePromotionStillNeedsTOTP`, `TestPasskeyAddedWhileTOTPOffIsNotAdminGrade`, `TestAdminPasskeys`, `TestPasskeySignInRefusals` |
+| G20 | Once a passkey is removed, the sessions it started lose the admin pages and the passkeys page at once and the tools at their next renewal; passkey IDs are never reused. | `passkeyStillValid` in `requireAdmin`, `passkeySession` and `renewSessionWith`; `AUTOINCREMENT` | `TestRemovingAPasskeyEndsItsSessions`, `TestRemovedPasskeyLosesAdminPagesAtOnce`, `TestPasskeyIDsAreNeverReused`; e2e: *…until it is removed* |
+| G21 | Scripts run only on the pages that use a passkey, only from the gateway itself, and only when passkeys are on. | `render`, `passkeyPages` | `TestPasskeysOffByDefault`; e2e: *the sign-in pages carry their security headers through Caddy* |
 
 ## What this repository cannot prove
 
@@ -108,6 +113,22 @@ These risks are known. The design docs explain each one for the department.
 - A sibling app can overwrite the session cookie outright.
 - One administrator can act as another, because the person who issues a
   second-factor secret sees it once.
+- A passkey is as safe as the phone and the Apple or Google account that
+  syncs it. Registration asks for no attestation, so the gateway cannot tell
+  which device made a key; registration is only as strong as the session that
+  asks for it, which is why G18 requires a recent sign-in.
+- A stolen session cookie used within 15 minutes of an emailed-code sign-in
+  can register a software key, since attestation is "none" and nothing at
+  registration is signed. The account holder is emailed whenever a passkey
+  is added (`notifyPasskeyAdded`, `TestAddingAPasskeySendsANotice`), and the
+  key is listed on their passkeys page and the access page until removed.
+- The single-use guard on challenges is in memory: a restart forgets it, so a
+  captured sign-in post and its challenge cookie could be replayed within ten
+  minutes of a restart. Capturing them needs the TLS session.
+- Rolling back to a build without passkeys keeps passkey sessions renewing
+  whatever happens to their passkeys, and keeps an admin passkey session's
+  second-factor mark. If a passkey compromise coincides with a rollback,
+  rotate `SESSION_SECRET`.
 
 ## Reviewing a change
 

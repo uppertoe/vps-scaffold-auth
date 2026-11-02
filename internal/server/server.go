@@ -34,17 +34,19 @@ type Server struct {
 	wrongCodes   *ratelimit.Limiter // wrong email or TOTP codes, per client IP
 	breakLimiter *ratelimit.Limiter // per-IP limiter for break-glass scans
 	totpReplay   *totpReplay
-	access       *accessAudit
-	groupRecheck *groupRecheck // refusal-path group re-reads (group_recheck.go)
-	feeds        *feedSyncer   // groups filled from endpoints (group_feeds.go)
-	csp          string        // precomputed Content-Security-Policy (see cspPolicy)
-	pages        pages
-	adminPages   pages
-	emailTmpl    *texttemplate.Template
-	handler      http.Handler
-	now          func() time.Time
-	loc          *time.Location // timezone for rendering timestamps in the admin UI
-	branding     brandingCache  // public branding snapshot (see logo_cache.go)
+	// passkeyChallenges makes each passkey challenge single-use (passkeys.go).
+	passkeyChallenges *challengeGuard
+	access            *accessAudit
+	groupRecheck      *groupRecheck // refusal-path group re-reads (group_recheck.go)
+	feeds             *feedSyncer   // groups filled from endpoints (group_feeds.go)
+	csp               string        // precomputed Content-Security-Policy (see cspPolicy)
+	pages             pages
+	adminPages        pages
+	emailTmpl         *texttemplate.Template
+	handler           http.Handler
+	now               func() time.Time
+	loc               *time.Location // timezone for rendering timestamps in the admin UI
+	branding          brandingCache  // public branding snapshot (see logo_cache.go)
 }
 
 // New constructs a Server from its dependencies.
@@ -95,6 +97,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	// Anti-replay reads the clock through s.now so tests sharing a fake clock stay
 	// consistent with the rest of the server.
 	s.totpReplay = newTOTPReplay(func() time.Time { return s.now() })
+	s.passkeyChallenges = newChallengeGuard(func() time.Time { return s.now() })
 	if s.policy.OpenRegistration() {
 		log.Printf("authz: OPEN REGISTRATION enabled (ALLOWED_EMAIL_DOMAINS contains %q): any email verified by one-time code is admitted as a user. Private apps behind this auth must gate by group or domain, not a bare `import protected`. On a shared server prefer OPEN_REGISTRATION_HOSTS, which opens one app only.", authz.Wildcard)
 	}
@@ -145,6 +148,14 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /break/{token}", s.handleBreakGlass)
 	mux.HandleFunc("POST /break/activate", s.handleBreakGlassActivate)
 	mux.HandleFunc("GET /logo.img", s.handleLogo)
+	// Passkeys (passkeys.go). Each handler answers 404 unless PASSKEYS_ENABLED.
+	mux.HandleFunc("GET /passkey.js", s.handlePasskeyScript)
+	mux.HandleFunc("POST /passkey/login", s.handlePasskeyLogin)
+	mux.HandleFunc("GET /passkeys", s.handlePasskeys)
+	mux.HandleFunc("GET /passkeys/confirm", s.handlePasskeyConfirm)
+	mux.HandleFunc("POST /passkeys/confirm", s.handlePasskeyConfirmCode)
+	mux.HandleFunc("POST /passkeys/register", s.handlePasskeyRegister)
+	mux.HandleFunc("POST /passkeys/{id}/remove", s.handlePasskeyRemove)
 
 	// Admin subtree: one gate wraps the whole /admin/ tree. The inner mux
 	// matches on the full path, so no prefix stripping is needed.
