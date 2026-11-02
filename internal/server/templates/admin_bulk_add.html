@@ -19,6 +19,13 @@
     <p class="muted" style="margin:0">There are no new addresses to add.</p>
     {{end}}
   </div>
+  {{if .Refused}}
+  <div class="panel">
+    <h2 style="margin-top:0">Cannot be added ({{len .Refused}})</h2>
+    <p class="muted" style="margin:0 0 6px">The allow-list does not admit these addresses, and <code class="mono">{{.Group}}</code> is {{.RefusedReason}}, so the gateway does not add them: a person who can sign in only as a guest would otherwise be admitted in that role.</p>
+    <p class="muted" style="margin:0">{{range $i, $e := .Refused}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
+  </div>
+  {{end}}
   {{if .Already}}
   <div class="panel">
     <h2 style="margin-top:0">Already members ({{len .Already}})</h2>

@@ -1017,11 +1017,25 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
+	groups, err := s.store.ListGroups(r.Context())
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	names := make([]string, 0, len(groups))
+	for _, g := range groups {
+		names = append(names, g.Name)
+	}
+	refused := s.refusedTargets()
 	view := make([]codeView, 0, len(codes))
 	for _, c := range codes {
-		view = append(view, s.toCodeView(c))
+		v := s.toCodeView(c)
+		v.Refused = refused[normalizeGroupName(c.TargetGroup)]
+		view = append(view, v)
 	}
-	s.renderAdmin(w, r, http.StatusOK, "admin_codes", adminData{Title: "Break-glass codes", Codes: view})
+	s.renderAdmin(w, r, http.StatusOK, "admin_codes", adminData{
+		Title: "Break-glass codes", Codes: view, TargetOptions: s.targetOptions(names),
+	})
 }
 
 func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) {
@@ -1029,7 +1043,12 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	label := trimField(r.PostFormValue("label"))
-	group := normalizeGroupName(r.PostFormValue("group"))
+	// The form offers the known groups in a list and takes a new name in a
+	// second field; a typed name wins over the list.
+	group := normalizeGroupName(r.PostFormValue("group_new"))
+	if group == "" {
+		group = normalizeGroupName(r.PostFormValue("group"))
+	}
 	if label == "" || group == "" {
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title: "Missing fields", Message: "A label and a target group are both required.",
@@ -1047,6 +1066,17 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title:   "Invalid target group",
 			Message: "A target group may use only lowercase letters, numbers, hyphens, and underscores — no spaces, commas, or other punctuation.",
+		})
+		return
+	}
+	if reason, refused := s.targetRefusal(group); refused {
+		msg := "A break-glass code cannot target \"" + group + "\", because an application reads that group as one of its own roles and a card would admit its holder in that role."
+		if reason == refusedFeed {
+			msg = "A break-glass code cannot target \"" + group + "\", because its members come from a feed and a card would admit its holder alongside them."
+		}
+		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
+			Title:   "Group " + reason,
+			Message: msg + " Choose a group that an app's sign-in rule names only to grant entry.",
 		})
 		return
 	}

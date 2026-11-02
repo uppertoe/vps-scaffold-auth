@@ -2,7 +2,7 @@
 title: Break-glass cards
 summary: Emergency access by QR code, how each card is limited to the tools it names, how its use is recorded and announced, and the risk accepted with it.
 weight: 5
-lastmod: 2026-10-31
+lastmod: 2026-11-02
 ---
 
 ## What a card is for
@@ -28,6 +28,18 @@ rule lists that group. A tool with the plain "any signed-in person" rule
 refuses it, and so does a tool that requires a domain. An administrator
 therefore opens each location's card to exactly the tools it needs, and a
 separate group for each card gives the narrowest scope.
+
+Some groups are not doors into a tool but roles inside it: a tool may read a
+group as its own editor or administrator. A card cannot name such a group,
+because the card would admit whoever holds it in that role, and the gateway
+will not make a person outside the allow-list a member of one for the same
+reason. The gateway learns these groups from the routes themselves: a group a
+rule lists together with the administrators, and a group a tool declares it
+reads itself. An administrator can name more in the gateway's settings. A
+group whose members come from a feed cannot be a card's group either. On the
+codes page such groups are shown but cannot be chosen, with the reason beside
+them, and a card made before its group became a role is marked so that an
+administrator can replace it.
 
 A card can never grant the admin tier, because the three role names cannot be
 used as a card's group and the admin pages refuse break-glass sessions

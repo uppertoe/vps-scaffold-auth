@@ -115,8 +115,15 @@ type Config struct {
 	BreakGlassWebhookURL     string // optional notification webhook
 	BreakGlassWebhookTimeout time.Duration
 	BreakGlassNotifyEmails   []string // recipients of use-notifications
-	BreakGlassPDFHeader      string
-	BreakGlassPDFBody        string
+	// BreakGlassRefusedGroups (BREAKGLASS_REFUSED_GROUPS, space or comma
+	// separated) are groups an application reads as one of its own roles, so
+	// a break-glass card may not target them and an address outside the
+	// allow-list may not be made a member. The gateway also learns such
+	// groups from the route manifests; this list is for deployments without
+	// them, or for a role the manifests cannot see.
+	BreakGlassRefusedGroups []string
+	BreakGlassPDFHeader     string
+	BreakGlassPDFBody       string
 
 	// RateLimitPerEmail caps the codes sent to one address from one client IP,
 	// so a stranger elsewhere cannot spend the owner's own allowance.
@@ -210,6 +217,7 @@ func Load() (*Config, error) {
 	}
 	c.DisplayTimezone = strings.TrimSpace(getenv("DISPLAY_TIMEZONE", ""))
 	c.RouteGroupsFile = strings.TrimSpace(getenv("ROUTE_GROUPS_FILE", ""))
+	c.BreakGlassRefusedGroups = splitLowerList(getenv("BREAKGLASS_REFUSED_GROUPS", ""))
 	c.RouteAccessFile = strings.TrimSpace(getenv("ROUTE_ACCESS_FILE", ""))
 	c.DisplayLocation = time.UTC
 	if c.DisplayTimezone != "" {
@@ -536,6 +544,18 @@ func getrate(key string, def RateLimit) (RateLimit, error) {
 		return RateLimit{}, fmt.Errorf("%s: invalid window %q", key, parts[1])
 	}
 	return RateLimit{Count: count, Window: win}, nil
+}
+
+// splitLowerList splits on spaces or commas, trims and lowercases, and drops
+// empties; for lists of group names.
+func splitLowerList(s string) []string {
+	var out []string
+	for _, p := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
+		if p = strings.ToLower(strings.TrimSpace(p)); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func splitLowerCSV(s string) []string {
