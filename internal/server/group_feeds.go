@@ -24,7 +24,10 @@ import (
 // sync replaces the group's members with the feed's list, except that a
 // failed fetch, an empty list, or a change that would remove more than half
 // of the members keeps the current members and raises an alert; a held change
-// is applied only when an administrator accepts it. A scheduled fetch that
+// is applied only when an administrator accepts it, or, when
+// GROUP_FEED_AUTO_APPLY_AFTER is set, once the same change has been held that
+// long without an administrator keeping the current members. A registrar or
+// fellow changeover then applies itself, after the alert and the wait. A scheduled fetch that
 // cannot reach the feed, or gets an answer other than 200, is retried before
 // it counts as failed (feedRetries). Members of a feed-filled
 // group cannot be edited on the admin pages, since the next sync would undo
@@ -359,6 +362,8 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 	}
 	add, remove := diffMembers(current, emails)
 	hash := feedSetHash(emails)
+	// autoApplied marks a held change applied once its wait has passed.
+	autoApplied := false
 	skippedNote := ""
 	if skipped > 0 {
 		skippedNote = fmt.Sprintf(" %d entries were skipped because they were not plain email addresses or not on the allow-list.", skipped)
@@ -383,8 +388,31 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 			reasons = append(reasons, fmt.Sprintf("%d members would differ from the list last accepted", drift))
 		}
 		if len(reasons) > 0 {
-			st.PendingHash, st.PendingAddList, st.PendingRemoveList = hash, add, remove
-			return finish(store.GroupSyncHeld, "The change is held for checking because "+strings.Join(reasons, ", and ")+"."+skippedNote)
+			// The wait runs from when this exact change was first held. A
+			// different change starts it again, so an administrator always
+			// has the full wait to see the change that will be applied.
+			heldSince, kept := now, ""
+			if prev.Status == store.GroupSyncHeld && prev.PendingHash == hash {
+				if !prev.HeldSince.IsZero() {
+					heldSince = prev.HeldSince
+				}
+				kept = prev.KeptHash
+			}
+			wait := s.cfg.FeedAutoApplyAfter
+			if wait > 0 && kept != hash && !now.Before(heldSince.Add(wait)) {
+				autoApplied = true
+			} else {
+				st.PendingHash, st.PendingAddList, st.PendingRemoveList = hash, add, remove
+				st.HeldSince, st.KeptHash = heldSince, kept
+				detail := "The change is held for checking because " + strings.Join(reasons, ", and ") + "." + skippedNote
+				switch {
+				case wait > 0 && kept == hash:
+					detail += feedKeptNote
+				case wait > 0:
+					detail += " It will be applied automatically at " + s.stampMin(heldSince.Add(wait)) + " unless an administrator keeps the current members."
+				}
+				return finish(store.GroupSyncHeld, detail)
+			}
 		}
 	}
 	if len(add)+len(remove) > 0 {
@@ -399,6 +427,9 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 		if accept {
 			summary += " (accepted a held change)"
 		}
+		if autoApplied {
+			summary += fmt.Sprintf(" (applied automatically after being held for %s)", feedWait(s.cfg.FeedAutoApplyAfter))
+		}
 		events = append(events, store.AdminEvent{Actor: actor, Action: store.AdminActionGroupSync, Target: group, Detail: summary, CreatedAt: now})
 		if err := s.store.ApplyGroupSync(dbCtx, group, add, remove, events); err != nil {
 			return finish(store.GroupSyncFailed, "The gateway could not update members.")
@@ -410,13 +441,57 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 			s.alertApplied(group, add, remove)
 		}
 	}
-	// The accepted set moves only when an administrator accepts, or on a
-	// first fill small enough to apply without one.
-	if accept || len(prev.AcceptedList) == 0 {
+	// The accepted set moves when an administrator accepts, when a held
+	// change has waited out its time, or on a first fill small enough to
+	// apply without one.
+	if accept || autoApplied || len(prev.AcceptedList) == 0 {
 		st.AcceptedList = emails
 	}
-	return finish(store.GroupSyncOK, fmt.Sprintf("%d members; %d added, %d removed.%s", len(emails), len(add), len(remove), skippedNote))
+	detail := fmt.Sprintf("%d members; %d added, %d removed.%s", len(emails), len(add), len(remove), skippedNote)
+	if autoApplied {
+		detail = fmt.Sprintf("%d members; %d added, %d removed, applied automatically after the change had been held for %s.%s", len(emails), len(add), len(remove), feedWait(s.cfg.FeedAutoApplyAfter), skippedNote)
+	}
+	return finish(store.GroupSyncOK, detail)
 }
+
+// feedWait says a wait in words, for details and the audit.
+func feedWait(d time.Duration) string {
+	if d%time.Hour == 0 {
+		if h := int(d / time.Hour); h == 1 {
+			return "1 hour"
+		} else {
+			return fmt.Sprintf("%d hours", h)
+		}
+	}
+	return d.String()
+}
+
+// keepHeldChange records that an administrator wants the current members
+// kept: the held change shown (hash) is not applied automatically. It can
+// still be accepted, and a different change starts its own wait.
+func (s *Server) keepHeldChange(ctx context.Context, group, hash string) error {
+	s.feeds.mu.Lock()
+	defer s.feeds.mu.Unlock()
+	states, err := s.store.ListGroupSyncStates(ctx)
+	if err != nil {
+		return errStateUnreadable
+	}
+	st := states[group]
+	if st.Status != store.GroupSyncHeld {
+		return errNothingHeld
+	}
+	if hash == "" || hash != st.PendingHash {
+		return errChangeReplaced
+	}
+	st.KeptHash = hash
+	st.Detail = strings.SplitN(st.Detail, " It will be applied automatically at ", 2)[0]
+	if !strings.HasSuffix(st.Detail, feedKeptNote) {
+		st.Detail += feedKeptNote
+	}
+	return s.store.SetGroupSyncState(ctx, st)
+}
+
+const feedKeptNote = " An administrator has kept the current members, so the change will be applied only if it is accepted."
 
 func diffMembers(current, want []string) (add, remove []string) {
 	inWant := make(map[string]bool, len(want))

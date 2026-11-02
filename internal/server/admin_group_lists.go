@@ -207,6 +207,32 @@ func (s *Server) handleAdminRemoveInclude(w http.ResponseWriter, r *http.Request
 	s.redirectDone(w, r, "/admin/groups", "include-removed", group)
 }
 
+// handleAdminKeepMembers stops the held change shown from being applied
+// automatically (GROUP_FEED_AUTO_APPLY_AFTER). It changes no members.
+func (s *Server) handleAdminKeepMembers(w http.ResponseWriter, r *http.Request) {
+	if !s.checkCSRF(w, r) {
+		return
+	}
+	group := normalizeGroupName(r.PathValue("name"))
+	if _, ok := s.feedFor(group); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	switch err := s.keepHeldChange(ctx, group, r.PostFormValue("hash")); {
+	case errors.Is(err, errNothingHeld):
+		s.redirectDone(w, r, "/admin/groups", "sync-nothing-held", group)
+	case errors.Is(err, errChangeReplaced):
+		s.redirectDone(w, r, "/admin/groups", "keep-replaced", group)
+	case err != nil:
+		s.adminError(w, r)
+	default:
+		s.auditAdmin(r, store.AdminActionGroupKeep, group, "the held change will not be applied automatically")
+		s.redirectDone(w, r, "/admin/groups", "keep-ok", group)
+	}
+}
+
 // handleAdminSyncGroup fetches a feed-filled group's feed now. accept=1
 // applies a change that was held for being too large a shrink.
 func (s *Server) handleAdminSyncGroup(w http.ResponseWriter, r *http.Request) {

@@ -87,6 +87,7 @@ const (
 	AdminActionGroupIncludeAdd    = "group_include_add"
 	AdminActionGroupIncludeRemove = "group_include_remove"
 	AdminActionGroupSync          = "group_sync"
+	AdminActionGroupKeep          = "group_keep_members"
 	AdminActionTOTPGenerate       = "totp_generate"
 	AdminActionTOTPRemove         = "totp_remove"
 	AdminActionSettingsUpdate     = "settings_update"
@@ -112,6 +113,11 @@ type GroupSyncState struct {
 	// AcceptedList is the member set an administrator last accepted (or the
 	// first small fill); drift from it beyond a threshold is held.
 	AcceptedList []string
+	// HeldSince is when the held change (PendingHash) was first held; a
+	// different change restarts it. KeptHash is a held change an
+	// administrator chose not to have applied automatically.
+	HeldSince time.Time
+	KeptHash  string
 }
 
 // Feed sync outcomes.
