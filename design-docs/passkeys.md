@@ -30,10 +30,11 @@ was added and when it was last used, and a passkey can be removed there. If a
 person loses a phone, they remove its passkey and sign in with an emailed code
 until they add a new one.
 
-Adding a passkey needs a sign-in within the last fifteen minutes. A stolen
-session cookie therefore cannot be turned into a passkey that outlasts it. A
-person whose sign-in is older is asked to sign in again before a passkey is
-added.
+Adding a passkey needs a sign-in with an emailed code within the last fifteen
+minutes. A sign-in with a passkey does not count, so a thief holding one
+passkey cannot add a passkey of their own that would survive the stolen one
+being removed. A person whose sign-in is older is asked to sign in again
+before a passkey is added.
 
 A guest, a break-glass session and an address the allow-list no longer
 permits cannot add a passkey.
@@ -47,9 +48,10 @@ passkey therefore needs neither an emailed code nor an authenticator code.
 An administrator can add a passkey only after passing the second factor. The
 offer that follows an administrator's sign-in comes after the authenticator
 step. An administrator whose sign-in is no longer recent enters an
-authenticator code before the passkey is added. A passkey added before its
-owner became an administrator does not count as the second factor, and a
-sign-in with it continues to the authenticator step.
+authenticator code first, and the phone makes the passkey only once the code
+has been accepted. A passkey added before its owner became an administrator,
+or while the second factor was switched off, does not count as the second
+factor, and a sign-in with it continues to the authenticator step.
 
 An administrator who loses every passkey still signs in with an emailed code
 and an authenticator code, as before.
@@ -57,8 +59,9 @@ and an authenticator code, as before.
 ## Ending access
 
 A session started with a passkey names that passkey. When the passkey is
-removed, the session ends at its next renewal, which comes within the
-server's renewal interval, an hour unless the server sets another. A person removes their own passkeys on their passkeys
+removed, the session loses the admin pages and the passkeys page at once, and
+loses the tools at its next renewal, which comes within the server's renewal
+interval, an hour unless the server sets another. A person removes their own passkeys on their passkeys
 page. An administrator removes all of one person's passkeys on that person's
 access page, and the removal is recorded in the admin audit.
 
@@ -95,6 +98,12 @@ script makes no requests of its own: it puts the phone's answer into an
 ordinary form, and the gateway checks everything.
 
 ## Accepted
+
+The gateway asks the phone for no proof of what made a passkey, as is usual
+for passkeys. A program that has stolen a person's session cookie within
+fifteen minutes of their sign-in could therefore register a key of its own,
+which would then work until it is removed. The person's passkeys page and the
+access page would list it.
 
 A passkey is only as safe as the phone and the account it syncs to. Anyone who
 can unlock the person's phone, or who controls the Apple or Google account

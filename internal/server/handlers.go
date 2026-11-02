@@ -536,7 +536,10 @@ func (s *Server) publicOrigin() string {
 	if p := u.Port(); (u.Scheme == "https" && p == "443") || (u.Scheme == "http" && p == "80") {
 		host = strings.TrimSuffix(u.Host, ":"+p) // keeps an IPv6 literal's brackets
 	}
-	return u.Scheme + "://" + host
+	// Lower case, as a browser writes an origin: the passkey check compares
+	// origins exactly, so a capital in AUTH_PUBLIC_URL would otherwise refuse
+	// every passkey.
+	return strings.ToLower(u.Scheme + "://" + host)
 }
 
 func (s *Server) refuseCrossOrigin(w http.ResponseWriter) {

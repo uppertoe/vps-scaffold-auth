@@ -599,7 +599,10 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 		// passes through /verify, where renewal re-checks policy, so an admin
 		// removed from ADMIN_EMAILS would otherwise keep this door until the
 		// cookie expired. Re-check the current policy on every admin request.
-		admin := ok && isAdminSession(id) && s.policy.Role(id.Email) == authz.RoleAdmin
+		// A session started with a passkey that has since been removed is
+		// refused here at once, since the admin pages never pass through the
+		// renewal in /verify that would otherwise end it.
+		admin := ok && isAdminSession(id) && s.policy.Role(id.Email) == authz.RoleAdmin && s.passkeyStillValid(r, id)
 		// A first-factor-only admin session (minted before TOTP was enabled) is
 		// bounced to a fresh login so the TOTP step runs, rather than being
 		// honoured here. needsAdminStepUp is only evaluated once admin is true, so

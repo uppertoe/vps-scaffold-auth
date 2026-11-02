@@ -338,12 +338,16 @@ func TestAdminPasskeys(t *testing.T) {
 	if page := c2.get("/passkeys", phone).Body.String(); !strings.Contains(page, `href="/passkeys/confirm"`) {
 		t.Fatal("stale admin not sent to the code confirmation")
 	}
+	// The code is checked on its own, before any ceremony: a wrong code shows
+	// no challenge, so the phone is never asked to make a passkey.
 	confirm := c2.get("/passkeys/confirm", phone).Body.String()
-	b := passkeytest.New()
-	if rec := register(t, c2, b, confirm, url.Values{"code": {"000000"}}); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong admin code: %d", rec.Code)
-	} else {
-		confirm = rec.Body.String()
+	if strings.Contains(confirm, "data-challenge") || strings.Contains(confirm, "passkey.js") {
+		t.Fatal("the confirmation page runs a ceremony before the code is checked")
+	}
+	csrf := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(confirm)[1]
+	wrong := c2.postWith("/passkeys/confirm", url.Values{"csrf": {csrf}, "code": {"000000"}}, phone)
+	if wrong.Code != http.StatusUnauthorized || strings.Contains(wrong.Body.String(), "data-challenge") {
+		t.Fatalf("wrong admin code: %d", wrong.Code)
 	}
 	// totp.Validate reads the real clock, and the first code (at start) was
 	// used by the sign-in, so wait for the next step if they would collide.
@@ -351,8 +355,20 @@ func TestAdminPasskeys(t *testing.T) {
 	if first, _ := pqtotp.GenerateCode(secret, start); first == code {
 		code, _ = pqtotp.GenerateCode(secret, time.Now().Add(30*time.Second))
 	}
-	if rec := register(t, c2, b, confirm, url.Values{"code": {code}}); rec.Code != http.StatusOK {
-		t.Fatalf("right admin code: %d %s", rec.Code, rec.Body.String())
+	ready := c2.postWith("/passkeys/confirm", url.Values{"csrf": {csrf}, "code": {code}}, phone)
+	if ready.Code != http.StatusOK || !strings.Contains(ready.Body.String(), "data-challenge") {
+		t.Fatalf("right admin code did not lead to the ceremony: %d", ready.Code)
+	}
+	b := passkeytest.New()
+	if rec := register(t, c2, b, ready.Body.String(), nil); rec.Code != http.StatusOK {
+		t.Fatalf("register after the code: %d %s", rec.Code, rec.Body.String())
+	}
+	// Without the code, a stale administrator's ceremony is refused even with
+	// a challenge in hand: only a confirmed challenge stands in for a recent
+	// sign-in.
+	plain := c2.get("/passkeys", phone).Body.String()
+	if strings.Contains(plain, "data-challenge") {
+		t.Fatal("a stale administrator was offered a ceremony without the code")
 	}
 	if list, _ := srv.store.ListPasskeys(context.Background(), "admin@example.com"); len(list) != 2 {
 		t.Fatalf("admin passkeys: %d, want 2", len(list))
@@ -465,5 +481,39 @@ func TestRenewalKeepsAnOldSessionStale(t *testing.T) {
 	renewed := readSession(t, srv, c)
 	if srv.freshSignIn(renewed) {
 		t.Fatalf("a renewed old session reads as a recent sign-in (auth=%d)", renewed.Auth)
+	}
+}
+
+// A capital in AUTH_PUBLIC_URL does not break passkeys: browsers write the
+// origin in lower case.
+func TestPasskeysWithCapitalisedPublicURL(t *testing.T) {
+	srv, sender := pkServer(t, func(c *config.Config) { c.PublicURL = "https://Auth.Example.com" })
+	c := newClient(t, srv.Handler())
+	a := passkeytest.New()
+	if rec := register(t, c, a, phoneSignIn(t, c, sender, "user@example.com").Body.String(), nil); rec.Code != http.StatusOK {
+		t.Fatalf("register: %d", rec.Code)
+	}
+	if rec := signInWith(t, newClient(t, srv.Handler()), a); rec.Code != http.StatusFound {
+		t.Fatalf("sign-in: %d", rec.Code)
+	}
+}
+
+// The single-use guard forgets a challenge only after it has expired, and
+// refuses new challenges once full rather than growing without bound.
+func TestChallengeGuardExpiryAndCap(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	g := newChallengeGuard(func() time.Time { return now })
+	if !g.use([]byte("a")) || g.use([]byte("a")) {
+		t.Fatal("a challenge was not single-use")
+	}
+	now = now.Add(passkeyChallengeTTL - time.Second)
+	if g.use([]byte("a")) {
+		t.Fatal("a challenge was reusable before it expired")
+	}
+	for i := 0; len(g.seen) < challengeGuardMax; i++ {
+		g.seen[[32]byte{byte(i), byte(i >> 8), byte(i >> 16)}] = now.Add(time.Hour)
+	}
+	if g.use([]byte("b")) {
+		t.Fatal("a full guard accepted a new challenge")
 	}
 }

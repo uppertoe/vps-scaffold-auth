@@ -82,7 +82,7 @@ type pageData struct {
 }
 
 // passkeyPages are the pages that use /passkey.js when passkeys are on.
-var passkeyPages = map[string]bool{"login": true, "passkey_offer": true, "passkeys": true, "passkey_confirm": true}
+var passkeyPages = map[string]bool{"login": true, "passkey_offer": true, "passkeys": true}
 
 // pages holds each page template composed with the shared base layout.
 type pages map[string]*template.Template
@@ -139,7 +139,14 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 		// Every rendering of the sign-in page carries a fresh passkey challenge,
 		// so the phone can offer a saved passkey as soon as the page opens.
 		if s.cfg.PasskeysEnabled {
+			unknown := ""
+			if data.Passkey != nil {
+				unknown = data.Passkey.Unknown
+			}
 			data.Passkey = s.passkeyLoginOptions(w)
+			if data.Passkey != nil {
+				data.Passkey.Unknown = unknown
+			}
 		}
 	}
 	if s.cfg.PasskeysEnabled && passkeyPages[page] && data.Passkey != nil {

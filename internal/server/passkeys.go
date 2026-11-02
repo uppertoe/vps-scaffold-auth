@@ -78,8 +78,9 @@ type passkeyPage struct {
 	NeedEmail bool // the sign-in is not recent: sign in again first
 	ReauthURL string
 	Removed   bool
-	// The admin confirmation page posts the code with the new passkey.
-	Confirm bool
+	// Unknown is a credential ID the gateway does not hold, posted by the
+	// phone in a failed sign-in; passkey.js asks the phone to forget it.
+	Unknown string
 }
 
 type passkeyRow struct {
@@ -122,10 +123,17 @@ func isPhone(r *http.Request) bool {
 // a signed cookie, so without this a captured sign-in could be replayed until
 // the cookie expired.
 type challengeGuard struct {
-	mu   sync.Mutex
-	seen map[[32]byte]time.Time // challenge hash -> when it may be forgotten
-	now  func() time.Time
+	mu        sync.Mutex
+	seen      map[[32]byte]time.Time // challenge hash -> when it may be forgotten
+	nextSweep time.Time
+	now       func() time.Time
 }
+
+// challengeGuardMax bounds the guard. Each entry needs a signed challenge,
+// which anyone can mint, and a post charged to the per-network limit; past
+// the bound, passkey ceremonies are refused (fail closed) until entries
+// expire, and emailed codes keep working.
+const challengeGuardMax = 50000
 
 func newChallengeGuard(now func() time.Time) *challengeGuard {
 	return &challengeGuard{seen: make(map[[32]byte]time.Time), now: now}
@@ -137,12 +145,20 @@ func (g *challengeGuard) use(ch []byte) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
-	for k, until := range g.seen {
-		if now.After(until) {
-			delete(g.seen, k)
+	// Sweep at most once a minute, so a flood of entries does not make every
+	// ceremony scan the whole map.
+	if now.After(g.nextSweep) {
+		for k, until := range g.seen {
+			if now.After(until) {
+				delete(g.seen, k)
+			}
 		}
+		g.nextSweep = now.Add(time.Minute)
 	}
-	if _, ok := g.seen[key]; ok {
+	if until, ok := g.seen[key]; ok && !now.After(until) {
+		return false
+	}
+	if len(g.seen) >= challengeGuardMax {
 		return false
 	}
 	g.seen[key] = now.Add(passkeyChallengeTTL)
@@ -173,6 +189,12 @@ func (s *Server) passkeyLoginOptions(w http.ResponseWriter) *passkeyPage {
 // passkeyRegisterOptions mints the challenge for adding a passkey for email,
 // bound to that address.
 func (s *Server) passkeyRegisterOptions(w http.ResponseWriter, r *http.Request, email string) (*passkeyPage, error) {
+	return s.passkeyRegisterOptionsFor(w, r, email, false)
+}
+
+// passkeyRegisterOptionsFor mints the challenge; confirmed marks one minted
+// just after an administrator's authenticator code.
+func (s *Server) passkeyRegisterOptionsFor(w http.ResponseWriter, r *http.Request, email string, confirmed bool) (*passkeyPage, error) {
 	existing, err := s.store.ListPasskeys(r.Context(), email)
 	if err != nil {
 		return nil, err
@@ -199,7 +221,7 @@ func (s *Server) passkeyRegisterOptions(w http.ResponseWriter, r *http.Request, 
 	}
 	// The account ID rides in the challenge cookie, so the one stored is the
 	// one the server chose, not whatever the browser posts back.
-	if err := s.sessions.SetPasskeyChallenge(w, true, session.PasskeyChallenge{Challenge: ch, Email: email, Handle: handle}, passkeyChallengeTTL, s.now()); err != nil {
+	if err := s.sessions.SetPasskeyChallenge(w, true, session.PasskeyChallenge{Challenge: ch, Email: email, Handle: handle, Confirmed: confirmed}, passkeyChallengeTTL, s.now()); err != nil {
 		return nil, err
 	}
 	return &passkeyPage{
@@ -258,13 +280,22 @@ func (s *Server) passkeySession(r *http.Request) (*session.Identity, string, boo
 	if s.needsAdminStepUp(role == authz.RoleAdmin, id.TOTP) {
 		return nil, "", false
 	}
+	// A session started with a removed passkey manages nothing, whether or not
+	// it is due for renewal.
+	if !s.passkeyStillValid(r, id) {
+		return nil, "", false
+	}
 	return id, role, true
 }
 
 // freshSignIn reports whether the person signed in recently enough to add a
 // passkey without proving themselves again.
+//
+// Only an emailed code counts. A session started with a passkey cannot add
+// another: otherwise one stolen passkey could add the thief's own, which
+// would survive the owner removing the stolen one.
 func (s *Server) freshSignIn(id *session.Identity) bool {
-	return id.Auth != 0 && s.now().Unix()-id.Auth <= int64(passkeyFreshness.Seconds())
+	return id.PK == 0 && id.Auth != 0 && s.now().Unix()-id.Auth <= int64(passkeyFreshness.Seconds())
 }
 
 // mayAddPasskeyNow reports whether this session can add a passkey with no
@@ -306,6 +337,13 @@ func (s *Server) handlePasskeys(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, s.loginURL(s.passkeysURL()), http.StatusFound)
 		return
 	}
+	s.renderPasskeys(w, r, id, role, false)
+}
+
+// renderPasskeys draws the passkeys page. confirmed is set straight after an
+// administrator's authenticator code, which lets the page add a passkey
+// although the sign-in is not recent.
+func (s *Server) renderPasskeys(w http.ResponseWriter, r *http.Request, id *session.Identity, role string, confirmed bool) {
 	list, err := s.store.ListPasskeys(r.Context(), id.Email)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
@@ -319,8 +357,8 @@ func (s *Server) handlePasskeys(w http.ResponseWriter, r *http.Request) {
 	pp := &passkeyPage{Phone: isPhone(r)}
 	if pp.Phone {
 		switch {
-		case s.mayAddPasskeyNow(id, role):
-			reg, err := s.passkeyRegisterOptions(w, r, id.Email)
+		case confirmed || s.mayAddPasskeyNow(id, role):
+			reg, err := s.passkeyRegisterOptionsFor(w, r, id.Email, confirmed)
 			if err != nil {
 				s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 				return
@@ -346,23 +384,46 @@ func (s *Server) handlePasskeyConfirm(w http.ResponseWriter, r *http.Request) {
 	if s.passkeysOff(w, r) {
 		return
 	}
+	_, role, ok := s.passkeySession(r)
+	if !ok || role != authz.RoleAdmin || !s.cfg.TOTPEnabled {
+		http.Redirect(w, r, s.passkeysURL(), http.StatusFound)
+		return
+	}
+	s.renderPasskeyConfirm(w, r, http.StatusOK, "")
+}
+
+// The confirmation page takes the authenticator code on its own, before the
+// phone makes a passkey, so a wrong code never leaves the phone holding a
+// passkey the gateway has not stored. It runs no ceremony and needs no script.
+func (s *Server) renderPasskeyConfirm(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	csrf, err := s.sessions.EnsureCSRF(w, r, csrfTTL, s.now())
+	if err != nil {
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+		return
+	}
+	s.render(w, status, "passkey_confirm", pageData{Passkey: &passkeyPage{Next: s.passkeysURL()}, CSRF: csrf, Error: msg})
+}
+
+// handlePasskeyConfirmCode checks an administrator's authenticator code and,
+// if it is right, shows the passkeys page ready to add a passkey.
+func (s *Server) handlePasskeyConfirmCode(w http.ResponseWriter, r *http.Request) {
+	if s.passkeysOff(w, r) || !s.requireSameOrigin(w, r) {
+		return
+	}
 	id, role, ok := s.passkeySession(r)
 	if !ok || role != authz.RoleAdmin || !s.cfg.TOTPEnabled {
 		http.Redirect(w, r, s.passkeysURL(), http.StatusFound)
 		return
 	}
-	s.renderPasskeyConfirm(w, r, id.Email, http.StatusOK, "")
-}
-
-func (s *Server) renderPasskeyConfirm(w http.ResponseWriter, r *http.Request, email string, status int, msg string) {
-	pp, err := s.passkeyRegisterOptions(w, r, email)
-	if err != nil {
-		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+	if !s.sessions.VerifyCSRF(r, r.PostFormValue("csrf"), s.now()) {
+		s.renderPasskeyConfirm(w, r, http.StatusForbidden, "This page had expired. Please enter the code again.")
 		return
 	}
-	pp.Confirm = true
-	pp.Next = s.passkeysURL()
-	s.render(w, status, "passkey_confirm", pageData{Passkey: pp, Error: msg})
+	if msg, ok := s.checkAdminCode(r, id.Email, strings.TrimSpace(r.PostFormValue("code")), s.now()); !ok {
+		s.renderPasskeyConfirm(w, r, http.StatusUnauthorized, msg)
+		return
+	}
+	s.renderPasskeys(w, r, id, role, true)
 }
 
 // handlePasskeyRegister stores a new passkey. Its protection against a forged
@@ -388,17 +449,19 @@ func (s *Server) handlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessions.ClearPasskeyChallenge(w, true)
 
-	if !s.mayAddPasskeyNow(id, role) {
-		if role != authz.RoleAdmin || !s.cfg.TOTPEnabled {
-			// A staff member whose sign-in is no longer recent signs in again.
-			http.Redirect(w, r, s.loginURL(s.passkeysURL()), http.StatusFound)
-			return
-		}
-		if msg, ok := s.checkAdminCode(r, id.Email, strings.TrimSpace(r.PostFormValue("code")), now); !ok {
-			s.renderPasskeyConfirm(w, r, id.Email, http.StatusUnauthorized, msg)
-			return
-		}
+	// A recent sign-in, or for an administrator a challenge minted just after
+	// an authenticator code. Confirmed is honoured only for a current
+	// administrator: it is inside the signed cookie, so only this server sets
+	// it, and only after checkAdminCode.
+	if !s.mayAddPasskeyNow(id, role) && !(ch.Confirmed && role == authz.RoleAdmin) {
+		http.Redirect(w, r, s.loginURL(s.passkeysURL()), http.StatusFound)
+		return
 	}
+
+	// Admin grade means the administrator passed the second factor to add
+	// this passkey. With TOTP off there was no second factor to pass, so a
+	// passkey added then must not stand in for one once TOTP is turned on.
+	adminGrade := role == authz.RoleAdmin && s.cfg.TOTPEnabled && (ch.Confirmed || id.TOTP)
 
 	reg, ok := parseRegistration(r)
 	if !ok {
@@ -424,7 +487,7 @@ func (s *Server) handlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
 		UserHandle:   handle,
 		SignCount:    cred.SignCount,
 		Label:        passkeyLabel(cred.AAGUID, r),
-		AdminGrade:   role == authz.RoleAdmin,
+		AdminGrade:   adminGrade,
 		CreatedAt:    now,
 	}); err != nil {
 		log.Printf("store passkey for %s: %v", id.Email, err)
@@ -497,11 +560,12 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	rd := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
 	remember := r.PostFormValue("remember") == "1"
+	unknown := ""
 	failed := func(msg string) {
 		if msg == "" {
 			msg = "Your passkey could not be used to sign in. Please try again, or sign in with an email code."
 		}
-		s.render(w, http.StatusUnauthorized, "login", pageData{Error: msg, Redirect: rd, Remember: remember})
+		s.render(w, http.StatusUnauthorized, "login", pageData{Error: msg, Redirect: rd, Remember: remember, Passkey: &passkeyPage{Unknown: unknown}})
 	}
 	// Charged up front and refunded on success, as for email codes.
 	ip := clientIP(r)
@@ -531,6 +595,7 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		log.Printf("passkey sign-in with an unknown credential from %s", ip)
+		unknown = b64(credID)
 		failed("This passkey can no longer be used to sign in. Please sign in with an email code.")
 		return
 	}
@@ -570,7 +635,7 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 		s.startTOTP(w, r, pk.Email, role, rd, remember, pk.ID, now)
 		return
 	}
-	s.completeLogin(w, r, pk.Email, role, rd, remember, role == authz.RoleAdmin && pk.AdminGrade, pk.ID, now)
+	s.completeLogin(w, r, pk.Email, role, rd, remember, role == authz.RoleAdmin && s.cfg.TOTPEnabled && pk.AdminGrade, pk.ID, now)
 }
 
 // handlePasskeyRemove removes one of the signed-in person's passkeys.

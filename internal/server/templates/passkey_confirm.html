@@ -4,15 +4,12 @@
 <p class="lead">Before a passkey can be added to an admin account, enter the 6-digit code from your authenticator app.</p>
 <p class="sub">Once the passkey is added, you can sign in on this phone with the passkey alone, without an email code or an authenticator code.</p>
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
-<div class="err" id="passkey-error" hidden>Your passkey has not been added. Please try again.</div>
-{{with .Passkey}}
-<form id="passkey-register" method="post" action="/passkeys/register" data-confirm="1" autocomplete="off" {{template "pk-register-attrs" .}}>
-  {{template "pk-register-fields" $}}
+<form method="post" action="/passkeys/confirm" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label for="code">Authenticator code</label>
   <input id="code" name="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*"
          autocomplete="off" autofocus required placeholder="000000">
-  <div id="passkey-add-wrap" hidden><button type="submit">Continue</button></div>
+  <button type="submit">Continue</button>
 </form>
-<div class="links"><a href="{{.Next}}" class="pk-link">Cancel</a></div>
-{{end}}
+<div class="links"><a href="{{.Passkey.Next}}" class="pk-link">Cancel</a></div>
 {{end}}

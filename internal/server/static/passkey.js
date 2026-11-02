@@ -28,6 +28,13 @@
     }
     return /iPhone|Android.+Mobile/.test(navigator.userAgent);
   }
+  // Adding a passkey needs the response getters the gateway reads; a browser
+  // without them would make a passkey the gateway cannot store.
+  function canRegister() {
+    return supported() && !!window.AuthenticatorAttestationResponse &&
+      'getPublicKey' in AuthenticatorAttestationResponse.prototype &&
+      'getAuthenticatorData' in AuthenticatorAttestationResponse.prototype;
+  }
   function platformAvailable() {
     if (!supported() || !PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable) {
       return Promise.resolve(false);
@@ -37,12 +44,23 @@
   // A person who cancels the phone's check has not had an error.
   function failed(err) {
     if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) return;
+    // The phone already holds one of this person's passkeys (excludeCredentials).
+    if (err && err.name === 'InvalidStateError' && byId('passkey-exists')) {
+      show(byId('passkey-exists'));
+      return;
+    }
     show(byId('passkey-error'));
   }
 
   // --- Signing in ---
   var login = byId('passkey-login');
-  if (login && supported()) {
+  // A passkey the gateway does not hold: ask the phone to stop offering it.
+  if (login && login.dataset.unknown && window.PublicKeyCredential && PublicKeyCredential.signalUnknownCredential) {
+    PublicKeyCredential.signalUnknownCredential({ rpId: login.dataset.rpid, credentialId: login.dataset.unknown }).catch(function () {});
+  }
+  // Passkeys are for phones; a computer keeps the emailed code, and its
+  // browser is not asked to offer passkeys in the email field either.
+  if (login && supported() && isPhone()) {
     var pending = null;
     var get = function (mediation) {
       if (pending) pending.abort();
@@ -78,7 +96,7 @@
     };
     conditional();
     var button = byId('passkey-button');
-    if (button && isPhone()) {
+    if (button) {
       platformAvailable().then(function (ok) { if (ok) show(byId('passkey-button-wrap')); });
       button.addEventListener('click', function () {
         get().catch(function (err) { failed(err); conditional(); });
@@ -91,7 +109,7 @@
   if (reg) {
     var skip = byId('passkey-skip');
     platformAvailable().then(function (ok) {
-      if (ok) {
+      if (ok && canRegister()) {
         show(byId('passkey-add-wrap'));
       } else if (skip) {
         // Nothing to offer on this browser: go straight on.
@@ -132,16 +150,7 @@
         reg.submit();
       });
     };
-    if (reg.dataset.confirm === '1') {
-      // The administrator's code is posted with the new passkey.
-      reg.addEventListener('submit', function (e) {
-        e.preventDefault();
-        if (!reg.reportValidity()) return;
-        create().catch(failed);
-      });
-    } else {
-      var add = byId('passkey-add');
-      if (add) add.addEventListener('click', function () { create().catch(failed); });
-    }
+    var add = byId('passkey-add');
+    if (add) add.addEventListener('click', function () { create().catch(failed); });
   }
 })();

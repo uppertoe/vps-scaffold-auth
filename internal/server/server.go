@@ -153,6 +153,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /passkey/login", s.handlePasskeyLogin)
 	mux.HandleFunc("GET /passkeys", s.handlePasskeys)
 	mux.HandleFunc("GET /passkeys/confirm", s.handlePasskeyConfirm)
+	mux.HandleFunc("POST /passkeys/confirm", s.handlePasskeyConfirmCode)
 	mux.HandleFunc("POST /passkeys/register", s.handlePasskeyRegister)
 	mux.HandleFunc("POST /passkeys/{id}/remove", s.handlePasskeyRemove)
 

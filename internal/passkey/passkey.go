@@ -12,15 +12,19 @@
 //   - authenticatorData: the hash of the relying-party ID (the sign-in host),
 //     the user-present and user-verified flags, and the signature counter.
 //   - at registration, the public key the browser reports (SubjectPublicKeyInfo,
-//     from getPublicKey()) is checked against the key the authenticator wrote
-//     into authenticatorData, so the stored key is the authenticator's.
+//     from getPublicKey()) must match, byte for byte, the canonical COSE key
+//     in authenticatorData.
 //   - at sign-in, an ECDSA signature over authenticatorData followed by the
 //     SHA-256 of clientDataJSON.
 //
-// Registration carries no attestation, so this package learns nothing about
-// which device made a key. That is the normal choice for consumer passkeys and
-// it means registration is only as strong as the session that asks for it: the
-// server decides who may add a passkey (see the server package).
+// Registration carries no attestation, so nothing at registration is signed:
+// the flags (user verified, backed up), the provider ID and the key are what
+// the posting browser says they are. A script holding a software key can
+// therefore register one. That is the normal choice for consumer passkeys,
+// and it means registration is only as strong as the session that asks for
+// it: the server decides who may add a passkey (see the server package). At
+// sign-in the flags are signed by the registered key, so they are as
+// trustworthy as that key.
 package passkey
 
 import (
@@ -48,6 +52,7 @@ const (
 	flagBE = 1 << 3 // backup eligible (a synced passkey)
 	flagBS = 1 << 4 // backed up
 	flagAT = 1 << 6 // attested credential data included
+	flagED = 1 << 7 // extension data included
 )
 
 // maxCredentialID is WebAuthn's limit on a credential ID's length.
@@ -136,7 +141,13 @@ func (rp RelyingParty) VerifyRegistration(reg Registration, challenge []byte) (C
 	if err != nil {
 		return Credential{}, err
 	}
-	if !coseHasP256(coseKey, pub) {
+	want, err := coseP256(pub)
+	if err != nil {
+		return Credential{}, err
+	}
+	// The key must be exactly the canonical encoding of the reported key.
+	// Anything after it is allowed only when the extensions flag says so.
+	if !bytes.HasPrefix(coseKey, want) || (ad.flags&flagED == 0 && len(coseKey) != len(want)) {
 		return Credential{}, ErrKey
 	}
 	return Credential{
@@ -241,41 +252,28 @@ func parseP256(spki []byte) (*ecdsa.PublicKey, error) {
 	return pub, nil
 }
 
-// coseHasP256 reports whether a COSE_Key from authenticatorData is the EC2
-// P-256 ES256 key pub. Rather than carry a general CBOR decoder, it looks for
-// the exact encodings an authenticator writes for each required entry: kty 2,
-// alg -7, crv 1, and the 32-byte x and y coordinates. Each entry is a CBOR
-// negative or small integer key followed by its value, and the key is a map,
-// so the order does not matter. The two-byte entries could also occur by
-// chance inside a coordinate, so they are only a sanity check; matching both
-// full 32-byte coordinates is what binds the browser-reported
-// SubjectPublicKeyInfo to the authenticator's own key.
-func coseHasP256(cose []byte, pub *ecdsa.PublicKey) bool {
-	if len(cose) == 0 || cose[0] < 0xa5 || cose[0] > 0xb7 { // a CBOR map of 5 to 23 entries
-		return false
-	}
+// coseP256 is the COSE_Key an authenticator writes for the ES256 key pub, in
+// the canonical CBOR that CTAP2 requires and Apple's and Google's passkeys
+// emit: a five-entry map of kty 2 (EC2), alg -7 (ES256), crv 1 (P-256), and
+// the 32-byte x and y coordinates, in that order. Rather than carry a general
+// CBOR decoder, registration requires the authenticator data to hold exactly
+// these 77 bytes, which binds the browser-reported SubjectPublicKeyInfo to the
+// key the authenticator wrote. With attestation "none" nothing signs either,
+// so this is a consistency check on the person's own browser, not proof of
+// which device holds the key.
+func coseP256(pub *ecdsa.PublicKey) ([]byte, error) {
 	ecdh, err := pub.ECDH()
 	if err != nil {
-		return false
+		return nil, ErrKey
 	}
 	raw := ecdh.Bytes() // 0x04 || x || y
 	if len(raw) != 65 {
-		return false
+		return nil, ErrKey
 	}
-	x, y := raw[1:33], raw[33:65]
-	need := [][]byte{
-		{0x01, 0x02},                           // 1 (kty): 2 (EC2)
-		{0x03, 0x26},                           // 3 (alg): -7 (ES256)
-		{0x20, 0x01},                           // -1 (crv): 1 (P-256)
-		append([]byte{0x21, 0x58, 0x20}, x...), // -2 (x): 32-byte string
-		append([]byte{0x22, 0x58, 0x20}, y...), // -3 (y): 32-byte string
-	}
-	for _, n := range need {
-		if !bytes.Contains(cose, n) {
-			return false
-		}
-	}
-	return true
+	out := []byte{0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20}
+	out = append(out, raw[1:33]...)
+	out = append(out, 0x22, 0x58, 0x20)
+	return append(out, raw[33:65]...), nil
 }
 
 // AAGUIDString formats a provider identifier the usual way.

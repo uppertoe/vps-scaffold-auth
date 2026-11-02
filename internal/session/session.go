@@ -159,6 +159,10 @@ type PasskeyChallenge struct {
 	Email     string `json:"e,omitempty"`
 	// Handle is the account ID given to the phone when adding a passkey.
 	Handle []byte `json:"h,omitempty"`
+	// Confirmed records that an administrator entered an authenticator code
+	// before this challenge was minted, so the passkey may be added although
+	// the sign-in is not recent.
+	Confirmed bool `json:"ok,omitempty"`
 }
 
 // State is the short-lived login progress carried between /request and
@@ -455,17 +459,26 @@ func (m *Manager) ClearOffer(w http.ResponseWriter) {
 
 // --- Passkey challenges (host-only cookies) ---
 
-func pkCookie(register bool) (name, typ string) {
+// pkCookie names the challenge cookie. Under TLS the name carries the
+// __Host- prefix, which a browser accepts only from this host, with Secure, no
+// Domain and Path=/: a sibling app on the domain cannot plant a challenge of
+// its own to spoil a person's passkey sign-in. Without TLS (development) the
+// prefix would make the browser refuse the cookie, so it is left off.
+func (m *Manager) pkCookie(register bool) (name, typ string) {
+	name, typ = PasskeyLoginCookie, typPKLogin
 	if register {
-		return PasskeyRegCookie, typPKReg
+		name, typ = PasskeyRegCookie, typPKReg
 	}
-	return PasskeyLoginCookie, typPKLogin
+	if m.secure {
+		name = "__Host-" + name
+	}
+	return name, typ
 }
 
 // SetPasskeyChallenge writes the challenge for a passkey sign-in or, when
 // register is true, for adding a passkey.
 func (m *Manager) SetPasskeyChallenge(w http.ResponseWriter, register bool, c PasskeyChallenge, ttl time.Duration, now time.Time) error {
-	name, typ := pkCookie(register)
+	name, typ := m.pkCookie(register)
 	tok, err := m.encode(typ, c, now.Add(ttl))
 	if err != nil {
 		return err
@@ -476,7 +489,7 @@ func (m *Manager) SetPasskeyChallenge(w http.ResponseWriter, register bool, c Pa
 
 // ReadPasskeyChallenge returns the challenge cookie if present and valid.
 func (m *Manager) ReadPasskeyChallenge(r *http.Request, register bool, now time.Time) (*PasskeyChallenge, bool) {
-	name, typ := pkCookie(register)
+	name, typ := m.pkCookie(register)
 	c, err := r.Cookie(name)
 	if err != nil {
 		return nil, false
@@ -490,7 +503,7 @@ func (m *Manager) ReadPasskeyChallenge(r *http.Request, register bool, now time.
 
 // ClearPasskeyChallenge expires the challenge cookie.
 func (m *Manager) ClearPasskeyChallenge(w http.ResponseWriter, register bool) {
-	name, _ := pkCookie(register)
+	name, _ := m.pkCookie(register)
 	m.clearCookie(w, name, "")
 }
 

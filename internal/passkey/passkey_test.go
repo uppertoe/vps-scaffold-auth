@@ -104,6 +104,13 @@ func TestRegistrationRefusals(t *testing.T) {
 		"no attested credential data": {func(r *passkey.Registration, ch []byte) {
 			r.AuthenticatorData = r.AuthenticatorData[:37]
 		}, passkey.ErrAuthData},
+		"browser's key appended after the authenticator's": {func(r *passkey.Registration, ch []byte) {
+			r.AuthenticatorData = append(r.AuthenticatorData, other.COSEKey()...)
+			r.PublicKey = other.SPKI()
+		}, passkey.ErrKey},
+		"trailing bytes without the extensions flag": {func(r *passkey.Registration, ch []byte) {
+			r.AuthenticatorData = append(r.AuthenticatorData, 0x00)
+		}, passkey.ErrKey},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ch := challenge()

@@ -20,7 +20,7 @@
   <button type="submit">Send code</button>
 </form>
 {{with .Passkey}}
-<form id="passkey-login" method="post" action="/passkey/login" hidden data-challenge="{{.Challenge}}" data-rpid="{{.RPID}}">
+<form id="passkey-login" method="post" action="/passkey/login" hidden data-challenge="{{.Challenge}}" data-rpid="{{.RPID}}"{{if .Unknown}} data-unknown="{{.Unknown}}"{{end}}>
   <input type="hidden" name="rd" value="{{$.Redirect}}">
   <input type="hidden" name="remember">
   <input type="hidden" name="id">

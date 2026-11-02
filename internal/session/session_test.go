@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -208,5 +209,41 @@ func TestDuplicateSessionCookieIsRefused(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: mint("real@example.com")})
 	if _, ok := m.ReadSession(req, now); !ok {
 		t.Fatal("a single genuine session cookie no longer reads")
+	}
+}
+
+// Under TLS the passkey challenge cookies carry the __Host- prefix, so a
+// sibling host cannot plant one; without TLS they cannot (browsers refuse the
+// prefix without Secure).
+func TestPasskeyChallengeCookiesAreHostPrefixedUnderTLS(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	for _, secure := range []bool{true, false} {
+		m := NewManager([]byte("0123456789abcdef0123456789abcdef"), time.Hour, 30*time.Minute, ".example.com", secure)
+		for _, reg := range []bool{false, true} {
+			rec := httptest.NewRecorder()
+			if err := m.SetPasskeyChallenge(rec, reg, PasskeyChallenge{Challenge: []byte("c")}, time.Minute, now); err != nil {
+				t.Fatal(err)
+			}
+			ck := rec.Result().Cookies()[0]
+			if got := strings.HasPrefix(ck.Name, "__Host-"); got != secure {
+				t.Errorf("secure=%v register=%v: cookie %q", secure, reg, ck.Name)
+			}
+			if ck.Domain != "" || ck.Path != "/" || ck.Secure != secure {
+				t.Errorf("cookie %q: domain %q path %q secure %v", ck.Name, ck.Domain, ck.Path, ck.Secure)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.AddCookie(&http.Cookie{Name: ck.Name, Value: ck.Value})
+			if _, ok := m.ReadPasskeyChallenge(req, reg, now); !ok {
+				t.Errorf("challenge %q does not read back", ck.Name)
+			}
+			if secure {
+				// The unprefixed name, which a sibling could set, is ignored.
+				req := httptest.NewRequest(http.MethodGet, "/", nil)
+				req.AddCookie(&http.Cookie{Name: strings.TrimPrefix(ck.Name, "__Host-"), Value: ck.Value})
+				if _, ok := m.ReadPasskeyChallenge(req, reg, now); ok {
+					t.Errorf("an unprefixed %q was read under TLS", ck.Name)
+				}
+			}
+		}
 	}
 }

@@ -24,6 +24,7 @@
 {{end}}
 {{if .CanAdd}}
 <div class="err" id="passkey-error" hidden>Your passkey has not been added. Please try again.</div>
+<div class="ok" id="passkey-exists" hidden>This phone already has a passkey for your account.</div>
 <form id="passkey-register" method="post" action="/passkeys/register" {{template "pk-register-attrs" .}}>
   {{template "pk-register-fields" $}}
   <div id="passkey-add-wrap" hidden><button type="button" id="passkey-add">Add a passkey on this phone</button></div>
