@@ -225,6 +225,8 @@ func (s *Server) handleAdminKeepMembers(w http.ResponseWriter, r *http.Request) 
 		s.redirectDone(w, r, "/admin/groups", "sync-nothing-held", group)
 	case errors.Is(err, errChangeReplaced):
 		s.redirectDone(w, r, "/admin/groups", "keep-replaced", group)
+	case errors.Is(err, errAlreadyApplied):
+		s.redirectDone(w, r, "/admin/groups", "keep-applied", group)
 	case err != nil:
 		s.adminError(w, r)
 	default:

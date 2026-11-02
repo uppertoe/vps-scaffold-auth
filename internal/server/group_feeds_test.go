@@ -838,7 +838,7 @@ func TestHeldChangeAppliesAfterTheWait(t *testing.T) {
 	body.Store(changeover)
 	ctx := context.Background()
 	st, _ := srv.syncFeed(ctx, "rch-consultants", "group feed", "")
-	if st.Status != store.GroupSyncHeld || !strings.Contains(st.Detail, "It will be applied automatically at") {
+	if st.Status != store.GroupSyncHeld || !strings.Contains(st.Detail, "It will be applied automatically at the first sync after") {
 		t.Fatalf("changeover = %+v, want held with the time it applies", st)
 	}
 	waitFor(t, func() bool { return attention(cap.all()) == 1 })
@@ -931,7 +931,7 @@ func TestKeepCurrentMembers(t *testing.T) {
 	}
 	*clock = start.Add(30 * time.Hour)
 	st, _ := srv.syncFeed(ctx, "rch-consultants", "group feed", "")
-	if st.Status != store.GroupSyncHeld || !strings.Contains(st.Detail, "kept the current members") || strings.Contains(st.Detail, "applied automatically at") {
+	if st.Status != store.GroupSyncHeld || !strings.Contains(st.Detail, "kept the current members") || strings.Contains(st.Detail, "applied automatically at the first sync after") {
 		t.Fatalf("a kept change = %+v", st)
 	}
 	if got := members(t, srv); got[0] != "m00@example.com" {
@@ -1006,5 +1006,156 @@ func TestGroupsPageOffersKeepCurrentMembers(t *testing.T) {
 	events, _ := srv.store.ListAdminEvents(context.Background(), 10, 0)
 	if len(events) == 0 || events[0].Action != store.AdminActionGroupKeep || events[0].Actor != "admin@example.com" {
 		t.Errorf("keep not audited: %+v", events)
+	}
+}
+
+// Found in review: switching the wait on applied a change that had sat held
+// for days (the only way to refuse one before Keep existed) at the next
+// round, with no alert giving a time. Its wait now starts when the setting
+// is switched on, with an alert that gives the time.
+func TestSwitchingTheWaitOnStartsOldHoldsAfresh(t *testing.T) {
+	srv, body, cap, clock := autoServer(t)
+	srv.cfg.FeedAutoApplyAfter = 0
+	start := *clock
+	ctx := context.Background()
+	body.Store(emailsJSON(20, "x"))
+	srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+	if !syncState(t, srv).HeldSince.IsZero() {
+		t.Fatal("a hold time was stored with no wait set")
+	}
+	waitFor(t, func() bool { return attention(cap.all()) == 1 })
+	srv.cfg.FeedAutoApplyAfter = 12 * time.Hour
+	*clock = start.Add(3 * 24 * time.Hour)
+	if st, _ := srv.syncFeed(ctx, "rch-consultants", "group feed", ""); st.Status != store.GroupSyncHeld {
+		t.Fatalf("an old hold applied when the wait was switched on: %+v", st)
+	}
+	waitFor(t, func() bool { return attention(cap.all()) == 2 })
+	if a := cap.all()[1]; !strings.Contains(a.body, "applied automatically at the first sync after") {
+		t.Errorf("the alert for the new wait gives no time: %s", a.body)
+	}
+	*clock = start.Add(3*24*time.Hour + 12*time.Hour)
+	if st, _ := srv.syncFeed(ctx, "rch-consultants", "group feed", ""); st.Status != store.GroupSyncOK {
+		t.Fatalf("not applied after its own wait: %+v", st)
+	}
+}
+
+// Found in review: the roster could undo Keep by returning something else
+// for one round and then the same change again. A kept change stays kept.
+func TestTheRosterCannotUndoKeep(t *testing.T) {
+	srv, body, _, clock := autoServer(t)
+	start := *clock
+	ctx := context.Background()
+	body.Store(emailsJSON(20, "x"))
+	srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+	if err := srv.keepHeldChange(ctx, "rch-consultants", heldHash(t, srv)); err != nil {
+		t.Fatal(err)
+	}
+	for i, b := range []string{`[]`, emailsJSON(20, "m"), "500", emailsJSON(20, "x")} {
+		*clock = start.Add(time.Duration(i+1) * time.Hour)
+		body.Store(b)
+		srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+	}
+	*clock = start.Add(30 * time.Hour)
+	if st, _ := srv.syncFeed(ctx, "rch-consultants", "group feed", ""); st.Status != store.GroupSyncHeld || !strings.Contains(st.Detail, "kept the current members") {
+		t.Fatalf("a kept change came back and applied: %+v", st)
+	}
+	if got := members(t, srv); got[0] != "m00@example.com" {
+		t.Fatalf("members: %v", got)
+	}
+}
+
+// Found in review: after a stale Accept the new hold had no time, no Keep
+// button and no alert with a time, yet applied after the wait.
+func TestAHoldAfterAStaleAcceptAnnouncesItsTime(t *testing.T) {
+	srv, body, cap, _ := autoServer(t)
+	ctx := context.Background()
+	body.Store(emailsJSON(20, "x"))
+	srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+	shown := heldHash(t, srv)
+	waitFor(t, func() bool { return attention(cap.all()) == 1 })
+	body.Store(emailsJSON(20, "y"))
+	st, _ := srv.syncFeed(ctx, "rch-consultants", "admin@example.com", shown)
+	if st.Status != store.GroupSyncHeld || syncState(t, srv).HeldSince.IsZero() || !strings.Contains(st.Detail, "applied automatically at the first sync after") {
+		t.Fatalf("the new hold has no wait on show: %+v", st)
+	}
+	states, _ := srv.store.ListGroupSyncStates(ctx)
+	if fv := srv.feedViewFor("rch-consultants", states); fv.AutoAt == "" {
+		t.Error("no Keep button for the new hold")
+	}
+	waitFor(t, func() bool { return attention(cap.all()) == 2 })
+	if !strings.Contains(cap.all()[1].body, "applied automatically at the first sync after") {
+		t.Error("the new hold's alert gives no time")
+	}
+}
+
+// Found in review: there was no ceiling on what the wait applies. A change
+// that would more than halve or more than double the group is never applied
+// on its own; a changeover that swaps people at the same size is.
+func TestAChangeTooLargeWaitsForAnAdministrator(t *testing.T) {
+	for name, feed := range map[string]string{
+		"one address left":    `["only@example.com"]`,
+		"less than half left": emailsJSON(9, "m"),
+		"more than doubled":   emailsJSON(51, "z"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, body, _, clock := autoServer(t)
+			start := *clock
+			ctx := context.Background()
+			body.Store(feed)
+			st, _ := srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+			if st.Status != store.GroupSyncHeld || !strings.Contains(st.Detail, "applied only if an administrator accepts it") {
+				t.Fatalf("held = %+v", st)
+			}
+			states, _ := srv.store.ListGroupSyncStates(ctx)
+			if fv := srv.feedViewFor("rch-consultants", states); fv.AutoAt != "" {
+				t.Error("a Keep button for a change that never applies on its own")
+			}
+			*clock = start.Add(30 * 24 * time.Hour)
+			srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+			if got := members(t, srv); len(got) != 20 || got[0] != "m00@example.com" {
+				t.Fatalf("a change too large applied on its own: %d members", len(got))
+			}
+		})
+	}
+}
+
+// Found in review: pressing Keep on a page left open past the automatic
+// apply said nothing had been applied. It now says the change was applied.
+func TestKeepAfterTheApplySaysSo(t *testing.T) {
+	srv, body, _, clock := autoServer(t)
+	start := *clock
+	ctx := context.Background()
+	body.Store(emailsJSON(20, "x"))
+	srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+	shown := heldHash(t, srv)
+	*clock = start.Add(12 * time.Hour)
+	srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+	if err := srv.keepHeldChange(ctx, "rch-consultants", shown); !errors.Is(err, errAlreadyApplied) {
+		t.Fatalf("keep after the apply: %v", err)
+	}
+}
+
+// An automatic apply is the gateway's, in the audit, even when an
+// administrator's Sync now happens to be the round that applies it; and its
+// alert says the change had been held.
+func TestAnAutomaticApplyIsAttributedToTheFeed(t *testing.T) {
+	srv, body, cap, clock := autoServer(t)
+	start := *clock
+	ctx := context.Background()
+	body.Store(emailsJSON(20, "x"))
+	srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+	*clock = start.Add(12 * time.Hour)
+	srv.syncFeed(ctx, "rch-consultants", "admin@example.com", "") // Sync now
+	events, _ := srv.store.ListAdminEvents(ctx, 100, 0)
+	for _, e := range events {
+		if e.Action == store.AdminActionGroupAddMember && strings.HasPrefix(e.Detail, "x") && e.Actor != "group feed" {
+			t.Fatalf("automatic apply attributed to %q", e.Actor)
+		}
+	}
+	waitFor(t, func() bool { return applied(cap.all()) == 1 })
+	for _, a := range cap.all() {
+		if a.title == "Gateway group feed changed members" && !strings.Contains(a.body, "had been held for 12 hours") {
+			t.Errorf("the applied alert does not say the change had been held: %s", a.body)
+		}
 	}
 }

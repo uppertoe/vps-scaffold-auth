@@ -38,6 +38,7 @@ var adminWarnings = map[string]string{
 	"sync-held":         "The members have been kept as they were, because the change is large enough to need checking. The group lists what would change; accept it there if it is right.",
 	"sync-nothing-held": "No change is held for this group, so nothing has been applied.",
 	"keep-ok":           "The current members have been kept. The held change will be applied only if it is accepted.",
+	"keep-applied":      "The change had already been applied automatically before the page was submitted. The group shows the members it applied.",
 	"keep-replaced":     "The feed has changed since the page was shown, so the new change has its own wait. The group lists it.",
 	"sync-replaced":     "The change you accepted has been replaced by a newer one, so nothing has been applied. The group lists the new change.",
 	"sync-unreadable":   "The gateway could not read the group's last sync, so the feed has not been fetched. The members have been kept as they were.",

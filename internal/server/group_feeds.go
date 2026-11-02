@@ -263,6 +263,7 @@ var (
 	errNothingHeld     = errors.New("no change is held for this group")
 	errChangeReplaced  = errors.New("the held change has been replaced by a newer one")
 	errStateUnreadable = errors.New("the last sync state could not be read")
+	errAlreadyApplied  = errors.New("the held change has already been applied")
 )
 
 // feedHoldAdds and feedHoldRemoves are the largest change applied without an
@@ -317,7 +318,10 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 	if accept && acceptHash != prev.PendingHash {
 		return prev, errChangeReplaced
 	}
-	st := store.GroupSyncState{Group: group, LastAttempt: now, AcceptedList: prev.AcceptedList}
+	// KeptHash survives every write, whatever the feed does in between, so
+	// a change an administrator kept cannot be revived by the roster
+	// returning something else for a round and then the same change again.
+	st := store.GroupSyncState{Group: group, LastAttempt: now, AcceptedList: prev.AcceptedList, KeptHash: prev.KeptHash}
 	finish := func(status, detail string) (store.GroupSyncState, error) {
 		st.Status, st.Detail = status, detail
 		if status == store.GroupSyncOK {
@@ -327,9 +331,11 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 			return st, err
 		}
 		s.feeds.clearRetry(group)
-		// Alert on entering a problem state, and again when a held change
-		// is replaced by a different one.
-		if status != store.GroupSyncOK && (prev.Status != status || (status == store.GroupSyncHeld && prev.PendingHash != st.PendingHash)) {
+		// Alert on entering a problem state, again when a held change is
+		// replaced, and whenever a wait to apply automatically starts or
+		// restarts, so every alert that matters gives the time it applies.
+		if status != store.GroupSyncOK && (prev.Status != status ||
+			(status == store.GroupSyncHeld && (prev.PendingHash != st.PendingHash || !st.HeldSince.Equal(prev.HeldSince)))) {
 			s.alertFeed(group, detail)
 		}
 		return st, nil
@@ -371,7 +377,12 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 
 	if accept && hash != prev.PendingHash {
 		st.PendingHash, st.PendingAddList, st.PendingRemoveList = hash, add, remove
-		return finish(store.GroupSyncHeld, "The feed has changed since the change was held, so the new change is held for checking instead.")
+		tooLarge := feedTooLarge(len(current), len(emails), len(prev.AcceptedList))
+		if s.cfg.FeedAutoApplyAfter > 0 && !tooLarge {
+			st.HeldSince = now
+		}
+		return finish(store.GroupSyncHeld, "The feed has changed since the change was held, so the new change is held for checking instead."+
+			s.autoNote(now, hash, st.KeptHash, tooLarge))
 	}
 	if !accept && len(add)+len(remove) > 0 {
 		var reasons []string
@@ -391,29 +402,36 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 			// The wait runs from when this exact change was first held. A
 			// different change starts it again, so an administrator always
 			// has the full wait to see the change that will be applied.
-			heldSince, kept := now, ""
-			if prev.Status == store.GroupSyncHeld && prev.PendingHash == hash {
-				if !prev.HeldSince.IsZero() {
+			// The hold time is kept only while a wait is set, so switching
+			// the wait on starts every existing hold's wait afresh, with an
+			// alert giving its time, rather than applying old holds at once.
+			wait := s.cfg.FeedAutoApplyAfter
+			heldSince := time.Time{}
+			if wait > 0 {
+				heldSince = now
+				if prev.Status == store.GroupSyncHeld && prev.PendingHash == hash && !prev.HeldSince.IsZero() {
 					heldSince = prev.HeldSince
 				}
-				kept = prev.KeptHash
 			}
-			wait := s.cfg.FeedAutoApplyAfter
-			if wait > 0 && kept != hash && !now.Before(heldSince.Add(wait)) {
+			tooLarge := feedTooLarge(len(current), len(emails), len(prev.AcceptedList))
+			if tooLarge {
+				// Never applied on its own, so no wait runs and the page
+				// offers no Keep button: only Accept applies it.
+				heldSince = time.Time{}
+			}
+			if wait > 0 && !tooLarge && st.KeptHash != hash && !heldSince.Equal(now) && !now.Before(heldSince.Add(wait)) {
 				autoApplied = true
 			} else {
 				st.PendingHash, st.PendingAddList, st.PendingRemoveList = hash, add, remove
-				st.HeldSince, st.KeptHash = heldSince, kept
+				st.HeldSince = heldSince
 				detail := "The change is held for checking because " + strings.Join(reasons, ", and ") + "." + skippedNote
-				switch {
-				case wait > 0 && kept == hash:
-					detail += feedKeptNote
-				case wait > 0:
-					detail += " It will be applied automatically at " + s.stampMin(heldSince.Add(wait)) + " unless an administrator keeps the current members."
-				}
-				return finish(store.GroupSyncHeld, detail)
+				return finish(store.GroupSyncHeld, detail+s.autoNote(heldSince, hash, st.KeptHash, tooLarge))
 			}
 		}
+	}
+	if autoApplied {
+		// The wait applied it, not whoever pressed Sync now after it ran out.
+		actor = "group feed"
 	}
 	if len(add)+len(remove) > 0 {
 		events := make([]store.AdminEvent, 0, len(add)+len(remove)+1)
@@ -438,7 +456,11 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 		// A change applied without an administrator is announced, so the
 		// roster cannot widen access unseen.
 		if !accept {
-			s.alertApplied(group, add, remove)
+			note := ""
+			if autoApplied {
+				note = fmt.Sprintf("The change had been held for %s and no administrator kept the current members. ", feedWait(s.cfg.FeedAutoApplyAfter))
+			}
+			s.alertApplied(group, note, add, remove)
 		}
 	}
 	// The accepted set moves when an administrator accepts, when a held
@@ -447,11 +469,37 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 	if accept || autoApplied || len(prev.AcceptedList) == 0 {
 		st.AcceptedList = emails
 	}
+	if accept || autoApplied {
+		st.KeptHash = ""
+	}
 	detail := fmt.Sprintf("%d members; %d added, %d removed.%s", len(emails), len(add), len(remove), skippedNote)
 	if autoApplied {
 		detail = fmt.Sprintf("%d members; %d added, %d removed, applied automatically after the change had been held for %s.%s", len(emails), len(add), len(remove), feedWait(s.cfg.FeedAutoApplyAfter), skippedNote)
 	}
 	return finish(store.GroupSyncOK, detail)
+}
+
+// feedTooLarge reports a change no wait should apply on its own: one that
+// would leave the group less than half its current size or less than half
+// the list last accepted, or more than double its current size (beyond a
+// small allowance for a group just starting). A changeover swaps people and
+// keeps the size; a roster returning one address, or the whole allow-list,
+// does not, and such a change waits for an administrator however long.
+func feedTooLarge(current, next, accepted int) bool {
+	return next*2 < current || next*2 < accepted || next > 2*current+10
+}
+
+// autoNote is what a held change's detail says about applying on its own.
+func (s *Server) autoNote(heldSince time.Time, hash, kept string, tooLarge bool) string {
+	switch {
+	case s.cfg.FeedAutoApplyAfter == 0:
+		return ""
+	case kept == hash:
+		return feedKeptNote
+	case tooLarge:
+		return " The change would more than halve or more than double the group, so it will be applied only if an administrator accepts it."
+	}
+	return " It will be applied automatically at the first sync after " + s.stampMin(heldSince.Add(s.cfg.FeedAutoApplyAfter)) + " unless an administrator keeps the current members."
 }
 
 // feedWait says a wait in words, for details and the audit.
@@ -478,13 +526,16 @@ func (s *Server) keepHeldChange(ctx context.Context, group, hash string) error {
 	}
 	st := states[group]
 	if st.Status != store.GroupSyncHeld {
+		if hash != "" && hash == feedSetHash(st.AcceptedList) {
+			return errAlreadyApplied
+		}
 		return errNothingHeld
 	}
 	if hash == "" || hash != st.PendingHash {
 		return errChangeReplaced
 	}
 	st.KeptHash = hash
-	st.Detail = strings.SplitN(st.Detail, " It will be applied automatically at ", 2)[0]
+	st.Detail = strings.SplitN(st.Detail, " It will be applied automatically at the first sync after ", 2)[0]
 	if !strings.HasSuffix(st.Detail, feedKeptNote) {
 		st.Detail += feedKeptNote
 	}
@@ -612,7 +663,7 @@ func (s *Server) alertFeed(group, detail string) {
 const alertListLimit = 10
 
 // alertApplied announces a change the gateway applied on its own.
-func (s *Server) alertApplied(group string, add, remove []string) {
+func (s *Server) alertApplied(group, note string, add, remove []string) {
 	var parts []string
 	if len(add) > 0 {
 		parts = append(parts, "These members have been added: "+alertList(add)+".")
@@ -621,7 +672,7 @@ func (s *Server) alertApplied(group string, add, remove []string) {
 		parts = append(parts, "These members have been removed: "+alertList(remove)+".")
 	}
 	s.postFeedAlert("Gateway group feed changed members",
-		fmt.Sprintf("The gateway has updated %s from its feed. %s", group, strings.Join(parts, " ")))
+		fmt.Sprintf("The gateway has updated %s from its feed. %s%s", group, note, strings.Join(parts, " ")))
 }
 
 func alertList(emails []string) string {
