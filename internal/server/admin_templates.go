@@ -210,6 +210,15 @@ type feedView struct {
 	PendingAdd    []string
 	PendingRemove []string
 	PendingHash   string
+	// Retry is set while a failed fetch is waiting to be tried again.
+	Retry *feedRetryView
+}
+
+// feedRetryView is a waiting retry, for the Groups page.
+type feedRetryView struct {
+	At, Next string
+	Reason   string
+	Left     int // attempts still to come
 }
 
 // overviewView is the admin home page: counts, and the items that need an

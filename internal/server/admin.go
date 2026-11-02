@@ -902,6 +902,9 @@ func (s *Server) feedViewFor(group string, syncStates map[string]store.GroupSync
 			fv.PendingHash = st.PendingHash
 		}
 	}
+	if r, ok := s.feeds.retryFor(group); ok {
+		fv.Retry = &feedRetryView{At: s.stampMin(r.At), Next: s.stampMin(r.Next), Reason: r.Reason, Left: 1 + feedRetries - r.Attempt}
+	}
 	return fv
 }
 
