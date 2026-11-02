@@ -36,6 +36,7 @@
       {{if .Label}}<span class="meta">{{.Label}}</span>{{end}}
       {{if .Includes}}<span class="meta">includes {{range $i, $g := .Includes}}{{if $i}}, {{end}}{{$g}}{{end}}</span>{{end}}
       {{if .Feed}}<span class="pill ok">synced</span>{{end}}
+      {{if .NotYetCreated}}<span class="pill guest" title="The feed has not answered yet. The group is created by its first successful sync.">not created yet</span>{{end}}
       {{if .Unused}}<span class="pill guest" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">not used by any app</span>{{end}}
       <span class="count">{{len .Members}} {{if eq (len .Members) 1}}member{{else}}members{{end}}</span>
     </summary>
