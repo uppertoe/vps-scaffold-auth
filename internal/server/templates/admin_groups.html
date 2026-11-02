@@ -48,6 +48,7 @@
         {{if eq .Status "ok"}}<p class="muted" style="margin:0">Last synced {{.LastSuccess}}. {{.Detail}}</p>
         {{else if .Status}}<div class="notice warn" style="margin:6px 0">The last sync, at {{.LastAttempt}}, did not change the members. {{.Detail}}{{if .LastSuccess}} The last successful sync was {{.LastSuccess}}.{{end}}</div>
         {{else}}<p class="muted" style="margin:0">The feed has not been fetched yet.</p>{{end}}
+        {{with .Retry}}<p class="muted" style="margin:4px 0 0">The fetch at {{.At}} did not succeed. {{.Reason}} The gateway will try again at {{.Next}}, {{if eq .Left 1}}once more{{else}}{{.Left}} more times{{end}}, before it records the failure.</p>{{end}}
         <form class="inlineform" method="post" action="/admin/groups/{{$group}}/sync">
           <input type="hidden" name="csrf" value="{{$csrf}}">
           <button type="submit" class="ghost">Sync now</button>
