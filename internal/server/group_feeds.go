@@ -377,7 +377,7 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 
 	if accept && hash != prev.PendingHash {
 		st.PendingHash, st.PendingAddList, st.PendingRemoveList = hash, add, remove
-		tooLarge := feedTooLarge(len(current), len(emails), len(prev.AcceptedList))
+		tooLarge := !feed.Rotating && feedTooLarge(len(current), len(emails), len(prev.AcceptedList))
 		if s.cfg.FeedAutoApplyAfter > 0 && !tooLarge {
 			st.HeldSince = now
 		}
@@ -413,7 +413,7 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 					heldSince = prev.HeldSince
 				}
 			}
-			tooLarge := feedTooLarge(len(current), len(emails), len(prev.AcceptedList))
+			tooLarge := !feed.Rotating && feedTooLarge(len(current), len(emails), len(prev.AcceptedList))
 			if tooLarge {
 				// Never applied on its own, so no wait runs and the page
 				// offers no Keep button: only Accept applies it.
@@ -484,7 +484,10 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 // the list last accepted, or more than double its current size (beyond a
 // small allowance for a group just starting). A changeover swaps people and
 // keeps the size; a roster returning one address, or the whole allow-list,
-// does not, and such a change waits for an administrator however long.
+// does not, and such a change waits for an administrator however long. A
+// rotating group (GROUP_FEED_ROTATING), whose whole membership is replaced at
+// a changeover, has no ceiling: the wait and Keep current members are its
+// safeguards, with the refusal of an empty list.
 func feedTooLarge(current, next, accepted int) bool {
 	return next*2 < current || next*2 < accepted || next > 2*current+10
 }

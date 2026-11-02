@@ -1159,3 +1159,43 @@ func TestAnAutomaticApplyIsAttributedToTheFeed(t *testing.T) {
 		}
 	}
 }
+
+// A rotating group (registrars, fellows) is replaced wholesale at a
+// changeover, sometimes through a list that briefly holds a few people or
+// both batches. With no ceiling, each such change applies after the wait.
+func TestARotatingGroupChangesOverAfterTheWait(t *testing.T) {
+	for name, feed := range map[string]string{
+		"old batch gone first": `["stays@example.com"]`,
+		"both batches listed":  strings.Replace(emailsJSON(20, "m"), "]", ","+strings.Trim(emailsJSON(40, "n"), "[]")+"]", 1),
+		"clean swap":           emailsJSON(20, "n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, body, _, clock := autoServer(t)
+			f := srv.feeds.feeds["rch-consultants"]
+			f.Rotating = true
+			srv.feeds.feeds["rch-consultants"] = f
+			start := *clock
+			ctx := context.Background()
+			body.Store(feed)
+			if st, _ := srv.syncFeed(ctx, "rch-consultants", "group feed", ""); st.Status != store.GroupSyncHeld || !strings.Contains(st.Detail, "applied automatically at the first sync after") {
+				t.Fatalf("held = %+v", st)
+			}
+			*clock = start.Add(12 * time.Hour)
+			if st, _ := srv.syncFeed(ctx, "rch-consultants", "group feed", ""); st.Status != store.GroupSyncOK {
+				t.Fatalf("not applied after the wait: %+v", st)
+			}
+			if got := members(t, srv); !reflect.DeepEqual(got, mustList(t, feed)) {
+				t.Fatalf("members: %v", got)
+			}
+		})
+	}
+	// An empty list is still refused.
+	srv, body, _, _ := autoServer(t)
+	f := srv.feeds.feeds["rch-consultants"]
+	f.Rotating = true
+	srv.feeds.feeds["rch-consultants"] = f
+	body.Store(`[]`)
+	if st, _ := srv.syncFeed(context.Background(), "rch-consultants", "group feed", ""); st.Status != store.GroupSyncEmpty {
+		t.Fatalf("an empty list for a rotating group = %+v", st)
+	}
+}

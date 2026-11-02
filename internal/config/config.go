@@ -322,6 +322,17 @@ func Load() (*Config, error) {
 	if c.GroupFeeds, err = parseGroupFeeds(getenv("GROUP_FEEDS", ""), c.CookieInsecure); err != nil {
 		return nil, err
 	}
+	for _, g := range strings.FieldsFunc(getenv("GROUP_FEED_ROTATING", ""), func(r rune) bool { return r == ',' || r == ' ' }) {
+		found := false
+		for i := range c.GroupFeeds {
+			if c.GroupFeeds[i].Group == g {
+				c.GroupFeeds[i].Rotating, found = true, true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("GROUP_FEED_ROTATING names %q, which is not a group in GROUP_FEEDS", g)
+		}
+	}
 	c.FeedInterval = DefaultFeedInterval
 	if v := strings.TrimSpace(getenv("GROUP_FEED_INTERVAL", "")); v != "" {
 		if c.FeedInterval, err = time.ParseDuration(v); err != nil || c.FeedInterval < 5*time.Minute {

@@ -65,3 +65,24 @@ func TestFeedAutoApplyAfter(t *testing.T) {
 		}
 	}
 }
+
+func TestFeedRotating(t *testing.T) {
+	setValid(t)
+	t.Setenv("GROUP_FEED_TOKEN_RCH_REGISTRARS", "0123456789abcdef0123")
+	t.Setenv("GROUP_FEED_TOKEN_RCH_CONSULTANTS", "0123456789abcdef0123")
+	t.Setenv("GROUP_FEEDS", "rch-registrars=https://roster.example.org/r.json rch-consultants=https://roster.example.org/c.json")
+	t.Setenv("GROUP_FEED_ROTATING", "rch-registrars")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range c.GroupFeeds {
+		if f.Rotating != (f.Group == "rch-registrars") {
+			t.Errorf("%s rotating = %v", f.Group, f.Rotating)
+		}
+	}
+	t.Setenv("GROUP_FEED_ROTATING", "rch-registrars rch-fellows")
+	if _, err := Load(); err == nil {
+		t.Error("a rotating group with no feed was accepted")
+	}
+}

@@ -17,6 +17,12 @@ type GroupFeed struct {
 	Group string // the gateway group the feed fills
 	URL   string // https endpoint returning a JSON list of addresses
 	Token string // bearer token sent to the endpoint
+	// Rotating marks a group whose members are replaced wholesale at a
+	// changeover (registrars, fellows), named in GROUP_FEED_ROTATING. A
+	// change that empties most of the group, or doubles it, is normal there,
+	// so it waits out GROUP_FEED_AUTO_APPLY_AFTER like any other held change
+	// instead of waiting for an administrator.
+	Rotating bool
 }
 
 var feedGroupName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
