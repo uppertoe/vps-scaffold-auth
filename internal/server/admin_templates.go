@@ -35,6 +35,8 @@ type adminData struct {
 	RouteGroupsOn bool
 	Codes         []codeView
 	Code          codeView
+	// Codes page: the groups offered as a card's target, refused ones marked.
+	TargetOptions []targetOptionView
 	Events        []store.BreakGlassEvent
 	Branding      brandingView
 	Settings      settingsView
@@ -266,6 +268,11 @@ type codeView struct {
 	Active      bool
 	Created     string
 	Updated     string
+	// Refused is the short reason the target group may no longer be a card's
+	// target (see refusedTargets); empty for a group that may. A card made
+	// before the group became an application role keeps working, so the list
+	// marks it for the administrator to reconsider.
+	Refused string
 }
 
 func (s *Server) toCodeView(c store.BreakGlassCode) codeView {

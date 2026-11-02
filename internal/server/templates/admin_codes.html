@@ -22,6 +22,12 @@
     only the apps whose policy lists that group. Give each emergency entry point its own group so
     one card can't open more than you intend.
   </p>
+  <p class="muted">
+    A card cannot target a group that an application reads as one of its own roles, such as an
+    editing or administrator role, because the card would admit its holder in that role. Those
+    groups are listed below but cannot be chosen. A group filled from a feed cannot be a target
+    either.
+  </p>
 </div>
 
 <div class="panel">
@@ -33,7 +39,7 @@
     {{range .Codes}}
       <tr>
         <td><a href="/admin/break/{{.ID}}">{{.Label}}</a>{{if .Note}}<div class="muted">{{.Note}}</div>{{end}}</td>
-        <td><code class="mono">{{.TargetGroup}}</code></td>
+        <td><code class="mono">{{.TargetGroup}}</code>{{if .Refused}} <span class="pill guest" title="This group is now {{.Refused}}. The card still works; consider revoking it and issuing one for a group that only grants entry.">{{.Refused}}</span>{{end}}</td>
         <td>{{if .Active}}<span class="pill ok">active</span>{{else}}<span class="pill off">revoked</span>{{end}}</td>
         <td class="muted">{{.Created}}</td>
         <td><a href="/admin/break/{{.ID}}">Manage →</a></td>
@@ -57,9 +63,21 @@
       </div>
       <div>
         <label for="group">Target group</label>
+        {{if .TargetOptions}}
+        <select id="group" name="group">
+          <option value="">Choose a group</option>
+          {{range .TargetOptions}}<option value="{{.Name}}"{{if .Reason}} disabled{{end}}>{{.Name}}{{if .Reason}} ({{.Reason}}){{end}}</option>{{end}}
+        </select>
+        {{else}}
         <input id="group" name="group" type="text" required placeholder="code_stroke_break_glass">
+        {{end}}
       </div>
     </div>
+    {{if .TargetOptions}}
+    <label for="group_new">Or a new group name</label>
+    <input id="group_new" name="group_new" type="text" pattern="[a-z0-9_\-]+" placeholder="code_stroke_break_glass">
+    <p class="muted" style="margin:4px 0 0">A group marked as used as an application role, or as filled from a feed, cannot be a card's target.</p>
+    {{end}}
     <label for="note">Note (optional)</label>
     <input id="note" name="note" type="text" placeholder="Laminated card by the workstation">
     <label for="redirect">Redirect after access (optional)</label>

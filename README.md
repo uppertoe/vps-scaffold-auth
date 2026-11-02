@@ -132,7 +132,11 @@ In a scaffold server repo, the route renderer also writes
 `.generated/caddy/route-groups.tsv`, which lists every group a guard requires.
 Mount it read-only and set `ROUTE_GROUPS_FILE`, and the admin Groups page lists
 the groups the routes use, offers to create any that are missing, and marks
-groups that no route uses, so group names are picked rather than typed.
+groups that no route uses, so group names are picked rather than typed. The
+renderer also writes `route-access.tsv` (`ROUTE_ACCESS_FILE`), each site's
+access rules, which the overview shows as a "who can reach what" table and
+which tells the gateway which groups are an app's own roles (see
+[Break-the-glass QR codes](#break-the-glass-qr-codes)).
 
 Guard summary (domains/groups are space- or comma-separated; `<up>` is the app's
 upstream `host:port`, always the **last** argument):
@@ -340,6 +344,7 @@ for the annotated list. Key ones:
 | `EMAIL_BACKEND` | `smtp` \| `resend` \| `log` (`log` is dev-only; refused unless `COOKIE_INSECURE=true`) |
 | `TOTP_ENABLED` | Optional admin TOTP (off by default) |
 | `DISPLAY_TIMEZONE` | IANA name for admin-UI timestamps (e.g. `Australia/Melbourne`); empty = UTC |
+| `BREAKGLASS_REFUSED_GROUPS` | Groups an app reads as its own role (space or comma separated); never a card's target or a guest's membership. Added to those learned from the route manifests |
 | `DOMAIN` | The server domain (provided by the server `.env`) |
 
 ### Admin two-factor (optional)
@@ -450,6 +455,22 @@ still reach an app during a time-critical event (e.g. a code stroke).
   opt in, not the whole estate. Use a dedicated group per card for the tightest
   scope. A holder who reaches a non-covered app gets the "no access" page (with
   a sign-in link), and their card keeps working everywhere it *is* allowed.
+- **A card cannot target a group an app reads as one of its own roles.** Some
+  groups are not doors into an app but roles inside it: air-db reads
+  `airdb_admin` as its editor, Planka maps `planka-admins` to its own
+  administrator. A card targeting such a group would admit a stranger as an
+  application administrator, so the gateway refuses it, and likewise refuses
+  to add an address outside the allow-list (a guest) as a member of one. It
+  learns these groups from three places: every group a site's rule lists
+  together with `admin` (`import protected_groups "airdb_admin admin"`, read
+  from `ROUTE_ACCESS_FILE`, which keeps each rule's group set whole); every
+  group an app declares it reads itself (a `# scaffold-groups:` marker, which
+  the renderer flags `declared` in `ROUTE_GROUPS_FILE`); and
+  `BREAKGLASS_REFUSED_GROUPS`, for deployments without the manifests. A group
+  filled from a feed is refused as well. The codes page shows these groups as
+  not selectable, with the reason beside them, and marks any existing card
+  whose group has since become a role. A group a rule lists *without* `admin`,
+  such as `planka-users`, stays an ordinary target unless marked.
 - **Scanning is an instant grant**: the token in the QR URL is the only
   credential, by design. The scan is rate-limited, **logged synchronously**
   (label, client IP, user-agent, time), and **notifies admins** out of band via
@@ -520,7 +541,10 @@ still reach an app during a time-critical event (e.g. a code stroke).
   exposure tightly, and are never accepted by the admin UI.
 - Break-glass target groups and DB group names cannot be the reserved roles
   `admin`/`user`/`guest`, so emergency access can never silently confer the admin
-  tier, and no group can make a member of staff look like a guest.
+  tier, and no group can make a member of staff look like a guest. A card cannot
+  target a group an app reads as its own role either, and a guest cannot be made
+  a member of one (see [Break-the-glass QR codes](#break-the-glass-qr-codes)), so
+  emergency access never confers an application's administrator role.
 
 ## Local development
 

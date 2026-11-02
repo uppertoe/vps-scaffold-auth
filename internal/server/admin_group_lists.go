@@ -23,9 +23,16 @@ type bulkPlan struct {
 	Already []string     // already members
 	Invalid []string     // not an email address
 	TooMany bool         // the paste was cut at maxBulkAddresses
+	// Refused are addresses the allow-list does not admit, which the gateway
+	// will not add to this group because the group is an application role
+	// (RefusedReason says which kind); see refusedTargets.
+	Refused       []string
+	RefusedReason string
 }
 
-func (p *bulkPlan) total() int { return len(p.Add) + len(p.Already) + len(p.Invalid) }
+func (p *bulkPlan) total() int {
+	return len(p.Add) + len(p.Already) + len(p.Invalid) + len(p.Refused)
+}
 
 var (
 	bulkSplit = regexp.MustCompile(`[\s,;]+`)
@@ -53,6 +60,7 @@ func (s *Server) groupExists(r *http.Request, name string) bool {
 // from mail clients.
 func (s *Server) planBulkAdd(r *http.Request, group, raw string) (*bulkPlan, error) {
 	plan := &bulkPlan{Group: group}
+	plan.RefusedReason, _ = s.targetRefusal(group)
 	members, err := s.store.ListGroupMembers(r.Context(), group)
 	if err != nil {
 		return nil, err
@@ -85,6 +93,8 @@ func (s *Server) planBulkAdd(r *http.Request, group, raw string) (*bulkPlan, err
 			plan.Invalid = append(plan.Invalid, tok)
 		case existing[e]:
 			plan.Already = append(plan.Already, e)
+		case plan.RefusedReason != "" && !s.policy.Allowed(e):
+			plan.Refused = append(plan.Refused, e)
 		default:
 			plan.Add = append(plan.Add, memberView{Email: e, Permitted: s.policy.Allowed(e)})
 		}
@@ -106,14 +116,28 @@ func (s *Server) handleAdminConfirmMembers(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
+	// The confirmation page never offers a stranger for a group that is an
+	// application role, but the check is made here as well, so a request made
+	// without the page cannot add one.
+	_, refused := s.targetRefusal(group)
 	var emails []string
+	dropped := false
 	for _, e := range r.PostForm["add"] {
 		e = normalizeEmail(e)
-		if plainAddress(e) && len(emails) < maxBulkAddresses {
-			emails = append(emails, e)
+		if !plainAddress(e) || len(emails) >= maxBulkAddresses {
+			continue
 		}
+		if refused && !s.policy.Allowed(e) {
+			dropped = true
+			continue
+		}
+		emails = append(emails, e)
 	}
 	if len(emails) == 0 {
+		if dropped {
+			s.redirectDone(w, r, "/admin/groups", "members-refused", group)
+			return
+		}
 		s.redirectDone(w, r, "/admin/groups", "members-none", group)
 		return
 	}

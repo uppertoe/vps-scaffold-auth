@@ -314,3 +314,19 @@ func TestMalformedBooleanRefused(t *testing.T) {
 		t.Fatalf("TOTP_ENABLED=' True ': cfg=%v err=%v, want enabled", c != nil && c.TOTPEnabled, err)
 	}
 }
+
+func TestLoadBreakGlassRefusedGroups(t *testing.T) {
+	setValid(t)
+	t.Setenv("BREAKGLASS_REFUSED_GROUPS", "airdb_admin, Planka-Admins insights-admins,,")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c.BreakGlassRefusedGroups, " "); got != "airdb_admin planka-admins insights-admins" {
+		t.Errorf("BreakGlassRefusedGroups = %q", got)
+	}
+	t.Setenv("BREAKGLASS_REFUSED_GROUPS", "")
+	if c, err = Load(); err != nil || len(c.BreakGlassRefusedGroups) != 0 {
+		t.Errorf("empty list: %v, %v", c.BreakGlassRefusedGroups, err)
+	}
+}
