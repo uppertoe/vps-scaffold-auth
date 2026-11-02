@@ -192,6 +192,9 @@ type groupView struct {
 	IncludeOptions []string
 	// Feed is set for a group filled from an endpoint.
 	Feed *feedView
+	// NotYetCreated: the feed is configured but has never answered, so the
+	// group row does not exist yet; the first successful sync creates it.
+	NotYetCreated bool
 }
 
 // feedView is a feed-filled group's source and last sync, for the Groups page.

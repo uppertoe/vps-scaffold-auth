@@ -467,3 +467,43 @@ func TestAlertListNamesTenThenCounts(t *testing.T) {
 		t.Errorf("short alertList = %q", alertList(e[:2]))
 	}
 }
+
+// A feed whose first fetch failed has a sync state but no group row, since
+// the sync creates the row only once the feed has answered. The Groups page
+// must still list it, with the reason and the Sync now button, rather than
+// leaving the overview's "needs attention" notice pointing at nothing.
+func TestGroupsPageListsFeedGroupBeforeFirstSuccessfulSync(t *testing.T) {
+	var body atomic.Value
+	var hits atomic.Int32
+	body.Store("500")
+	ts := feedEndpoint(t, &body, &hits)
+	srv, sender := feedServer(t, ts.URL, "")
+	if st, _ := srv.syncFeed(context.Background(), "rch-consultants", "group feed", ""); st.Status != store.GroupSyncFailed {
+		t.Fatalf("first sync status %q, want failed", st.Status)
+	}
+	if exists, _ := srv.groupExistsCtx(context.Background(), "rch-consultants"); exists {
+		t.Fatal("a failed first fetch should not create the group row")
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	page := c.get("/admin/groups?open=rch-consultants", nil).Body.String()
+	for _, want := range []string{`id="g-rch-consultants"`, "not created yet", "The feed could not be used", `action="/admin/groups/rch-consultants/sync"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("groups page lacks %q", want)
+		}
+	}
+	if strings.Contains(page, `name="name" value="rch-consultants"`) {
+		t.Error("a feed-filled group is offered for manual creation")
+	}
+	// Once the feed answers, Sync now from that row creates and fills the group.
+	body.Store(`["a@example.com","b@example.com"]`)
+	tok := extractCSRF(t, page)
+	c.postForm("/admin/groups/rch-consultants/sync", url.Values{"csrf": {tok}})
+	if got := members(t, srv); !reflect.DeepEqual(got, []string{"a@example.com", "b@example.com"}) {
+		t.Errorf("members after Sync now: %v", got)
+	}
+	page = c.get("/admin/groups", nil).Body.String()
+	if strings.Contains(page, "not created yet") {
+		t.Error("the group still reads as not created after a successful sync")
+	}
+}

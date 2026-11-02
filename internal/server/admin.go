@@ -833,27 +833,8 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		sort.Strings(includedIn[g.Name])
-		var fv *feedView
-		if f, ok := s.feedFor(g.Name); ok {
-			fv = &feedView{}
-			if u, err := url.Parse(f.URL); err == nil {
-				fv.Host = u.Host
-			}
-			if st, ok := syncStates[g.Name]; ok {
-				fv.Status, fv.Detail = st.Status, st.Detail
-				fv.LastAttempt = s.stampMin(st.LastAttempt)
-				if !st.LastSuccess.IsZero() {
-					fv.LastSuccess = s.stampMin(st.LastSuccess)
-				}
-				fv.Pending = st.Status == store.GroupSyncHeld
-				if fv.Pending {
-					fv.PendingAdd, fv.PendingRemove = st.PendingAddList, st.PendingRemoveList
-					fv.PendingHash = st.PendingHash
-				}
-			}
-		}
 		view = append(view, groupView{
-			Feed: fv,
+			Feed: s.feedViewFor(g.Name, syncStates),
 			Name: g.Name, Label: g.Label, Members: mv,
 			Hosts:          hosts,
 			Unused:         routeGroupsOn && len(hosts) == 0 && !cardTargets[g.Name] && len(includedIn[g.Name]) == 0,
@@ -861,6 +842,25 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 			IncludedIn:     includedIn[g.Name],
 			IncludeOptions: options,
 		})
+	}
+	// A feed-filled group whose feed has never answered has no group row yet
+	// (the sync creates the row once the feed has answered), but it may have a
+	// sync state saying why. List it anyway, with that state and the "Sync
+	// now" button, so a failed first fetch can be seen and retried here and
+	// not only reported on the overview.
+	unsynced := make([]string, 0)
+	for g := range s.feeds.feeds {
+		if !existing[g] {
+			unsynced = append(unsynced, g)
+		}
+	}
+	sort.Strings(unsynced)
+	for _, g := range unsynced {
+		view = append(view, groupView{
+			Feed: s.feedViewFor(g, syncStates), NotYetCreated: true,
+			Name: g, Members: []memberView{}, Hosts: routeGroups[g],
+		})
+		existing[g] = true
 	}
 	missing := make([]missingGroupView, 0)
 	for name, hosts := range routeGroups {
@@ -877,6 +877,32 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 		Title: "Groups", Groups: view, OpenGroup: open,
 		MissingGroups: missing, RouteGroupsOn: routeGroupsOn,
 	})
+}
+
+// feedViewFor describes a feed-filled group's source and last sync for the
+// Groups page, or returns nil for a group no feed fills.
+func (s *Server) feedViewFor(group string, syncStates map[string]store.GroupSyncState) *feedView {
+	f, ok := s.feedFor(group)
+	if !ok {
+		return nil
+	}
+	fv := &feedView{}
+	if u, err := url.Parse(f.URL); err == nil {
+		fv.Host = u.Host
+	}
+	if st, ok := syncStates[group]; ok {
+		fv.Status, fv.Detail = st.Status, st.Detail
+		fv.LastAttempt = s.stampMin(st.LastAttempt)
+		if !st.LastSuccess.IsZero() {
+			fv.LastSuccess = s.stampMin(st.LastSuccess)
+		}
+		fv.Pending = st.Status == store.GroupSyncHeld
+		if fv.Pending {
+			fv.PendingAdd, fv.PendingRemove = st.PendingAddList, st.PendingRemoveList
+			fv.PendingHash = st.PendingHash
+		}
+	}
+	return fv
 }
 
 func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) {
