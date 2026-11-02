@@ -109,6 +109,11 @@ type Config struct {
 	TOTPEnabled bool
 	TOTPIssuer  string
 
+	// PasskeysEnabled offers passkey sign-in on phones (PASSKEYS_ENABLED, off
+	// by default). It is the only setting that puts a script on the sign-in
+	// pages, so a deployment turns it on deliberately.
+	PasskeysEnabled bool
+
 	// Break-the-glass QR codes.
 	BreakGlassSessionTTL     time.Duration
 	BreakGlassRedirect       string // default redirect after a break-glass grant
@@ -195,6 +200,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.TOTPEnabled, err = getbool("TOTP_ENABLED", false); err != nil {
+		return nil, err
+	}
+	if c.PasskeysEnabled, err = getbool("PASSKEYS_ENABLED", false); err != nil {
 		return nil, err
 	}
 	if c.SessionTTL, err = getdur("SESSION_TTL", 2*time.Hour); err != nil {

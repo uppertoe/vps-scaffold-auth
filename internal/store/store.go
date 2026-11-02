@@ -47,6 +47,11 @@ const (
 	AuthEventVerify = "verify" // email OTP code verification attempt
 	AuthEventTOTP   = "totp"   // admin second-factor verification attempt
 	AuthEventLogin  = "login"  // a session was issued (login succeeded)
+	// Passkeys: a sign-in attempt, a passkey added, a passkey removed by its
+	// owner. An administrator's removal is an admin event instead.
+	AuthEventPasskey       = "passkey"
+	AuthEventPasskeyAdd    = "passkey_add"
+	AuthEventPasskeyRemove = "passkey_remove"
 )
 
 // Human-login audit event outcomes.
@@ -58,6 +63,12 @@ const (
 	AuthOutcomeDenied    = "denied"
 	AuthOutcomeReplayed  = "replayed"
 	AuthOutcomeNoSecret  = "totp_not_provisioned"
+	// Passkey outcomes: no stored passkey has this credential ID; the
+	// ceremony or signature did not verify; the signature counter went
+	// backwards (a copied key).
+	AuthOutcomeUnknownPasskey = "unknown_passkey"
+	AuthOutcomeBadPasskey     = "bad_passkey"
+	AuthOutcomePasskeyCounter = "passkey_counter"
 )
 
 // Administrative action types, recorded in admin_events. Every privileged
@@ -81,6 +92,7 @@ const (
 	AdminActionSettingsUpdate     = "settings_update"
 	AdminActionBrandingUpdate     = "branding_update"
 	AdminActionCodeBranding       = "break_glass_branding"
+	AdminActionPasskeysRemove     = "passkeys_remove"
 )
 
 // GroupSyncState is the outcome of the last sync of a feed-filled group.
@@ -109,6 +121,26 @@ const (
 	GroupSyncEmpty  = "empty"  // the feed returned no addresses; members kept
 	GroupSyncHeld   = "held"   // too large a shrink; members kept until accepted
 )
+
+// Passkey is one person's registered passkey. PublicKey is the P-256 key as
+// SubjectPublicKeyInfo DER: public by nature, so it is stored as it is rather
+// than encrypted. UserHandle is the opaque account ID the phone was given at
+// registration and returns at every sign-in. AdminGrade records that the
+// passkey was added by an administrator who had passed the second factor, so
+// a sign-in with it satisfies the admin second factor too; a passkey added
+// before its owner became an administrator does not.
+type Passkey struct {
+	ID           int64
+	Email        string
+	CredentialID []byte
+	PublicKey    []byte
+	UserHandle   []byte
+	SignCount    uint32
+	Label        string
+	AdminGrade   bool
+	CreatedAt    time.Time
+	LastUsedAt   time.Time // zero until first used to sign in
+}
 
 // AdminEvent records one administrative mutation for attribution: which admin
 // (Actor) did what (Action) to which subject (Target), with optional Detail,
@@ -424,6 +456,23 @@ type Store interface {
 	// PruneAuditBefore deletes auth_events and app_access rows older than cutoff,
 	// enforcing the retention window.
 	PruneAuditBefore(ctx context.Context, cutoff time.Time) error
+
+	// CreatePasskey stores a verified passkey and returns its ID. A credential
+	// ID already stored (for anyone) is refused.
+	CreatePasskey(ctx context.Context, p Passkey) (int64, error)
+	// PasskeyByCredentialID finds the passkey a sign-in names.
+	PasskeyByCredentialID(ctx context.Context, credentialID []byte) (Passkey, bool, error)
+	// GetPasskey returns one passkey by ID (the renewal check).
+	GetPasskey(ctx context.Context, id int64) (Passkey, bool, error)
+	// ListPasskeys returns a person's passkeys, newest first.
+	ListPasskeys(ctx context.Context, email string) ([]Passkey, error)
+	// TouchPasskey records a sign-in: the new counter and the time.
+	TouchPasskey(ctx context.Context, id int64, signCount uint32, now time.Time) error
+	// DeletePasskey removes one of email's passkeys; false if it was not
+	// theirs or did not exist.
+	DeletePasskey(ctx context.Context, email string, id int64) (bool, error)
+	// DeletePasskeys removes all of email's passkeys and returns how many.
+	DeletePasskeys(ctx context.Context, email string) (int, error)
 
 	// Close releases underlying resources.
 	Close() error

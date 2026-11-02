@@ -73,7 +73,16 @@ type pageData struct {
 	// URL is validated to be within the server domain before it's ever rendered.
 	AltLoginURL   string
 	AltLoginLabel string
+	// Passkey drives the passkey parts of a page (passkeys.go); nil when
+	// passkeys are off. A page with one loads /passkey.js, and render widens
+	// its Content-Security-Policy to allow that one same-origin script.
+	Passkey *passkeyPage
+	// PasskeyScript is set by render on the pages allowed to run it.
+	PasskeyScript bool
 }
+
+// passkeyPages are the pages that use /passkey.js when passkeys are on.
+var passkeyPages = map[string]bool{"login": true, "passkey_offer": true, "passkeys": true, "passkey_confirm": true}
 
 // pages holds each page template composed with the shared base layout.
 type pages map[string]*template.Template
@@ -84,7 +93,7 @@ func loadTemplates() (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"login", "code", "totp", "message", "denied", "welcome", "logout"} {
+	for _, name := range []string{"login", "code", "totp", "message", "denied", "welcome", "logout", "passkey_offer", "passkey_added", "passkeys", "passkey_confirm"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err
@@ -127,6 +136,15 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 	if page == "login" {
 		data.LoginNotice = s.cfg.LoginNotice
 		s.applyLoginBranding(&data)
+		// Every rendering of the sign-in page carries a fresh passkey challenge,
+		// so the phone can offer a saved passkey as soon as the page opens.
+		if s.cfg.PasskeysEnabled {
+			data.Passkey = s.passkeyLoginOptions(w)
+		}
+	}
+	if s.cfg.PasskeysEnabled && passkeyPages[page] && data.Passkey != nil {
+		data.PasskeyScript = true
+		w.Header().Set("Content-Security-Policy", s.csp+"; script-src 'self'")
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)

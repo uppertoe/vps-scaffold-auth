@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 )
 
@@ -79,7 +80,8 @@ func TestEveryAdminPostRequiresCSRF(t *testing.T) {
 // the sign-in forms by the same-origin check, the break-glass activation by
 // its CSRF token. None may set a session cookie.
 func TestEveryPublicPostRefusesASiblingHost(t *testing.T) {
-	srv, sender := testServer(t)
+	// Passkeys on, so their routes are reached rather than answering 404.
+	srv, sender := testServerWith(t, func(c *config.Config) { c.PasskeysEnabled = true })
 	var routes []string
 	for _, p := range postRoutes(t, "server.go") {
 		if !strings.HasPrefix(p, "/admin") {

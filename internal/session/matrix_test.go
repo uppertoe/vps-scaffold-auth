@@ -35,6 +35,12 @@ func TestEveryTokenIsReadOnlyForItsOwnPurpose(t *testing.T) {
 			_, err := m.EnsureCSRF(w, httptest.NewRequest(http.MethodGet, "/", nil), time.Hour, now)
 			return err
 		},
+		typPKLogin: func(w http.ResponseWriter) error {
+			return m.SetPasskeyChallenge(w, false, PasskeyChallenge{Challenge: []byte("c")}, 5*time.Minute, now)
+		},
+		typPKReg: func(w http.ResponseWriter) error {
+			return m.SetPasskeyChallenge(w, true, PasskeyChallenge{Challenge: []byte("c"), Email: "admin@example.com"}, 5*time.Minute, now)
+		},
 	}
 
 	// Each reader, given a token under its own cookie name.
@@ -59,9 +65,17 @@ func TestEveryTokenIsReadOnlyForItsOwnPurpose(t *testing.T) {
 			// The double-submit check: the cookie and the posted value agree.
 			return m.VerifyCSRF(withCookie(CSRFCookie, tok), tok, now)
 		},
+		typPKLogin: func(tok string) bool {
+			_, ok := m.ReadPasskeyChallenge(withCookie(PasskeyLoginCookie, tok), false, now)
+			return ok
+		},
+		typPKReg: func(tok string) bool {
+			_, ok := m.ReadPasskeyChallenge(withCookie(PasskeyRegCookie, tok), true, now)
+			return ok
+		},
 	}
 
-	kinds := []string{typSession, typState, typPending, typOffer, typCSRF}
+	kinds := []string{typSession, typState, typPending, typOffer, typCSRF, typPKLogin, typPKReg}
 	if len(issue) != len(kinds) || len(read) != len(kinds) {
 		t.Fatal("a token kind is missing from the matrix")
 	}

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
 <title>{{template "title" .}}</title>
+{{if .PasskeyScript}}<script src="/passkey.js" defer></script>{{end}}
 <style>
   /* Palette. All colours live here as custom properties; the dark-mode block
      below re-points the same names, so the rules further down never hardcode a
@@ -110,6 +111,20 @@
   label.check input { width: auto; margin: 0; }
   .links { margin-top: 18px; text-align: center; font-size: 14px; }
   .links a { color: var(--accent); text-decoration: none; }
+  /* Passkeys. */
+  .pk-icon { width: 52px; height: 52px; border-radius: 26px; background: var(--soft-bg); color: var(--accent);
+    display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
+  p.lead { margin: 0 0 12px; font-size: 15px; }
+  .pk-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+  .pk-row { border: 1px solid var(--input-border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
+    display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 10px; row-gap: 4px; align-items: center; }
+  .pk-row .name { font-size: 15px; font-weight: 600; }
+  .pk-row .fact { font-size: 13px; color: var(--muted); }
+  .pk-row svg.fact-icon { justify-self: center; color: var(--muted); }
+  .pk-row form { grid-column: 2; margin: 0; }
+  .pk-row .remove { width: auto; margin: 0; padding: 0; min-height: 44px; background: none; border: 0;
+    color: var(--err-text); font: inherit; font-size: 14px; cursor: pointer; }
+  .pk-row .remove:hover { background: none; text-decoration: underline; }
   .qr { word-break: break-all; font-size: 12px; color: var(--muted); background: var(--soft-bg); padding: 10px; border-radius: 8px; margin-bottom: 16px; }
 </style>
 </head>
@@ -120,3 +135,17 @@
   </main>
 </body>
 </html>{{end}}
+
+{{define "pk-key-icon"}}<svg aria-hidden="true" width="{{.}}" height="{{.}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"></circle><path d="M10.85 12.15 19 4"></path><path d="m18 5 2 2"></path><path d="m15 8 2 2"></path></svg>{{end}}
+
+{{/* The form passkey.js fills and posts once the phone has made a passkey.
+     The dot is the page's pageData. */}}
+{{define "pk-register-fields"}}
+  <input type="hidden" name="rd" value="{{.Redirect}}">
+  <input type="hidden" name="id">
+  <input type="hidden" name="clientDataJSON">
+  <input type="hidden" name="authenticatorData">
+  <input type="hidden" name="publicKey">
+  <input type="hidden" name="publicKeyAlg">
+{{end}}
+{{define "pk-register-attrs"}}data-challenge="{{.Challenge}}" data-rpid="{{.RPID}}" data-rpname="{{.RPName}}" data-userid="{{.UserID}}" data-username="{{.UserName}}" data-exclude="{{.Exclude}}"{{end}}

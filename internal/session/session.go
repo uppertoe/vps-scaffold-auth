@@ -23,6 +23,11 @@ const (
 	PendingCookie = "vps_auth_pending"
 	OfferCookie   = "vps_auth_bg_offer"
 	CSRFCookie    = "vps_auth_csrf"
+	// The challenge for a passkey sign-in, and for adding a passkey. Two
+	// cookies, so a sign-in page open in one tab does not spoil the passkeys
+	// page in another.
+	PasskeyLoginCookie = "vps_auth_pk_login"
+	PasskeyRegCookie   = "vps_auth_pk_reg"
 )
 
 // ErrInvalid is returned when a token fails signature or structural checks.
@@ -97,6 +102,8 @@ const (
 	typPending = "pending"
 	typOffer   = "offer"
 	typCSRF    = "csrf"
+	typPKLogin = "pk_login"
+	typPKReg   = "pk_reg"
 )
 
 // Session kinds. The empty string is a normal email-OTP login; KindBreakGlass
@@ -126,6 +133,32 @@ type Identity struct {
 	// after signing in: such a session carries totp=false and must complete the
 	// TOTP step before it is honoured for admin access.
 	TOTP bool `json:"totp,omitempty"`
+	// PK is the ID of the passkey this session was started with, zero for any
+	// other sign-in. Renewal ends the session once that passkey is removed.
+	PK int64 `json:"pk,omitempty"`
+	// Auth is when the person actually signed in (Unix seconds). Iat moves
+	// forward at every renewal; Auth does not, so it says how recently the
+	// person proved who they are. Adding a passkey requires a recent one.
+	// Zero in a session minted before this field existed.
+	Auth int64 `json:"auth,omitempty"`
+}
+
+// Grant is how a session was earned, carried unchanged across renewals.
+type Grant struct {
+	Kind string
+	TOTP bool
+	PK   int64
+	Auth int64 // zero means now
+}
+
+// PasskeyChallenge is the random challenge for one passkey ceremony. For
+// adding a passkey it is bound to the signed-in person's address, so it
+// cannot be completed under another session.
+type PasskeyChallenge struct {
+	Challenge []byte `json:"c"`
+	Email     string `json:"e,omitempty"`
+	// Handle is the account ID given to the phone when adding a passkey.
+	Handle []byte `json:"h,omitempty"`
 }
 
 // State is the short-lived login progress carried between /request and
@@ -142,6 +175,10 @@ type Pending struct {
 	Role     string `json:"role"`
 	Redirect string `json:"rd"`
 	Remember bool   `json:"rem,omitempty"`
+	// PK is set when the first factor was a passkey added before its owner
+	// became an administrator, so the session that TOTP completes still
+	// names it.
+	PK int64 `json:"pk,omitempty"`
 }
 
 // Offer records a scanned-but-not-yet-activated break-glass card, held while an
@@ -244,10 +281,21 @@ func (m *Manager) IssueSession(w http.ResponseWriter, email, groups string, now 
 // totp records whether the admin second factor was satisfied at login; a renewal
 // must pass the existing value through so the assurance is not silently dropped.
 func (m *Manager) IssueSessionTTL(w http.ResponseWriter, email, groups, kind string, totp bool, ttl time.Duration, now time.Time) error {
+	return m.IssueSessionGrant(w, email, groups, Grant{Kind: kind, TOTP: totp}, ttl, now)
+}
+
+// IssueSessionGrant writes a session cookie for a grant. A renewal passes the
+// grant read from the old session, so the passkey and the time of sign-in
+// survive it.
+func (m *Manager) IssueSessionGrant(w http.ResponseWriter, email, groups string, g Grant, ttl time.Duration, now time.Time) error {
 	if ttl <= 0 {
 		ttl = m.ttl
 	}
-	id := Identity{Email: email, Groups: groups, Iat: now.Unix(), Kind: kind, TTL: int64(ttl.Seconds()), TOTP: totp}
+	auth := g.Auth
+	if auth == 0 {
+		auth = now.Unix()
+	}
+	id := Identity{Email: email, Groups: groups, Iat: now.Unix(), Kind: g.Kind, TTL: int64(ttl.Seconds()), TOTP: g.TOTP, PK: g.PK, Auth: auth}
 	tok, err := m.encode(typSession, id, now.Add(ttl))
 	if err != nil {
 		return err
@@ -403,6 +451,47 @@ func (m *Manager) ReadOffer(r *http.Request, now time.Time) (*Offer, bool) {
 // ClearOffer expires the break-glass offer cookie.
 func (m *Manager) ClearOffer(w http.ResponseWriter) {
 	m.clearCookie(w, OfferCookie, "")
+}
+
+// --- Passkey challenges (host-only cookies) ---
+
+func pkCookie(register bool) (name, typ string) {
+	if register {
+		return PasskeyRegCookie, typPKReg
+	}
+	return PasskeyLoginCookie, typPKLogin
+}
+
+// SetPasskeyChallenge writes the challenge for a passkey sign-in or, when
+// register is true, for adding a passkey.
+func (m *Manager) SetPasskeyChallenge(w http.ResponseWriter, register bool, c PasskeyChallenge, ttl time.Duration, now time.Time) error {
+	name, typ := pkCookie(register)
+	tok, err := m.encode(typ, c, now.Add(ttl))
+	if err != nil {
+		return err
+	}
+	m.setCookie(w, name, tok, "", ttl)
+	return nil
+}
+
+// ReadPasskeyChallenge returns the challenge cookie if present and valid.
+func (m *Manager) ReadPasskeyChallenge(r *http.Request, register bool, now time.Time) (*PasskeyChallenge, bool) {
+	name, typ := pkCookie(register)
+	c, err := r.Cookie(name)
+	if err != nil {
+		return nil, false
+	}
+	var pc PasskeyChallenge
+	if err := m.decode(typ, c.Value, now, &pc); err != nil || len(pc.Challenge) == 0 {
+		return nil, false
+	}
+	return &pc, true
+}
+
+// ClearPasskeyChallenge expires the challenge cookie.
+func (m *Manager) ClearPasskeyChallenge(w http.ResponseWriter, register bool) {
+	name, _ := pkCookie(register)
+	m.clearCookie(w, name, "")
 }
 
 // --- CSRF (host-only, signed double-submit token) ---

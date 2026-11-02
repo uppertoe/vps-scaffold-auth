@@ -343,9 +343,32 @@ for the annotated list. Key ones:
 | `COOKIE_DOMAIN` | Leading-dot domain for the shared session cookie |
 | `EMAIL_BACKEND` | `smtp` \| `resend` \| `log` (`log` is dev-only; refused unless `COOKIE_INSECURE=true`) |
 | `TOTP_ENABLED` | Optional admin TOTP (off by default) |
+| `PASSKEYS_ENABLED` | Offer passkey sign-in on phones (off by default); see [Passkeys](#passkeys-optional) |
 | `DISPLAY_TIMEZONE` | IANA name for admin-UI timestamps (e.g. `Australia/Melbourne`); empty = UTC |
 | `BREAKGLASS_REFUSED_GROUPS` | Groups an app reads as its own role (space or comma separated); never a card's target or a guest's membership. Added to those learned from the route manifests |
 | `DOMAIN` | The server domain (provided by the server `.env`) |
+
+### Passkeys (optional)
+
+Set `PASSKEYS_ENABLED=true` to let people sign in on their phones with a
+passkey instead of an emailed code. After an emailed code on a phone, the
+gateway offers to add one; `/passkeys` lists and removes a person's passkeys,
+and an administrator removes all of one person's passkeys from the access
+page. Passkeys are bound to the auth host (the relying-party ID is the host of
+`AUTH_PUBLIC_URL`), accept only ES256 with user verification and no
+attestation, and need no new dependency: the verifier is `internal/passkey`.
+
+- Adding a passkey needs a sign-in within the last 15 minutes; an
+  administrator also needs the second factor, from that sign-in or from an
+  authenticator code entered with the request.
+- An administrator's passkey, added that way, satisfies the admin second
+  factor at sign-in. One added before its owner became an administrator does
+  not.
+- A session started with a passkey ends at its next renewal once the passkey
+  is removed.
+- This is the only setting that puts a script on the sign-in pages:
+  `/passkey.js`, allowed by `script-src 'self'` on the pages that run a
+  ceremony and nowhere else.
 
 ### Admin two-factor (optional)
 

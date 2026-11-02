@@ -16,6 +16,30 @@
   </form>
 </div>
 
+{{if .PasskeysOn}}
+<div class="panel">
+  <h2 style="margin-top:0">Passkeys</h2>
+  {{if .PasskeysRemoved}}<p class="muted">The passkeys have been removed.</p>{{end}}
+  {{if .Passkeys}}
+  <p>This person has {{len .Passkeys}} {{if eq (len .Passkeys) 1}}passkey{{else}}passkeys{{end}}.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Passkey</th><th>Added</th><th>Last used</th></tr></thead>
+    <tbody>
+    {{range .Passkeys}}<tr><td>{{.Name}}</td><td class="muted">{{.Added}}</td><td class="muted">{{.Used}}</td></tr>{{end}}
+    </tbody>
+  </table></div>
+  <form method="post" action="/admin/passkeys/remove" style="margin-top:12px">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="email" value="{{.FilterEmail}}">
+    <button type="submit" class="danger">Remove all passkeys</button>
+  </form>
+  <p class="muted">Anyone signed in with a removed passkey is signed out within {{.PasskeyRenew}}. The person can still sign in with an email code.</p>
+  {{else}}
+  <p class="muted">This person has no passkeys.</p>
+  {{end}}
+</div>
+{{end}}
+
 <div class="panel">
   <h2 style="margin-top:0">App access</h2>
   {{if .AppAccess}}

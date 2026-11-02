@@ -51,13 +51,28 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 		s.redirectToLogin(w, r)
 		return false
 	}
+	// A session started with a passkey lasts only while the passkey does:
+	// removing it, by its owner or an administrator, ends the session here.
+	if !s.passkeyStillValid(r, id) {
+		s.sessions.ClearSession(w)
+		s.redirectToLogin(w, r)
+		return false
+	}
 	if groups == nil {
 		g := s.computeGroups(r.Context(), id.Email, role)
 		groups = &g
 	}
 	// id.Kind is passed through, so a guest stays a guest across renewals (and
-	// so stays confined to guests=allow routes).
-	if err := s.sessions.IssueSessionTTL(w, id.Email, *groups, id.Kind, id.TOTP, s.sessions.SessionTTL(id), now); err != nil {
+	// so stays confined to guests=allow routes). The passkey and the time of
+	// sign-in pass through too.
+	grant := session.Grant{Kind: id.Kind, TOTP: id.TOTP, PK: id.PK, Auth: id.Auth}
+	if grant.Auth == 0 {
+		// A session from before the sign-in time was recorded. Its sign-in
+		// time is unknown, so it is recorded as long ago, never as now: a
+		// renewal must not make an old session look like a recent sign-in.
+		grant.Auth = 1
+	}
+	if err := s.sessions.IssueSessionGrant(w, id.Email, *groups, grant, s.sessions.SessionTTL(id), now); err != nil {
 		// Most likely a cookie over the browser's size limit (very many
 		// groups through includes); the old cookie stays in place.
 		log.Printf("session renewal for %s: %v", id.Email, err)
@@ -852,13 +867,13 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 			// (in completeLogin). Record the email step so a never-finished second
 			// factor still shows the first one succeeded.
 			s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeOK)
-			s.startTOTP(w, r, st.Email, role, rd, st.Remember, now)
+			s.startTOTP(w, r, st.Email, role, rd, st.Remember, 0, now)
 			return
 		}
 		// Code-only completion: either a non-admin, or TOTP is disabled. No second
 		// factor was presented, so the session records totp=false. A guest always
 		// lands here (RoleGuest is never RoleAdmin), so it is never sent to TOTP.
-		s.completeLogin(w, r, st.Email, role, rd, st.Remember, false, now)
+		s.completeLogin(w, r, st.Email, role, rd, st.Remember, false, 0, now)
 	case store.ConsumeMismatch:
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeWrongCode)
 		s.render(w, http.StatusUnauthorized, "code", pageData{
@@ -885,7 +900,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 // factor would let someone who controls only the email inbox set up the factor
 // that is supposed to backstop a compromised inbox. An admin with no provisioned
 // secret is therefore denied, not enrolled.
-func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember bool, now time.Time) {
+func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember bool, pk int64, now time.Time) {
 	_, ok, err := s.getTOTPSecret(r.Context(), emailAddr)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
@@ -900,7 +915,7 @@ func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, ro
 		})
 		return
 	}
-	if err := s.sessions.SetPending(w, session.Pending{Email: emailAddr, Role: role, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
+	if err := s.sessions.SetPending(w, session.Pending{Email: emailAddr, Role: role, Redirect: rd, Remember: remember, PK: pk}, s.cfg.OTPTTL, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
@@ -1010,7 +1025,7 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		s.restartLogin(w, r, rd)
 		return
 	}
-	s.completeLogin(w, r, p.Email, role, rd, p.Remember, true, now)
+	s.completeLogin(w, r, p.Email, role, rd, p.Remember, true, p.PK, now)
 }
 
 // totpLockoutWindow is the rolling window over which TOTP verification attempts
@@ -1074,6 +1089,9 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 		// A real admin session gets an Admin link here; a break-glass or guest
 		// session never does (neither can reach the admin UI — see requireAdmin).
 		data.IsAdmin = isAdminSession(id) && s.policy.Role(id.Email) == authz.RoleAdmin
+		if _, _, ok := s.passkeySession(r); ok && s.cfg.PasskeysEnabled {
+			data.Passkey = &passkeyPage{Next: s.passkeysURL()}
+		}
 	}
 	if target, ok := s.servedTarget(s.cfg.DefaultRedirect); ok {
 		data.Redirect = target // rendered as a "Continue" link
@@ -1085,8 +1103,10 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 // remember-me lifetime when requested), and redirects to the target. totpVerified
 // records whether the admin second factor was satisfied for this login, so a
 // later /verify can tell a fully-authenticated admin session from a
-// first-factor-only one (see needsAdminStepUp).
-func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember, totpVerified bool, now time.Time) {
+// first-factor-only one (see needsAdminStepUp). pk is the passkey the person
+// signed in with, zero for an email code; the session names it so that
+// removing the passkey ends the session at its next renewal.
+func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember, totpVerified bool, pk int64, now time.Time) {
 	groups := s.computeGroups(r.Context(), emailAddr, role)
 	// The kind follows the role: a guest login is marked so /verify confines it
 	// to routes that opt in, and renewal keeps it a guest.
@@ -1103,7 +1123,7 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	if remember && kind != session.KindGuest {
 		ttl = s.cfg.SessionRememberTTL
 	}
-	if err := s.sessions.IssueSessionTTL(w, emailAddr, groups, kind, totpVerified, ttl, now); err != nil {
+	if err := s.sessions.IssueSessionGrant(w, emailAddr, groups, session.Grant{Kind: kind, TOTP: totpVerified, PK: pk}, ttl, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
@@ -1113,6 +1133,10 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	s.recordAuth(r, emailAddr, store.AuthEventLogin, store.AuthOutcomeOK)
 	s.sessions.ClearState(w)
 	s.sessions.ClearPending(w)
+	// On a phone, after an email code, offer to add a passkey before going on.
+	if s.shouldOfferPasskey(r, role, pk) && s.offerPasskey(w, r, emailAddr, rd) {
+		return
+	}
 	http.Redirect(w, r, s.loginRedirect(rd), http.StatusFound)
 }
 

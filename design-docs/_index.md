@@ -6,7 +6,7 @@ contact: Eamonn Upperton
 decided-by: Eamonn Upperton, for the department's data lab, with the owner of each tool
 link: https://auth.rch-anaesthesia.org
 weight: 2
-lastmod: 2026-10-31
+lastmod: 2026-11-02
 ---
 
 Almost every web tool on the department's server sits behind one sign-in, the
@@ -32,6 +32,7 @@ these pages describe the gateway itself.
 [How it works](how-it-works.md) follows a request from the browser through
 the reverse proxy to the gateway and back. [Signing in](signing-in.md) covers
 the emailed code, the limits on guessing it, and how long a session lasts.
+[Passkeys](passkeys.md) covers signing in on a phone without a code.
 [Who can reach what](who-can-reach-what.md) sets out the roles, the groups and
 the rule each tool declares. [Administrators](administrators.md) covers the
 admin tier, its second factor and its records.
@@ -56,7 +57,9 @@ These questions are listed here so that there is one list.
 - Whether one person's session should be revocable on its own. Sessions are
   not recorded anywhere, so the only ways to end one early are to remove the
   person's domain or admin listing, which takes effect at their next renewal,
-  or to sign everyone out.
+  or to sign everyone out. Passkeys, once switched on, change this for
+  sessions started with a passkey: removing the passkey ends them at their
+  next renewal.
 - Whether any tool should move to a separate domain. Every tool on the
   department's domain can set the shared session cookie in a visitor's
   browser, so a compromised tool could sign a visitor in as someone else. The

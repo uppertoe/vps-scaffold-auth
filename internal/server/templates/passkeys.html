@@ -1,0 +1,41 @@
+{{define "title"}}Your passkeys{{end}}
+{{define "content"}}
+<h1>Your passkeys</h1>
+{{with .Passkey}}
+{{if .Removed}}<div class="ok">The passkey has been removed.</div>{{end}}
+{{if .Rows}}
+<p class="sub">You can sign in with any of these passkeys instead of an email code.</p>
+{{range .Rows}}
+<div class="pk-row">
+  {{template "pk-key-icon" 20}}
+  <span class="name">{{.Name}}</span>
+  <svg class="fact-icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg>
+  <span class="fact">Added {{.Added}}</span>
+  <svg class="fact-icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+  <span class="fact">{{.Used}}</span>
+  <form method="post" action="/passkeys/{{.ID}}/remove">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <button type="submit" class="remove">Remove this passkey</button>
+  </form>
+</div>
+{{end}}
+{{else}}
+<p class="sub">You have no passkeys yet.</p>
+{{end}}
+{{if .CanAdd}}
+<div class="err" id="passkey-error" hidden>Your passkey has not been added. Please try again.</div>
+<form id="passkey-register" method="post" action="/passkeys/register" {{template "pk-register-attrs" .}}>
+  {{template "pk-register-fields" $}}
+  <div id="passkey-add-wrap" hidden><button type="button" id="passkey-add">Add a passkey on this phone</button></div>
+</form>
+{{else if .NeedCode}}
+<a class="btn" href="/passkeys/confirm">Add a passkey on this phone</a>
+{{else if .NeedEmail}}
+<a class="btn" href="{{.ReauthURL}}">Add a passkey on this phone</a>
+<p class="sub" style="margin-top:12px">You will be asked to confirm your email before a passkey is added.</p>
+{{else if not .Phone}}
+<p class="sub">Passkeys can be added on a phone.</p>
+{{end}}
+<p class="sub" style="margin-top:16px">If you lose a phone, remove its passkey here. You can still sign in with an email code.</p>
+{{end}}
+{{end}}

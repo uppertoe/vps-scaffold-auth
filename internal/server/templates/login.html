@@ -5,6 +5,7 @@
 {{if .LoginNotice}}<p class="sub notice">{{.LoginNotice}}</p>{{end}}
 {{if .HintDomains}}<p class="sub">This page is for <strong>{{.HintDomains}}</strong> email addresses.</p>{{end}}
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+{{if .Passkey}}<div class="err" id="passkey-error" hidden>Your passkey could not be used to sign in. Please try again, or sign in with an email code.</div>{{end}}
 <form method="post" action="/request" autocomplete="on">
   <input type="hidden" name="rd" value="{{.Redirect}}">
   {{if .RequireDomains}}<input type="hidden" name="rqd" value="{{.RequireDomains}}">{{end}}
@@ -12,11 +13,23 @@
   {{if .RequireDomainLabel}}<input type="hidden" name="dlabel" value="{{.RequireDomainLabel}}">{{end}}
   {{if .AltLoginURL}}<input type="hidden" name="alt" value="{{.AltLoginURL}}"><input type="hidden" name="altlabel" value="{{.AltLoginLabel}}">{{end}}
   <label for="email">Email address</label>
-  <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
+  <input id="email" name="email" type="email" inputmode="email" autocomplete="{{if .Passkey}}email webauthn{{else}}email{{end}}"
          autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus
          value="{{.Email}}" placeholder="{{if .EmailPlaceholder}}{{.EmailPlaceholder}}{{else}}you@example.com{{end}}">
   <label class="check"><input type="checkbox" name="remember" value="1" {{if .Remember}}checked{{end}}> Keep me signed in</label>
   <button type="submit">Send code</button>
 </form>
+{{with .Passkey}}
+<form id="passkey-login" method="post" action="/passkey/login" hidden data-challenge="{{.Challenge}}" data-rpid="{{.RPID}}">
+  <input type="hidden" name="rd" value="{{$.Redirect}}">
+  <input type="hidden" name="remember">
+  <input type="hidden" name="id">
+  <input type="hidden" name="clientDataJSON">
+  <input type="hidden" name="authenticatorData">
+  <input type="hidden" name="signature">
+  <input type="hidden" name="userHandle">
+</form>
+<div class="links" id="passkey-button-wrap" hidden><button type="button" class="linkbtn pk-link" id="passkey-button">{{template "pk-key-icon" 18}} Sign in with a passkey</button></div>
+{{end}}
 {{if .AltLoginURL}}<div class="links"><a href="{{.AltLoginURL}}">{{.AltLoginLabel}}</a></div>{{end}}
 {{end}}

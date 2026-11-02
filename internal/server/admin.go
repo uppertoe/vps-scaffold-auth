@@ -53,6 +53,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/totp", s.handleAdminTOTP)
 	mux.HandleFunc("POST /admin/totp/generate", s.handleAdminTOTPGenerate)
 	mux.HandleFunc("POST /admin/totp/remove", s.handleAdminTOTPRemove)
+	mux.HandleFunc("POST /admin/passkeys/remove", s.handleAdminRemovePasskeys)
 }
 
 // --- Admin two-factor provisioning ---
@@ -748,12 +749,24 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
-	s.renderAdmin(w, r, http.StatusOK, "admin_access", adminData{
+	data := adminData{
 		Title:       "Access log",
 		FilterEmail: email,
 		AuthEvents:  s.toAuthEventViews(logins),
 		AppAccess:   s.toAppAccessViews(access),
-	})
+	}
+	if s.cfg.PasskeysEnabled && email != "" {
+		keys, err := s.store.ListPasskeys(r.Context(), email)
+		if err != nil {
+			s.adminError(w, r)
+			return
+		}
+		data.PasskeysOn = true
+		data.Passkeys = s.passkeyRows(keys)
+		data.PasskeyRenew = renewWithin(s.cfg.SessionRenew)
+		data.PasskeysRemoved = r.URL.Query().Get("passkeys_removed") == "1"
+	}
+	s.renderAdmin(w, r, http.StatusOK, "admin_access", data)
 }
 
 // handleAdminAudit shows the administrative-action audit trail: which admin

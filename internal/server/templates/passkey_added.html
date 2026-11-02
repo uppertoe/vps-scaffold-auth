@@ -1,0 +1,9 @@
+{{define "title"}}Passkey added{{end}}
+{{define "content"}}
+<div class="ok">A passkey has been added to this phone.</div>
+<h1>You're signed in</h1>
+<p class="sub">Signed in as <strong>{{.Identity}}</strong>. Next time, choose your passkey when the phone offers it on the sign-in page.</p>
+<a class="btn" href="{{.Redirect}}">Continue &rarr;</a>
+<div class="links"><a href="{{.Passkey.Next}}" class="pk-link">Your passkeys</a></div>
+<div class="links"><form method="post" action="/logout" style="display:inline;margin:0"><button type="submit" class="linkbtn">Sign out</button></form></div>
+{{end}}
