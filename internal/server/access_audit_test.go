@@ -79,6 +79,9 @@ func TestAccessAuditHourlyBucket(t *testing.T) {
 
 	a.record(ctx, "user@example.com", "app.example.com", "", t0)
 	a.record(ctx, "user@example.com", "app.example.com", "", t0.Add(40*time.Minute)) // same hour
+	// The same site written differently is the same site.
+	a.record(ctx, "user@example.com", "App.Example.com:443", "", t0.Add(41*time.Minute))
+	a.record(ctx, "user@example.com", "app.example.com.", "", t0.Add(42*time.Minute))
 	if rows, _ := srv.store.ListAppAccess(ctx, "user@example.com", 100, 0); len(rows) != 1 {
 		t.Fatalf("same-hour rows = %d, want 1", len(rows))
 	}
@@ -86,6 +89,15 @@ func TestAccessAuditHourlyBucket(t *testing.T) {
 	a.record(ctx, "user@example.com", "app.example.com", "", t0.Add(90*time.Minute)) // next hour
 	if rows, _ := srv.store.ListAppAccess(ctx, "user@example.com", 100, 0); len(rows) != 2 {
 		t.Fatalf("next-hour rows = %d, want 2", len(rows))
+	}
+
+	// A host that is not a hostname is not recorded, so nobody can invent
+	// sites in the log through the Host header.
+	for _, bad := range []string{"planka,fake.example.com", "a b.example.com", "x<y>.example.com"} {
+		a.record(ctx, "user@example.com", bad, "", t0.Add(2*time.Hour))
+	}
+	if rows, _ := srv.store.ListAppAccess(ctx, "user@example.com", 100, 0); len(rows) != 2 {
+		t.Fatalf("after malformed hosts rows = %d, want 2 (ignored)", len(rows))
 	}
 
 	// A blank host (a /verify with no X-Forwarded-Host) is ignored.

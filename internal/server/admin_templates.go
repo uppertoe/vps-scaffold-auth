@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
@@ -49,8 +48,7 @@ type adminData struct {
 	NewTOTP     *newTOTPView // freshly minted secret, shown once
 	// Access-log page.
 	FilterEmail string
-	AuthEvents  []authEventView
-	AppAccess   []appAccessView
+	Access      *accessView
 	// Admin-action audit page.
 	AdminEvents []adminEventView
 	// Access page, filtered to one person, with passkeys on.
@@ -58,27 +56,6 @@ type adminData struct {
 	Passkeys        []passkeyRow
 	PasskeyRenew    string
 	PasskeysRemoved bool
-}
-
-// authEventView is one login-flow attempt row on the access-log page.
-type authEventView struct {
-	Time      string
-	Email     string
-	Type      string
-	Outcome   string
-	OK        bool // outcome was a success (drives the pill colour)
-	ClientIP  string
-	UserAgent string
-}
-
-// appAccessView is one deduplicated app-access row on the access-log page.
-type appAccessView struct {
-	Time       string
-	Email      string
-	Host       string
-	Kind       string // "login", "break-glass" or "guest"
-	BreakGlass bool
-	Guest      bool
 }
 
 // stamp renders t in the configured display timezone (default UTC). The "MST"
@@ -92,42 +69,6 @@ func (s *Server) tzloc() *time.Location {
 		return time.UTC
 	}
 	return s.loc
-}
-
-func (s *Server) toAuthEventViews(es []store.AuthEvent) []authEventView {
-	out := make([]authEventView, 0, len(es))
-	for _, e := range es {
-		out = append(out, authEventView{
-			Time:      s.stamp(e.CreatedAt),
-			Email:     e.Email,
-			Type:      e.EventType,
-			Outcome:   e.Outcome,
-			OK:        e.Outcome == store.AuthOutcomeOK,
-			ClientIP:  e.ClientIP,
-			UserAgent: e.UserAgent,
-		})
-	}
-	return out
-}
-
-func (s *Server) toAppAccessViews(as []store.AppAccess) []appAccessView {
-	out := make([]appAccessView, 0, len(as))
-	for _, a := range as {
-		v := appAccessView{
-			Time:  s.stampMin(a.CreatedAt),
-			Email: a.Email,
-			Host:  a.Host,
-			Kind:  "login",
-		}
-		switch a.Kind {
-		case session.KindBreakGlass:
-			v.Kind, v.BreakGlass = "break-glass", true
-		case session.KindGuest:
-			v.Kind, v.Guest = "guest", true
-		}
-		out = append(out, v)
-	}
-	return out
 }
 
 // totpAdminView is one configured admin's enrolment status on the 2FA page.

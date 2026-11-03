@@ -738,42 +738,6 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 
 // --- Login & access audit ---
 
-// handleAdminAccess shows the login-attempt log and the deduplicated app-access
-// log, optionally filtered to one email. It answers "did X get in, and which
-// apps has X reached, when" — without exposing per-request paths.
-func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
-	email := normalizeEmail(r.URL.Query().Get("email"))
-	const limit = 250
-	logins, err := s.store.ListAuthEvents(r.Context(), email, limit, 0)
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	access, err := s.store.ListAppAccess(r.Context(), email, limit, 0)
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	data := adminData{
-		Title:       "Access log",
-		FilterEmail: email,
-		AuthEvents:  s.toAuthEventViews(logins),
-		AppAccess:   s.toAppAccessViews(access),
-	}
-	if s.cfg.PasskeysEnabled && email != "" {
-		keys, err := s.store.ListPasskeys(r.Context(), email)
-		if err != nil {
-			s.adminError(w, r)
-			return
-		}
-		data.PasskeysOn = true
-		data.Passkeys = s.passkeyRows(keys)
-		data.PasskeyRenew = renewWithin(s.cfg.SessionRenew)
-		data.PasskeysRemoved = r.URL.Query().Get("passkeys_removed") == "1"
-	}
-	s.renderAdmin(w, r, http.StatusOK, "admin_access", data)
-}
-
 // handleAdminAudit shows the administrative-action audit trail: which admin
 // minted/revoked a break-glass code, changed groups, removed another admin's
 // 2FA, or edited settings — the attributable record of privileged mutations.

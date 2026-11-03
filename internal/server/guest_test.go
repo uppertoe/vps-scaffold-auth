@@ -376,7 +376,7 @@ func TestGuestAccessShownInAdminLog(t *testing.T) {
 	ac := newClient(t, srv.Handler())
 	loginAs(t, ac, sender, "admin@example.com", nil)
 	body := ac.get("/admin/access?email="+url.QueryEscape(strangerAddr), nil).Body.String()
-	if !strings.Contains(body, `<span class="pill guest">guest</span>`) {
+	if !strings.Contains(body, `<span class="pill tag">guest</span>`) {
 		t.Errorf("admin access log does not mark the guest session:\n%s", body)
 	}
 }

@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"log"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,7 +37,16 @@ func newAccessAudit(st store.Store, retention time.Duration) *accessAudit {
 // the database only on the first sighting of a (principal, app, kind) tuple in a
 // given hour. A blank host (a /verify with no X-Forwarded-Host) is ignored.
 func (a *accessAudit) record(ctx context.Context, email, host, kind string, now time.Time) {
-	if host == "" {
+	// One site is one host: "Planka.example.org" and "planka.example.org:443"
+	// are the same site, so they share a row.
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	// Only a hostname is recorded. The header comes from the client's Host,
+	// which may hold characters (a comma, a space) that would let an
+	// authenticated user invent sites in the log.
+	if host == "" || strings.Trim(host, "abcdefghijklmnopqrstuvwxyz0123456789-.") != "" {
 		return
 	}
 	bucket := now.Unix() / 3600
