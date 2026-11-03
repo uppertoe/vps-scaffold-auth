@@ -92,6 +92,10 @@ type Config struct {
 	SessionTTL         time.Duration
 	SessionRenew       time.Duration
 	SessionRememberTTL time.Duration // "remember me" lifetime (>= SessionTTL)
+	// SessionMaxAge is the longest a session lasts from sign-in, however
+	// often it renews (SESSION_MAX_AGE). Default: the longer of
+	// SESSION_REMEMBER_TTL and seven days.
+	SessionMaxAge time.Duration
 
 	// DataEncryptionKey, if set (32 bytes), encrypts at-rest secrets; otherwise
 	// the key is derived from SessionSecret. Decoded from a hex env value.
@@ -225,6 +229,13 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.SessionRememberTTL, err = getdur("SESSION_REMEMBER_TTL", 24*time.Hour); err != nil {
+		return nil, err
+	}
+	defaultMaxAge := 7 * 24 * time.Hour
+	if c.SessionRememberTTL > defaultMaxAge {
+		defaultMaxAge = c.SessionRememberTTL
+	}
+	if c.SessionMaxAge, err = getdur("SESSION_MAX_AGE", defaultMaxAge); err != nil {
 		return nil, err
 	}
 	if c.BreakGlassSessionTTL, err = getdur("BREAKGLASS_SESSION_TTL", 8*time.Hour); err != nil {
@@ -386,10 +397,12 @@ func Load() (*Config, error) {
 
 func (c *Config) validate() error {
 	if len(c.SessionSecret) < 32 {
-		return fmt.Errorf("SESSION_SECRET must be at least 32 bytes (got %d)", len(c.SessionSecret))
+		return fmt.Errorf("SESSION_SECRET must be at least 32 bytes (got %d); generate one with: openssl rand -hex 32", len(c.SessionSecret))
 	}
 	// Length alone doesn't imply entropy: a 32-char run like "aaaa…a" passes the
 	// check above but is trivially guessable. Require a spread of distinct bytes.
+	// This catches a repeated or typed string; it is not a test of randomness,
+	// and a secret must come from a generator (openssl rand -hex 32).
 	// A real secret (openssl rand -hex 32 → 16 distinct hex symbols; base64/raw →
 	// far more) clears this easily; only degenerate/repeated strings fail.
 	if n := distinctBytes(c.SessionSecret); n < 10 {
@@ -461,6 +474,9 @@ func (c *Config) validate() error {
 	}
 	if c.SessionRememberTTL < c.SessionTTL {
 		return fmt.Errorf("SESSION_REMEMBER_TTL (%s) must be >= SESSION_TTL (%s)", c.SessionRememberTTL, c.SessionTTL)
+	}
+	if c.SessionMaxAge < c.SessionRememberTTL {
+		return fmt.Errorf("SESSION_MAX_AGE (%s) must be >= SESSION_REMEMBER_TTL (%s), or a remembered session ends before the time it promised", c.SessionMaxAge, c.SessionRememberTTL)
 	}
 	if c.SessionRenew >= c.SessionTTL {
 		return fmt.Errorf("SESSION_RENEW_AFTER (%s) must be less than SESSION_TTL (%s), or a session expires before it can slide-renew", c.SessionRenew, c.SessionTTL)

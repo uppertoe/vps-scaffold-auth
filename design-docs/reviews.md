@@ -52,4 +52,6 @@ the page that describes it.
   cannot complete a sign-in.
 - One administrator can act as another, because the person who issues a
   second-factor secret sees it once.
-- A stolen session works until it expires or the person's listing is removed.
+- A stolen session works until it expires, the person's listing is removed,
+  or the person or an administrator signs them out on every device. One
+  device's session cannot be ended on its own.

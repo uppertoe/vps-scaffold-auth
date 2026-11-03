@@ -41,6 +41,20 @@ services:
       start_period: 10s
     # NOTE: no published ports — only Caddy may reach the gateway. Never expose
     # this service's /verify (or a protected app) directly to the internet.
+    #
+    # The members endpoint (MEMBER_READERS, port 8081) is never published and
+    # never reached over the caddy network either. An app that reads group
+    # members joins the gateway on a network of its own, which only the two of
+    # them share; the scaffold's route renderer generates it, as below, from a
+    # "# scaffold-members:" marker in the app's Caddy snippet:
+    #
+    #   networks:
+    #     - caddy
+    #     - teaching-cases_members
+    #
+    #   networks:
+    #     teaching-cases_members:
+    #       internal: true
 
 volumes:
   auth_data:

@@ -52,6 +52,7 @@ const (
 	AuthEventPasskey       = "passkey"
 	AuthEventPasskeyAdd    = "passkey_add"
 	AuthEventPasskeyRemove = "passkey_remove"
+	AuthEventSessionsEnd   = "sessions_end" // signed out on every device
 )
 
 // Human-login audit event outcomes.
@@ -90,6 +91,7 @@ const (
 	AdminActionGroupKeep          = "group_keep_members"
 	AdminActionTOTPGenerate       = "totp_generate"
 	AdminActionTOTPRemove         = "totp_remove"
+	AdminActionSessionsEnd        = "sessions_end"
 	AdminActionSettingsUpdate     = "settings_update"
 	AdminActionBrandingUpdate     = "branding_update"
 	AdminActionCodeBranding       = "break_glass_branding"
@@ -497,6 +499,11 @@ type Store interface {
 	// SummarisePeople folds the rows matching f into one row per person,
 	// with their sites and kinds of session, newest last visit first.
 	SummarisePeople(ctx context.Context, f AccessFilter, dayOffset int) ([]AccessSummary, error)
+	// EndSessionsBefore ends every session for key (an address, or
+	// "card:<id>") that began at or before at.
+	EndSessionsBefore(ctx context.Context, key string, at time.Time) error
+	// ListSessionCutoffs returns every cutoff, Unix seconds by key.
+	ListSessionCutoffs(ctx context.Context) (map[string]int64, error)
 	// GroupMembersResolved returns the addresses group admits, through its
 	// includes too; exists is false for a group that does not exist.
 	GroupMembersResolved(ctx context.Context, group string) (members []string, exists bool, err error)

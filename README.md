@@ -44,7 +44,8 @@ app](#open-registration-for-one-app)) followed by any DB-managed groups the user
 belongs to (e.g. `user,whitelisted`). The role is always present, so existing role-equality
 matchers keep working — but matchers that want the richer groups should test for
 membership in the list. The group set is computed at login and re-computed when a
-session renews, so membership changes take effect within `SESSION_RENEW_AFTER`.
+session renews, and at a session's next request after any membership change, so a
+change (an addition or a removal) takes effect at the person's next request.
 
 Sessions are **stateless signed cookies** — no session store. Persisted state
 (single-use OTP codes, admin TOTP secrets, DB-managed groups, and break-glass
@@ -420,13 +421,30 @@ session for every app on the domain. An app's "Sign out" link may add
 carried through the confirmation form, and handed to the login page, so the
 person returns to that app's sign-in rather than the bare login page.
 
+The confirmation page also offers **"Sign out on every device"**, which ends
+every session the person has, here and elsewhere, including one someone else
+may hold. An administrator can do the same for anyone from that person's view of
+the Access log. A session also ends early when:
+
+- the person's administrator authenticator is replaced or removed;
+- the passkey it was started with is removed;
+- the break-glass card that granted it is revoked or re-minted;
+- `SESSION_MAX_AGE` has passed since the person signed in (default: the longer
+  of `SESSION_REMEMBER_TTL` and 7 days; it may not be shorter than
+  `SESSION_REMEMBER_TTL`), however often the session has renewed.
+
+Sessions are still signed cookies. The gateway keeps, per person, per passkey and
+per card, only the time before which every session has ended, in SQLite and in
+memory, and checks it on every request. This assumes one gateway process per
+database, as the SQLite store already does.
+
 ### Staying signed in
 
 The login page has a **"Keep me signed in"** checkbox. Unchecked, a session
 lasts `SESSION_TTL` (default 2h); checked, it lasts `SESSION_REMEMBER_TTL`
-(default 24h). Both are still stateless cookies, and both slide on activity
-(renewing every `SESSION_RENEW_AFTER`, default 1h, which is also where policy
-revocation and group changes take effect). The renewal is issued by `/verify`
+(default 24h). Both slide on activity (renewing every `SESSION_RENEW_AFTER`,
+default 1h, which is also where policy revocation takes effect), up to
+`SESSION_MAX_AGE` from sign-in. The renewal is issued by `/verify`
 and carried to the browser by the guard's auth gate; a hand-rolled
 `forward_auth` would drop it (see the note under "Protecting an app").
 
@@ -502,9 +520,9 @@ still reach an app during a time-critical event (e.g. a code stroke).
 - The granted session is **short-lived** (`BREAKGLASS_SESSION_TTL`, default 8h,
   overridable on the admin Settings page) and is **never renewed**, so it always
   expires at that absolute timeout.
-- Codes can be **revoked** (blocks future scans immediately; sessions already
-  granted lapse on their own short timeout) and **re-minted** (issues a fresh
-  token, invalidating every already-printed card for that location).
+- Codes can be **revoked** (blocks future scans and ends the sessions the card
+  granted, immediately) and **re-minted** (issues a fresh token, invalidating
+  every already-printed card for that location and ending its sessions).
 - Each code has a printable **PDF** (with the QR), downloadable from its detail
   page, for lamination and placement. The card's title, body, instructions, card
   logo, and an optional accent glyph are editable on the admin **Branding** page
@@ -602,13 +620,15 @@ as a second address.
   Admin state-changing actions require a signed CSRF token.
 - Reversible secrets (break-glass tokens, admin TOTP seeds) are encrypted at
   rest with AES-256-GCM; a stolen `auth.db` is inert without the key.
-- The session cookie is stateless, so an *individual* session can't be revoked
-  before expiry — keep `SESSION_TTL` moderate. However, **policy revocation is
-  enforced at renewal**: a principal removed from the admin list or a de-listed
-  domain is denied (and their cookie cleared) at the next `/verify` past
-  `SESSION_RENEW_AFTER`, and group/role changes are recomputed there too.
-  Break-glass sessions use a short, non-renewable TTL so revoking a code bounds
-  exposure tightly, and are never accepted by the admin UI.
+- The session cookie is signed, not stored, so a single device's session can't be
+  ended on its own; **"Sign out on every device"** ends all of a person's
+  sessions at their next request (see "Signing out"), and no session outlives
+  `SESSION_MAX_AGE`. **Policy revocation is enforced at renewal**: a principal
+  removed from the admin list or a de-listed domain is denied (and their cookie
+  cleared) at the next `/verify` past `SESSION_RENEW_AFTER`; group changes take
+  effect at the next request. Break-glass sessions use a short, non-renewable
+  TTL, end when their card is revoked or re-minted, and are never accepted by the
+  admin UI.
 - Break-glass target groups and DB group names cannot be the reserved roles
   `admin`/`user`/`guest`, so emergency access can never silently confer the admin
   tier, and no group can make a member of staff look like a guest. A card cannot

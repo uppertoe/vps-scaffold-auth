@@ -84,10 +84,10 @@ before granting anything.
 
 ## Withdrawing a card
 
-An administrator can revoke a card, which refuses every later scan at once.
-Sessions already granted run until their short lifetime ends. An
-administrator can also reissue a card with a new code, which makes every
-printed copy of the old card useless. A scan of a revoked or unknown card
+An administrator can revoke a card, which refuses every later scan at once and
+ends the sessions the card has granted. An administrator can also reissue a
+card with a new code, which makes every printed copy of the old card useless
+and ends its sessions in the same way. A scan of a revoked or unknown card
 shows the same neutral page, and a scan of a revoked card is still recorded.
 
 ## The printed card

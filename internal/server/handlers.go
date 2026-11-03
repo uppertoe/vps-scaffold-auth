@@ -65,7 +65,7 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 	// id.Kind is passed through, so a guest stays a guest across renewals (and
 	// so stays confined to guests=allow routes). The passkey and the time of
 	// sign-in pass through too.
-	grant := session.Grant{Kind: id.Kind, TOTP: id.TOTP, PK: id.PK, Auth: id.Auth}
+	grant := session.Grant{Kind: id.Kind, TOTP: id.TOTP, PK: id.PK, Auth: id.Auth, Card: id.Card}
 	if grant.Auth == 0 {
 		// A session from before the sign-in time was recorded. Its sign-in
 		// time is unknown, so it is recorded as long ago, never as now: a
@@ -105,7 +105,7 @@ func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups st
 // user is redirected to the login page.
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
-	if id, ok := s.sessions.ReadSession(r, now); ok {
+	if id, ok := s.readSession(r, now); ok {
 		// Fail closed on a kind this build does not know. The kind is inside the
 		// signed envelope, so only this service can mint one, but a cookie left by
 		// a newer build (a rollback, or two versions sharing SESSION_SECRET) must
@@ -118,7 +118,10 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		renewed := false
-		if s.sessions.NeedsRenew(id, now) {
+		// A session is renewed when it is due, or at once when membership has
+		// changed since its groups were worked out, so a person removed from
+		// a group loses it at their next request.
+		if s.sessions.NeedsRenew(id, now) || s.groupsStale(id) {
 			if !s.renewSession(w, r, id, now) {
 				return
 			}
@@ -295,7 +298,7 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 		LoginURL: s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd),
 	}
 	normalSession := false
-	if id, ok := s.sessions.ReadSession(r, now); ok {
+	if id, ok := s.readSession(r, now); ok {
 		switch id.Kind {
 		case session.KindBreakGlass:
 			data.BreakGlass = true
@@ -474,7 +477,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if _, ok := s.sessions.ReadSession(r, s.now()); ok {
+	if _, ok := s.readSession(r, s.now()); ok {
 		http.Redirect(w, r, "/welcome", http.StatusFound)
 		return
 	}
@@ -721,19 +724,60 @@ func (s *Server) sendCode(r *http.Request, emailAddr string, now time.Time) erro
 	if err := s.store.SaveCode(r.Context(), emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL)); err != nil {
 		return err
 	}
+	s.sendMail("code to "+emailAddr, func(ctx context.Context) error {
+		// The message is built here, not before the response: building it
+		// reads branding from the store, and a read that only the permitted
+		// path performed would be a (small) timing difference from the decoy
+		// path.
+		return s.sender.Send(ctx, s.buildCodeEmailAt(ctx, emailAddr, code, now))
+	})
+	return nil
+}
+
+// cardGeneration names a card's current code without revealing it: a re-mint
+// changes it. It is a digest of the stored hash, cut short, since it travels
+// in the offer cookie.
+func cardGeneration(code store.BreakGlassCode) string {
+	h := sha256.Sum256([]byte("offer-gen\x00" + code.TokenHash))
+	return hex.EncodeToString(h[:8])
+}
+
+// maxMailSends bounds the emails the gateway sends at once. The rate limits
+// slow any one address or network, but nothing else bounds how many sends a
+// flood from many networks starts; each holds a goroutine and a connection
+// for up to 20 seconds.
+const maxMailSends = 16
+
+// sendMail sends an email on a detached goroutine, so the request that asked
+// for it is answered without waiting. When maxMailSends are already under
+// way, this one is not sent and the refusal is logged: the person can ask
+// again, and the gateway stays up for everyone else.
+func (s *Server) sendMail(what string, send func(ctx context.Context) error) {
+	s.sendMailVia(s.mailSlots, what, send)
+}
+
+// sendNotice sends a security notice (a passkey added) through slots of its
+// own, so a flood of sign-in codes cannot crowd it out.
+func (s *Server) sendNotice(what string, send func(ctx context.Context) error) {
+	s.sendMailVia(s.noticeSlots, what, send)
+}
+
+func (s *Server) sendMailVia(slots chan struct{}, what string, send func(ctx context.Context) error) {
+	select {
+	case slots <- struct{}{}:
+	default:
+		log.Printf("send %s: not sent, %d emails of this kind are already being sent", what, cap(slots))
+		return
+	}
 	go func() {
-		// Detached context: the originating request is already answered. The
-		// message is built here too, not before the response: building it reads
-		// branding from the store, and a read that only the permitted path
-		// performed would be a (small) timing difference from the decoy path.
+		defer func() { <-slots }()
+		// Detached context: the originating request is already answered.
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		msg := s.buildCodeEmailAt(ctx, emailAddr, code, now)
-		if err := s.sender.Send(ctx, msg); err != nil {
-			log.Printf("send code to %s: %v", emailAddr, err)
+		if err := send(ctx); err != nil {
+			log.Printf("send %s: %v", what, err)
 		}
 	}()
-	return nil
 }
 
 // storeDecoyCode persists an unguessable, never-emailed code for an address we
@@ -819,7 +863,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		// race, retry on a slow app load): the code is consumed and the state
 		// cleared, but the request now carries the freshly issued session. Don't
 		// bounce an already-authenticated user back to /login — send them onward.
-		if _, ok := s.sessions.ReadSession(r, now); ok {
+		if _, ok := s.readSession(r, now); ok {
 			http.Redirect(w, r, s.loginRedirect(postedRD), http.StatusFound)
 			return
 		}
@@ -942,7 +986,7 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		// consumed the pending state and issued the session, so a re-tap (or
 		// autofill retry) finds no pending but a valid session. Forward the
 		// already-authenticated user on instead of bouncing them to /login.
-		if _, ok := s.sessions.ReadSession(r, now); ok {
+		if _, ok := s.readSession(r, now); ok {
 			http.Redirect(w, r, s.loginRedirect(postedRD), http.StatusFound)
 			return
 		}
@@ -1078,7 +1122,7 @@ func (s *Server) loginRedirect(rd string) string {
 // DEFAULT_REDIRECT could. It offers sign-out and, when configured, a "Continue"
 // link to the operator's default destination.
 func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.sessions.ReadSession(r, s.now())
+	id, ok := s.readSession(r, s.now())
 	if !ok {
 		http.Redirect(w, r, s.cfg.PublicURL+"/login", http.StatusFound)
 		return
@@ -1283,7 +1327,7 @@ func (s *Server) logoutURL(rd string) string {
 // another goes straight back to where they were.
 func (s *Server) handleLogoutConfirm(w http.ResponseWriter, r *http.Request) {
 	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, "")
-	id, ok := s.sessions.ReadSession(r, s.now())
+	id, ok := s.readSession(r, s.now())
 	if !ok {
 		http.Redirect(w, r, s.loginURL(rd), http.StatusFound)
 		return
@@ -1306,6 +1350,21 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rd := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
+	// "Sign out on every device" ends every session this person has, here
+	// and on any other device, including one someone else may hold. A
+	// break-glass session belongs to a card, not a person, and only signs
+	// out here.
+	if r.PostFormValue("everywhere") == "1" {
+		now := s.now()
+		if id, ok := s.readSession(r, now); ok && id.Kind != session.KindBreakGlass {
+			if err := s.endSessions(r.Context(), id.Email, now); err != nil {
+				log.Printf("sign out everywhere for %s: %v", id.Email, err)
+				s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+				return
+			}
+			s.recordAuth(r, id.Email, store.AuthEventSessionsEnd, store.AuthOutcomeOK)
+		}
+	}
 	s.sessions.ClearSession(w)
 	// A pending admin notice belongs to the person signing out; on a shared
 	// browser the next admin must not see it.
@@ -1370,9 +1429,9 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	// fresh grant. A guest session is treated the same way: the denial page never
 	// offers a guest the one-tap grant (see handleDenied), so deferring would
 	// strand them, and a guest login is cheap to redo.
-	if id, ok := s.sessions.ReadSession(r, now); ok && id.Kind == "" {
+	if id, ok := s.readSession(r, now); ok && id.Kind == "" {
 		rd := authz.SafeRedirect(code.Redirect, s.cfg.Domain, s.cfg.BreakGlassRedirect)
-		if err := s.sessions.SetOffer(w, session.Offer{CodeID: code.ID, Label: code.Label}, s.cfg.OTPTTL, now); err != nil {
+		if err := s.sessions.SetOffer(w, session.Offer{CodeID: code.ID, Label: code.Label, Gen: cardGeneration(code)}, s.cfg.OTPTTL, now); err != nil {
 			// Non-fatal: fall through to a normal grant rather than fail the scan.
 			log.Printf("break-glass set offer: %v", err)
 		} else {
@@ -1425,7 +1484,7 @@ func (s *Server) grantBreakGlass(w http.ResponseWriter, r *http.Request, code st
 
 	groups := authz.BuildGroups(code.TargetGroup, nil)
 	principal := "breakglass:" + code.Label
-	if err := s.sessions.IssueSessionTTL(w, principal, groups, session.KindBreakGlass, false, ttl, now); err != nil {
+	if err := s.sessions.IssueSessionGrant(w, principal, groups, session.Grant{Kind: session.KindBreakGlass, Card: code.ID}, ttl, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}
@@ -1444,10 +1503,9 @@ func (s *Server) grantBreakGlass(w http.ResponseWriter, r *http.Request, code st
 // cross-origin) is the real defense; without it a malicious sibling could force a
 // session downgrade + a spoofed "granted" audit row against a signed-in user. The
 // code id from the offer is re-looked-up and re-checked active, so a card revoked
-// between scan and tap grants nothing. A card RE-MINTED (token rotated, still
-// active) in that window still activates — re-mint keeps the card live, so
-// honouring an in-flight offer for the same scope is intended; only revoke cuts a
-// pending offer off.
+// between scan and tap grants nothing, and neither does a card RE-MINTED in that
+// window: the offer names the code it was made from (cardGeneration), and a
+// re-mint ends the card's sessions, so it ends a pending offer too.
 func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	ip := clientIP(r)
@@ -1484,7 +1542,7 @@ func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request
 	// session-less browser, into which a same-site sibling holding a card token
 	// could otherwise force emergency access (and a spoofed grant audit row). A
 	// session-less user should re-scan the physical code, which grants directly.
-	if id, ok := s.sessions.ReadSession(r, now); !ok || id.Kind != "" {
+	if id, ok := s.readSession(r, now); !ok || id.Kind != "" {
 		s.render(w, http.StatusForbidden, "message", pageData{
 			Title:   "Please scan the code again",
 			Message: "Your sign-in is no longer active. Scan the emergency code again to get access.",
@@ -1497,8 +1555,10 @@ func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}
-	if !ok || code.Status != store.BreakGlassActive {
-		log.Printf("break-glass activate denied (inactive/unknown code %d) from %s", offer.CodeID, ip)
+	// A re-mint replaces the card's code and ends its sessions, so an offer
+	// made from the old code is refused like a revoked card.
+	if !ok || code.Status != store.BreakGlassActive || offer.Gen != cardGeneration(code) {
+		log.Printf("break-glass activate denied (inactive, unknown or re-minted code %d) from %s", offer.CodeID, ip)
 		s.render(w, http.StatusNotFound, "message", pageData{
 			Title:   "Access code not available",
 			Message: "This emergency access code is not active. Please contact an administrator.",

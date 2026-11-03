@@ -56,6 +56,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/totp/generate", s.handleAdminTOTPGenerate)
 	mux.HandleFunc("POST /admin/totp/remove", s.handleAdminTOTPRemove)
 	mux.HandleFunc("POST /admin/passkeys/remove", s.handleAdminRemovePasskeys)
+	mux.HandleFunc("POST /admin/sessions/end", s.handleAdminEndSessions)
 }
 
 // --- Admin two-factor provisioning ---
@@ -94,9 +95,22 @@ func (s *Server) handleAdminTOTPGenerate(w http.ResponseWriter, r *http.Request)
 		s.adminError(w, r)
 		return
 	}
+	_, replacing, err := s.store.GetTOTPSecret(r.Context(), emailAddr)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
 	if err := s.setTOTPSecret(r.Context(), emailAddr, en.Secret); err != nil {
 		s.adminError(w, r)
 		return
+	}
+	// A secret is replaced when the old authenticator is lost or may be in
+	// someone else's hands: every session it passed ends now.
+	if replacing {
+		if err := s.endSessions(r.Context(), emailAddr, s.now()); err != nil {
+			s.adminError(w, r)
+			return
+		}
 	}
 	s.auditAdmin(r, store.AdminActionTOTPGenerate, emailAddr, "")
 	// Render (not redirect) so the secret appears once and lands in no URL or
@@ -120,8 +134,33 @@ func (s *Server) handleAdminTOTPRemove(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
+	// The authenticator may be lost or in someone else's hands: every
+	// session it passed ends now.
+	if err := s.endSessions(r.Context(), emailAddr, s.now()); err != nil {
+		s.adminError(w, r)
+		return
+	}
 	s.auditAdmin(r, store.AdminActionTOTPRemove, emailAddr, "")
 	http.Redirect(w, r, "/admin/totp", http.StatusFound)
+}
+
+// handleAdminEndSessions signs a person out on every device: every session
+// they have, wherever it is, ends at its next request.
+func (s *Server) handleAdminEndSessions(w http.ResponseWriter, r *http.Request) {
+	if !s.checkCSRF(w, r) {
+		return
+	}
+	emailAddr := normalizeEmail(r.PostFormValue("email"))
+	if !plainAddress(emailAddr) {
+		http.Redirect(w, r, "/admin/access", http.StatusFound)
+		return
+	}
+	if err := s.endSessions(r.Context(), emailAddr, s.now()); err != nil {
+		s.adminError(w, r)
+		return
+	}
+	s.auditAdmin(r, store.AdminActionSessionsEnd, emailAddr, "")
+	http.Redirect(w, r, "/admin/access?email="+url.QueryEscape(emailAddr)+"&sessions_ended=1", http.StatusFound)
 }
 
 // totpAdminViews reports each configured admin and whether a secret is stored.
@@ -592,7 +631,7 @@ func (s *Server) handleAdminBrandingImage(w http.ResponseWriter, r *http.Request
 // satisfied at login. Non-admins are sent to the login flow.
 func (s *Server) requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := s.sessions.ReadSession(r, s.now())
+		id, ok := s.readSession(r, s.now())
 		// A break-glass or guest session must never reach the admin UI, even if
 		// its groups somehow include "admin": the admin tier requires a real
 		// login (and TOTP when enabled), not a bearer QR scan or a stranger's
@@ -638,6 +677,9 @@ func (s *Server) checkCSRF(w http.ResponseWriter, r *http.Request) bool {
 // Best-effort: a write failure is logged but does not undo the action that has
 // already happened. Call it AFTER the mutation succeeds.
 func (s *Server) auditAdmin(r *http.Request, action, target, detail string) {
+	// The raw read, not readSession: requireAdmin has already admitted this
+	// request, and an administrator who has just ended their own sessions
+	// (replacing their authenticator, say) must still be named as the actor.
 	actor := ""
 	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
 		actor = id.Email
@@ -967,7 +1009,7 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 		s.adminError(w, r)
 		return
 	}
-	s.groupRecheck.forgetAll()
+	s.markGroupsChanged(s.now())
 	s.auditAdmin(r, store.AdminActionGroupDelete, name, "")
 	s.redirectDone(w, r, "/admin/groups", "group-deleted", "")
 }
@@ -1052,7 +1094,7 @@ func (s *Server) handleAdminRemoveMember(w http.ResponseWriter, r *http.Request)
 		s.adminError(w, r)
 		return
 	}
-	s.groupRecheck.forgetAll()
+	s.markGroupsChanged(s.now())
 	s.auditAdmin(r, store.AdminActionGroupRemoveMember, group, emailAddr)
 	s.redirectDone(w, r, "/admin/groups", "member-removed", group)
 }
@@ -1303,6 +1345,11 @@ func (s *Server) handleAdminBreakRevoke(w http.ResponseWriter, r *http.Request) 
 		s.adminError(w, r)
 		return
 	}
+	// Every session the card has granted ends with it.
+	if err := s.endSessions(r.Context(), cardKey(id), s.now()); err != nil {
+		s.adminError(w, r)
+		return
+	}
 	s.auditAdmin(r, store.AdminActionBreakRevoke, "code#"+strconv.FormatInt(id, 10), "")
 	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-revoked", "")
 }
@@ -1322,6 +1369,11 @@ func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.store.RemintBreakGlassCode(r.Context(), id, tokenEnc, tokenHash); err != nil {
+		s.adminError(w, r)
+		return
+	}
+	// The old card stops working, and so do the sessions it granted.
+	if err := s.endSessions(r.Context(), cardKey(id), s.now()); err != nil {
 		s.adminError(w, r)
 		return
 	}

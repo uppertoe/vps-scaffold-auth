@@ -276,7 +276,7 @@ func (s *Server) offerPasskey(w http.ResponseWriter, r *http.Request, email, rd 
 // passkeySession reads the session of a person who may manage passkeys: a
 // normal sign-in, staff or administrator, with no second factor owed.
 func (s *Server) passkeySession(r *http.Request) (*session.Identity, string, bool) {
-	id, ok := s.sessions.ReadSession(r, s.now())
+	id, ok := s.readSession(r, s.now())
 	if !ok || id.Kind != "" {
 		return nil, "", false
 	}
@@ -673,6 +673,10 @@ func (s *Server) handlePasskeyRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if removed {
+		// The sessions the passkey started end now, not at their renewal.
+		if err := s.endSessions(r.Context(), passkeyKey(pid), s.now()); err != nil {
+			log.Printf("end sessions of passkey %d: %v", pid, err)
+		}
 		s.recordAuth(r, id.Email, store.AuthEventPasskeyRemove, store.AuthOutcomeOK)
 	}
 	http.Redirect(w, r, s.passkeysURL()+"?removed=1", http.StatusFound)
@@ -684,10 +688,24 @@ func (s *Server) handleAdminRemovePasskeys(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	emailAddr := normalizeEmail(r.PostFormValue("email"))
+	keys, err := s.store.ListPasskeys(r.Context(), emailAddr)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
 	n, err := s.store.DeletePasskeys(r.Context(), emailAddr)
 	if err != nil {
 		s.adminError(w, r)
 		return
+	}
+	// The sessions those passkeys started end now, not at their renewal.
+	// A passkey added between the list and the delete was deleted too, and
+	// its sessions still end at their renewal (passkeyStillValid).
+	for _, k := range keys {
+		if err := s.endSessions(r.Context(), passkeyKey(k.ID), s.now()); err != nil {
+			s.adminError(w, r)
+			return
+		}
 	}
 	s.auditAdmin(r, store.AdminActionPasskeysRemove, emailAddr, strconv.Itoa(n))
 	http.Redirect(w, r, "/admin/access?email="+url.QueryEscape(emailAddr)+"&passkeys_removed=1", http.StatusFound)
@@ -779,13 +797,7 @@ func renewWithin(d time.Duration) string {
 // sign-in code, so mail delivery never delays the page.
 func (s *Server) notifyPasskeyAdded(r *http.Request, to string, now time.Time) {
 	msg := s.passkeyAddedEmail(to, passkeyDevice(r.UserAgent()), now)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		if err := s.sender.Send(ctx, msg); err != nil {
-			log.Printf("send passkey notice to %s: %v", to, err)
-		}
-	}()
+	s.sendNotice("passkey notice to "+to, func(ctx context.Context) error { return s.sender.Send(ctx, msg) })
 }
 
 // passkeyAddedData is the view model for the passkey notice. The template

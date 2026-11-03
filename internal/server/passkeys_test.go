@@ -219,8 +219,8 @@ func TestPasskeysOffByDefault(t *testing.T) {
 }
 
 // Removing a passkey ends the sessions it started at their next renewal,
-// whether the owner or an administrator removes it. Sessions started with an
-// email code are not affected.
+// whether the owner or an administrator removes it, at the session's next
+// request. Sessions started with an email code are not affected.
 func TestRemovingAPasskeyEndsItsSessions(t *testing.T) {
 	for _, by := range []string{"owner", "administrator"} {
 		t.Run(by, func(t *testing.T) {
@@ -258,8 +258,9 @@ func TestRemovingAPasskeyEndsItsSessions(t *testing.T) {
 					t.Fatalf("admin remove: %d", rec.Code)
 				}
 			}
-			if verifyAny(viaPasskey).Code != http.StatusOK {
-				t.Fatal("the session ended before its renewal")
+			// The passkey's session ends at once, not at its renewal.
+			if rec := verifyAny(viaPasskey); rec.Code != http.StatusFound {
+				t.Fatalf("a removed passkey's session still works: %d", rec.Code)
 			}
 			srv.now = func() time.Time { return start.Add(31 * time.Minute) }
 			if rec := verifyAny(viaPasskey); rec.Code != http.StatusFound {

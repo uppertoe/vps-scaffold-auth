@@ -87,11 +87,14 @@ hours and thirty days.
 
 A session in use renews itself, every hour by default and every six hours on
 the department's server. At each renewal the gateway checks the person against
-the current rules and recalculates their groups. A person whose domain or
-admin listing has been removed is signed out there, and a change to their
-groups takes effect from that point. Renewal checks the rules, not the
-mailbox, which is why the [front page](_index.md) lists an absolute limit
-among the open decisions.
+the current rules, and a person whose domain or admin listing has been removed
+is signed out there. A change to a person's groups takes effect at their next
+request, without waiting for a renewal.
+
+However often it renews, no session lasts longer than a fixed time from the
+moment the person signed in: seven days by default, or the "Keep me signed in"
+lifetime if that is longer. On the department's server that is thirty days.
+The person then signs in again with an emailed code or a passkey.
 
 A guest is never given the longer lifetime, and a break-glass session never
 renews. [Who can reach what](who-can-reach-what.md) and
@@ -101,6 +104,14 @@ renews. [Who can reach what](who-can-reach-what.md) and
 
 Signing out ends the session for every tool on the domain. The gateway asks
 for confirmation first, so a link alone cannot sign anyone out.
+
+The confirmation page also offers to sign out on every device. That ends every
+session the person has, on this device and any other, including one someone
+else may be using. An administrator can do the same for anyone from that
+person's page in the access log, and the action is recorded in the admin
+audit. A session also ends at its next request when the person's administrator
+authenticator is replaced or removed, or when the passkey it was started with
+is removed.
 
 ## Where a person lands
 

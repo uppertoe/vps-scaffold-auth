@@ -3,5 +3,7 @@
 <h1>Sign out?</h1>
 <p class="sub">{{if .Identity}}You're signed in as <strong>{{.Identity}}</strong>. {{end}}Sign out on this device?</p>
 <form method="post" action="/logout">{{if .Redirect}}<input type="hidden" name="rd" value="{{.Redirect}}">{{end}}<button type="submit">Sign out</button></form>
+{{if not .BreakGlass}}<form method="post" action="/logout" class="secondary">{{if .Redirect}}<input type="hidden" name="rd" value="{{.Redirect}}">{{end}}<input type="hidden" name="everywhere" value="1"><button type="submit" class="secondary">Sign out on every device</button></form>
+<p class="hint">If you have lost a device, or think someone else is signed in as you, sign out on every device.</p>{{end}}
 <div class="links"><a href="/welcome">Cancel</a></div>
 {{end}}

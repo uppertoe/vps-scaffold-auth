@@ -48,18 +48,6 @@ each review changed.
 
 These questions are listed here so that there is one list.
 
-- Whether a session should have an absolute limit. A session renews itself
-  while it is in use, and renewal checks the person's email domain but not
-  their mailbox. A person who leaves the department therefore keeps a working
-  session on any device they signed in on, for as long as they keep using it.
-  On the department's server, where "remember me" lasts thirty days, that
-  period has no end.
-- Whether one person's session should be revocable on its own. Sessions are
-  not recorded anywhere, so the only ways to end one early are to remove the
-  person's domain or admin listing, which takes effect at their next renewal,
-  or to sign everyone out. Passkeys, once switched on, change this for
-  sessions started with a passkey: removing the passkey ends them at their
-  next renewal.
 - Whether any tool should move to a separate domain. Every tool on the
   department's domain can set the shared session cookie in a visitor's
   browser, so a compromised tool could sign a visitor in as someone else. The
