@@ -75,7 +75,19 @@ func parseMemberReaders(raw string) ([]MemberReader, error) {
 // sameListener reports whether two listen addresses would share a port, so
 // the members endpoint can never be served where Caddy proxies.
 func sameListener(a, b string) bool {
-	_, pa, errA := net.SplitHostPort(a)
-	_, pb, errB := net.SplitHostPort(b)
-	return errA == nil && errB == nil && pa == pb
+	return listenPort(a) != 0 && listenPort(a) == listenPort(b)
+}
+
+// listenPort is the port number of a listen address (":http" is 80,
+// "08080" is 8080), or 0 if it has none.
+func listenPort(addr string) int {
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	n, err := net.LookupPort("tcp", p)
+	if err != nil {
+		return 0
+	}
+	return n
 }

@@ -6,7 +6,6 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -333,8 +332,8 @@ func Load() (*Config, error) {
 	}
 	if len(c.MemberReaders) > 0 {
 		c.MembersListenAddr = strings.TrimSpace(getenv("MEMBERS_LISTEN_ADDR", DefaultMembersListenAddr))
-		if _, _, err := net.SplitHostPort(c.MembersListenAddr); err != nil {
-			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR %q: %v", c.MembersListenAddr, err)
+		if listenPort(c.MembersListenAddr) == 0 {
+			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR %q needs a port, such as :8081", c.MembersListenAddr)
 		}
 		if sameListener(c.MembersListenAddr, c.ListenAddr) {
 			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR must use a different port from LISTEN_ADDR, which Caddy proxies")

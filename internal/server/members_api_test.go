@@ -123,11 +123,34 @@ func TestMembersEndpointRefusals(t *testing.T) {
 		}
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/groups/coordinators/members", nil)
+	req.RemoteAddr = "172.18.0.5:41000"
 	req.Header.Set("Authorization", "Bearer "+digestToken)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST = %d", rec.Code)
+	}
+	// A port published to the internet by mistake keeps the caller's public
+	// address, and is refused even with a valid token.
+	for _, from := range []string{"203.0.113.9:5000", "[2001:db8::1]:5000", "8.8.8.8:443"} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/groups/coordinators/members", nil)
+		req.RemoteAddr = from
+		req.Header.Set("Authorization", "Bearer "+digestToken)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "amy@") {
+			t.Errorf("from %s = %d %s", from, rec.Code, rec.Body)
+		}
+	}
+	for _, from := range []string{"127.0.0.1:5000", "10.0.0.4:5000", "192.168.1.2:5000", "[fd00::2]:5000"} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/groups/coordinators/members", nil)
+		req.RemoteAddr = from
+		req.Header.Set("Authorization", "Bearer "+digestToken)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("from %s = %d", from, rec.Code)
+		}
 	}
 }
 
@@ -152,14 +175,14 @@ func TestMembersReadsAreAudited(t *testing.T) {
 	}
 	membersGet(h, "/v1/groups/reviewers/members", digestToken, nil) // refused: not recorded
 	reads, err := srv.store.SummariseMemberReads(context.Background(), srv.now().Add(-time.Hour))
-	if err != nil || len(reads) != 1 || reads[0].App != "digest" || reads[0].Group != "coordinators" || reads[0].Reads != 3 {
+	if err != nil || len(reads) != 1 || reads[0].App != "digest" || reads[0].Group != "coordinators" || reads[0].Source != "172.18.0.5" || reads[0].Reads != 3 {
 		t.Fatalf("reads = %+v, %v", reads, err)
 	}
 	sender := srv.sender.(*captureSender)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 	page := c.get("/admin/access", nil).Body.String()
-	if !strings.Contains(page, "Apps that read group members") || !strings.Contains(page, `<td class="num" data-label="Reads">3</td>`) {
+	if !strings.Contains(page, "Apps that read group members") || !strings.Contains(page, `<td class="num" data-label="Reads">3</td>`) || !strings.Contains(page, `<code class="mono">172.18.0.5</code>`) {
 		t.Error("the access log does not show the reads")
 	}
 }

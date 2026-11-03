@@ -535,9 +535,11 @@ apps) and may read only the groups listed for it. The base roles (`admin`,
 
 The endpoint is served on its own port, `MEMBERS_LISTEN_ADDR` (default
 `:8081`), which Caddy never proxies, so only containers on the server's
-Docker network can reach it. The gateway refuses to start if that port is the
-one in `LISTEN_ADDR`, and refuses any request that carries forwarding
-headers.
+Docker network can reach it. Never publish this port (no `ports:` entry in
+compose). The gateway refuses to start if that port is the one in
+`LISTEN_ADDR`, answers only callers on a loopback or private address (every
+Docker network is one, and a published port keeps the caller's public
+address), and refuses any request that carries forwarding headers.
 
 ```
 GET http://auth:8081/v1/groups/{group}/members
@@ -545,17 +547,20 @@ Authorization: Bearer <token>
 
 200 {"group": "...", "members": ["a@…", "b@…"], "as_of": "2026-11-03T10:00:00Z"}
 401 no token, or a token the gateway does not know
-403 a group this app may not read, or a group that does not exist (the same answer)
+403 a group this app may not read, or a group that does not exist (the same answer),
+    or a caller outside the private network
 405 any method but GET
 429 more than 120 reads a minute from one app
 ```
 
 The members are the people the gateway applies now: the group's own members
-and, through includes, the members of every group it includes, exactly the
-people told they are in the group when they sign in. A held feed change is
-not included until it is applied, and an address the allow-list no longer
-admits is left out. Each read is recorded, one row per app, group and hour,
-and listed on the Access log under "Apps that read group members".
+and, through includes, the members of every group it includes, as
+`Remote-Groups` gives them at sign-in. A held feed change is not included
+until it is applied, and an address the allow-list does not admit is left
+out, so a guest member is never reported. Each read is recorded, one row per
+app, group, caller address and hour, and listed on the Access log under "Apps
+that read group members". A token used from a second container shows there
+as a second address.
 
 ## Security notes
 

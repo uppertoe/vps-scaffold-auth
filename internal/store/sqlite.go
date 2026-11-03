@@ -200,11 +200,12 @@ CREATE INDEX IF NOT EXISTS idx_app_access_created ON app_access(created_at);
 CREATE TABLE IF NOT EXISTS member_reads (
 	app        TEXT NOT NULL,
 	group_name TEXT NOT NULL,
+	source     TEXT NOT NULL,
 	bucket     INTEGER NOT NULL,
 	created_at INTEGER NOT NULL,
 	last_at    INTEGER NOT NULL,
 	reads      INTEGER NOT NULL DEFAULT 1,
-	UNIQUE (app, group_name, bucket)
+	UNIQUE (app, group_name, source, bucket)
 );
 CREATE INDEX IF NOT EXISTS idx_member_reads_last ON member_reads(last_at);
 CREATE TABLE IF NOT EXISTS admin_events (
@@ -1415,13 +1416,15 @@ func (s *SQLite) GroupMembersResolved(ctx context.Context, group string) (member
 	return members, true, rows.Err()
 }
 
-// RecordMemberRead notes that app read group's members, folded to one row per
-// app, group and hour with a count of reads.
-func (s *SQLite) RecordMemberRead(ctx context.Context, app, group string, at time.Time) error {
+// RecordMemberRead notes that app read group's members from source (the
+// caller's address), folded to one row per app, group, source and hour with a
+// count of reads. A token used from a second container shows as a second
+// source.
+func (s *SQLite) RecordMemberRead(ctx context.Context, app, group, source string, at time.Time) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO member_reads (app, group_name, bucket, created_at, last_at) VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(app, group_name, bucket) DO UPDATE SET reads = reads + 1, last_at = excluded.last_at`,
-		app, group, at.Unix()/3600, at.Unix(), at.Unix())
+		`INSERT INTO member_reads (app, group_name, source, bucket, created_at, last_at) VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(app, group_name, source, bucket) DO UPDATE SET reads = reads + 1, last_at = excluded.last_at`,
+		app, group, source, at.Unix()/3600, at.Unix(), at.Unix())
 	return err
 }
 
@@ -1429,9 +1432,9 @@ func (s *SQLite) RecordMemberRead(ctx context.Context, app, group string, at tim
 // newest last read first.
 func (s *SQLite) SummariseMemberReads(ctx context.Context, since time.Time) ([]MemberReadSummary, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT app, group_name, MIN(created_at), MAX(last_at), SUM(reads)
+		`SELECT app, group_name, source, MIN(created_at), MAX(last_at), SUM(reads)
 		 FROM member_reads WHERE last_at >= ?
-		 GROUP BY app, group_name ORDER BY MAX(last_at) DESC, app, group_name`, since.Unix())
+		 GROUP BY app, group_name, source ORDER BY MAX(last_at) DESC, app, group_name, source`, since.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -1440,7 +1443,7 @@ func (s *SQLite) SummariseMemberReads(ctx context.Context, since time.Time) ([]M
 	for rows.Next() {
 		var m MemberReadSummary
 		var first, last int64
-		if err := rows.Scan(&m.App, &m.Group, &first, &last, &m.Reads); err != nil {
+		if err := rows.Scan(&m.App, &m.Group, &m.Source, &first, &last, &m.Reads); err != nil {
 			return nil, err
 		}
 		m.First, m.Last = time.Unix(first, 0), time.Unix(last, 0)

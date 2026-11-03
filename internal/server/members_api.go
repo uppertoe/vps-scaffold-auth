@@ -22,8 +22,10 @@ import (
 // It is served on its own listener (MEMBERS_LISTEN_ADDR), which Caddy never
 // proxies, so only containers on the server's Docker network can reach it.
 // Each app has its own bearer token and may read only the groups listed for
-// it in MEMBER_READERS. The answer is the members the gateway applies now:
-// the same people who are told they are in the group when they sign in.
+// it in MEMBER_READERS. The answer is the members the gateway applies now,
+// through includes, less any address the allow-list does not admit: a guest
+// member is told about the group when signed in, but is never reported here
+// (the owner's choice, 2026-11-03).
 
 // memberReader is a configured app, with its token hashed for comparison.
 type memberReader struct {
@@ -80,10 +82,18 @@ func (s *Server) MembersHandler() http.Handler {
 		membersError(w, http.StatusNotFound, "not found")
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// A request that passed through a proxy did not come straight from
-		// an app on the Docker network. Caddy never proxies this port, so
-		// this only matters if someone wires it up by mistake: refuse rather
-		// than serve membership to the internet.
+		// Only a container on the server's own network may ask. A port
+		// published by mistake (compose "ports:") keeps the caller's public
+		// address through Docker's NAT, so this refuses it; the token is the
+		// boundary between containers on the network.
+		if !privateSource(r.RemoteAddr) {
+			log.Printf("members: refused a request from outside the private network (%s)", r.RemoteAddr)
+			membersError(w, http.StatusForbidden, "this endpoint answers only the server's own network")
+			return
+		}
+		// A request carrying forwarding headers went through a proxy, which
+		// no app on the network needs; refuse it as a second sign of a
+		// wiring mistake.
 		for _, h := range []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded", "X-Real-Ip"} {
 			if r.Header.Get(h) != "" {
 				log.Printf("members: refused a proxied request (%s) from %s", h, r.RemoteAddr)
@@ -146,7 +156,7 @@ func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := s.now()
-	if err := s.store.RecordMemberRead(r.Context(), reader.app, group, now); err != nil {
+	if err := s.store.RecordMemberRead(r.Context(), reader.app, group, ip, now); err != nil {
 		// The audit is part of the contract: no record, no answer.
 		log.Printf("members: recording %s reading %q: %v", reader.app, group, err)
 		membersError(w, http.StatusInternalServerError, "the members could not be read")
@@ -157,6 +167,17 @@ func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 		"members": members,
 		"as_of":   now.UTC().Format(time.RFC3339),
 	})
+}
+
+// privateSource reports whether a remote address is loopback or private
+// (RFC 1918, or an IPv6 unique local address), as every Docker network is.
+func privateSource(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
 }
 
 func membersError(w http.ResponseWriter, status int, msg string) {

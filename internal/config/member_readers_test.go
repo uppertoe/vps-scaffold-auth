@@ -48,6 +48,9 @@ func TestMemberReadersRefused(t *testing.T) {
 		"a bad group name": {"app=Staff!", map[string]string{"MEMBER_READER_TOKEN_APP": readerToken}, "may not read"},
 		"listed twice":     {"app=a app=b", map[string]string{"MEMBER_READER_TOKEN_APP": readerToken}, "listed twice"},
 		"the public port":  {"app=staff", map[string]string{"MEMBER_READER_TOKEN_APP": readerToken, "LISTEN_ADDR": ":8080", "MEMBERS_LISTEN_ADDR": "0.0.0.0:8080"}, "different port"},
+		"the port by name": {"app=staff", map[string]string{"MEMBER_READER_TOKEN_APP": readerToken, "LISTEN_ADDR": ":80", "MEMBERS_LISTEN_ADDR": ":http"}, "different port"},
+		"a padded port":    {"app=staff", map[string]string{"MEMBER_READER_TOKEN_APP": readerToken, "LISTEN_ADDR": ":8080", "MEMBERS_LISTEN_ADDR": ":08080"}, "different port"},
+		"no port":          {"app=staff", map[string]string{"MEMBER_READER_TOKEN_APP": readerToken, "MEMBERS_LISTEN_ADDR": "auth"}, "needs a port"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			setValid(t)

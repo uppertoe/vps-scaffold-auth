@@ -103,8 +103,8 @@ type accessUseView struct {
 
 // memberReadView is one app's reads of one group over the period.
 type memberReadView struct {
-	App, Group, Last string
-	Reads            int
+	App, Group, Source, Last string
+	Reads                    int
 }
 
 // accessPersonView is one person's use of every site over the period.
@@ -197,7 +197,7 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, m := range reads {
-		v.MemberReads = append(v.MemberReads, memberReadView{App: m.App, Group: m.Group, Last: s.stampMin(m.Last), Reads: m.Reads})
+		v.MemberReads = append(v.MemberReads, memberReadView{App: m.App, Group: m.Group, Source: m.Source, Last: s.stampMin(m.Last), Reads: m.Reads})
 	}
 	v.SignIns = s.foldSignIns(events)
 	// Events older than the scan were not read, so the list is incomplete.

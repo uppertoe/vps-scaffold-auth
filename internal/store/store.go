@@ -247,6 +247,7 @@ type AccessFilter struct {
 // MemberReadSummary is one app's reads of one group's members.
 type MemberReadSummary struct {
 	App, Group  string
+	Source      string // the address the reads came from
 	First, Last time.Time
 	Reads       int
 }
@@ -500,7 +501,7 @@ type Store interface {
 	// includes too; exists is false for a group that does not exist.
 	GroupMembersResolved(ctx context.Context, group string) (members []string, exists bool, err error)
 	// RecordMemberRead notes that an app read a group's members.
-	RecordMemberRead(ctx context.Context, app, group string, at time.Time) error
+	RecordMemberRead(ctx context.Context, app, group, source string, at time.Time) error
 	// SummariseMemberReads returns which apps read which groups since since.
 	SummariseMemberReads(ctx context.Context, since time.Time) ([]MemberReadSummary, error)
 	// AppAccessHosts lists the sites with an app-access row since since.
