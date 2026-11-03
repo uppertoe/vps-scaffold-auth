@@ -3,8 +3,9 @@
 A minimal **email one-time-code `forward_auth` gateway** for the
 [vps-scaffold](https://github.com/uppertoe/vps-base-template) family. It puts a
 passwordless login wall in front of any web app behind Caddy: users enter their
-email, receive a one-time code (`OTP_LENGTH` digits), type it in, and get a session — no passwords, no
-passkeys, no third-party identity provider.
+email, receive a one-time code (`OTP_LENGTH` digits), type it in, and get a session — no passwords
+and no third-party identity provider. Passkeys on phones can be switched on as a
+faster way back in (`PASSKEYS_ENABLED`; see "Passkeys" below).
 
 It runs as a normal app under `apps/auth/` in a server repo and is consumed as
 a prebuilt image from GHCR.
@@ -435,7 +436,7 @@ the Access log. A session also ends early when:
 
 Sessions are still signed cookies. The gateway keeps, per person, per passkey and
 per card, only the time before which every session has ended, in SQLite and in
-memory, and checks it on every request. This assumes one gateway process per
+memory, and checks it on every request. This needs one gateway process per
 database, as the SQLite store already does.
 
 ### Staying signed in

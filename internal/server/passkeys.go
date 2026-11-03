@@ -127,12 +127,15 @@ func isPhone(r *http.Request) bool {
 
 // challengeGuard makes each passkey challenge single-use. A challenge lives in
 // a signed cookie, so without this a captured sign-in could be replayed until
-// the cookie expired.
+// the cookie expired. Used challenges are kept in SQLite until they expire, so
+// a restart does not forget them.
 type challengeGuard struct {
+	store store.Store
+	now   func() time.Time
+
 	mu        sync.Mutex
-	seen      map[[32]byte]time.Time // challenge hash -> when it may be forgotten
 	nextSweep time.Time
-	now       func() time.Time
+	count     int // entries at the last sweep, plus those added since
 }
 
 // challengeGuardMax bounds the guard. Each entry needs a signed challenge,
@@ -141,34 +144,40 @@ type challengeGuard struct {
 // expire, and emailed codes keep working.
 const challengeGuardMax = 50000
 
-func newChallengeGuard(now func() time.Time) *challengeGuard {
-	return &challengeGuard{seen: make(map[[32]byte]time.Time), now: now}
+func newChallengeGuard(st store.Store, now func() time.Time) *challengeGuard {
+	return &challengeGuard{store: st, now: now}
 }
 
-// use reports whether the challenge is fresh, and records it.
-func (g *challengeGuard) use(ch []byte) bool {
+// use reports whether the challenge is fresh, and records it. A database
+// error refuses the ceremony: the gateway cannot tell whether the challenge
+// was used.
+func (g *challengeGuard) use(ctx context.Context, ch []byte) bool {
 	key := sha256.Sum256(ch)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
 	// Sweep at most once a minute, so a flood of entries does not make every
-	// ceremony scan the whole map.
+	// ceremony count the whole table.
 	if now.After(g.nextSweep) {
-		for k, until := range g.seen {
-			if now.After(until) {
-				delete(g.seen, k)
-			}
+		n, err := g.store.PruneChallenges(ctx, now)
+		if err != nil {
+			log.Printf("passkey challenges: %v", err)
+			return false
 		}
-		g.nextSweep = now.Add(time.Minute)
+		g.count, g.nextSweep = n, now.Add(time.Minute)
 	}
-	if until, ok := g.seen[key]; ok && !now.After(until) {
+	if g.count >= challengeGuardMax {
 		return false
 	}
-	if len(g.seen) >= challengeGuardMax {
+	fresh, err := g.store.UseChallenge(ctx, key[:], now.Add(passkeyChallengeTTL), now)
+	if err != nil {
+		log.Printf("passkey challenges: %v", err)
 		return false
 	}
-	g.seen[key] = now.Add(passkeyChallengeTTL)
-	return true
+	if fresh {
+		g.count++
+	}
+	return fresh
 }
 
 func newChallenge() ([]byte, error) {
@@ -450,7 +459,7 @@ func (s *Server) handlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ch, ok := s.sessions.ReadPasskeyChallenge(r, true, now)
-	if !ok || ch.Email != id.Email || !s.passkeyChallenges.use(ch.Challenge) {
+	if !ok || ch.Email != id.Email || !s.passkeyChallenges.use(r.Context(), ch.Challenge) {
 		s.passkeyNotAdded(w, r, id.Email, rd)
 		return
 	}
@@ -582,7 +591,7 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ch, ok := s.sessions.ReadPasskeyChallenge(r, false, now)
-	if !ok || !s.passkeyChallenges.use(ch.Challenge) {
+	if !ok || !s.passkeyChallenges.use(r.Context(), ch.Challenge) {
 		failed("")
 		return
 	}

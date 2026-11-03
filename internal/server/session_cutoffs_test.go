@@ -349,3 +349,34 @@ func TestNoticesHaveTheirOwnSlots(t *testing.T) {
 		t.Fatal("a notice waited behind sign-in codes")
 	}
 }
+
+// While every mail slot is busy, a code request saves nothing for a permitted
+// address or a decoy alike, so the person can ask again as soon as the flood
+// drains rather than waiting out a cooldown for a code never sent.
+func TestCodeRequestDuringAFloodSavesNothing(t *testing.T) {
+	srv, sender := testServer(t)
+	ctx := context.Background()
+	release := make(chan struct{})
+	for i := 0; i < maxMailSends; i++ {
+		srv.sendMail("held", func(ctx context.Context) error { <-release; return nil })
+	}
+	c := newClient(t, srv.Handler())
+	sender.reset()
+	for _, addr := range []string{"amy@example.com", "stranger@elsewhere.org"} {
+		if rec := c.postForm("/request", url.Values{"email": {addr}}); rec.Code != http.StatusOK {
+			t.Fatalf("request %s = %d", addr, rec.Code)
+		}
+		if recent, _ := srv.store.HasRecentCode(ctx, addr, srv.now()); recent {
+			t.Errorf("a code was saved for %s during the flood", addr)
+		}
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(srv.mailSlots) > 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	loginAs(t, c, sender, "amy@example.com", nil)
+	if rec := verifyAny(c); rec.Code != http.StatusOK {
+		t.Fatalf("signing in after the flood = %d", rec.Code)
+	}
+}

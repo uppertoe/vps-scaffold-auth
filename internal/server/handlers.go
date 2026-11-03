@@ -647,6 +647,13 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		recent = true
 	}
 	switch {
+	case s.mailSaturated():
+		// Every mail slot is in use: a flood. Nothing is minted or saved, for
+		// either kind of address, so the decision does not depend on the
+		// allow-list, and no send token is spent. Once the sends drain, the
+		// person's next request sends a code at once instead of waiting out a
+		// cooldown for a code that was never delivered.
+		log.Printf("request for %s: not answered with a code, %d emails are already being sent", emailAddr, maxMailSends)
 	case recent:
 		// No-op: a live code was issued within the cooldown. Don't mint, don't
 		// email, don't spend a send token. The existing code's attempt counter
@@ -755,6 +762,11 @@ const maxMailSends = 16
 func (s *Server) sendMail(what string, send func(ctx context.Context) error) {
 	s.sendMailVia(s.mailSlots, what, send)
 }
+
+// mailSaturated reports whether every sign-in mail slot is in use. It reads
+// global state only, never the address, so permitted and decoy addresses take
+// the same branch.
+func (s *Server) mailSaturated() bool { return len(s.mailSlots) >= cap(s.mailSlots) }
 
 // sendNotice sends a security notice (a passkey added) through slots of its
 // own, so a flood of sign-in codes cannot crowd it out.

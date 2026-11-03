@@ -499,6 +499,12 @@ type Store interface {
 	// SummarisePeople folds the rows matching f into one row per person,
 	// with their sites and kinds of session, newest last visit first.
 	SummarisePeople(ctx context.Context, f AccessFilter, dayOffset int) ([]AccessSummary, error)
+	// UseChallenge records a passkey challenge as used until until, and
+	// reports false if it was already used and has not expired.
+	UseChallenge(ctx context.Context, hash []byte, until, now time.Time) (bool, error)
+	// PruneChallenges deletes expired challenge entries and returns how many
+	// remain.
+	PruneChallenges(ctx context.Context, now time.Time) (int, error)
 	// EndSessionsBefore ends every session for key (an address, or
 	// "card:<id>") that began at or before at.
 	EndSessionsBefore(ctx context.Context, key string, at time.Time) error

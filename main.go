@@ -61,6 +61,16 @@ func run() error {
 			"break-glass tokens and TOTP secrets undecryptable.")
 	}
 
+	// One gateway process per database: sessions ended early, used passkey
+	// challenges and the time of the last group change are held in memory and
+	// written through, so a second process on the same database would not see
+	// the first one's changes. The lock is released when the process exits.
+	unlock, err := lockDatabase(cfg.SQLitePath)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	st, err := store.OpenSQLite(cfg.SQLitePath)
 	if err != nil {
 		return fmt.Errorf("store: %w", err)

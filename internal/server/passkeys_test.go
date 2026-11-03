@@ -510,22 +510,32 @@ func TestPasskeysWithCapitalisedPublicURL(t *testing.T) {
 	}
 }
 
-// The single-use guard forgets a challenge only after it has expired, and
-// refuses new challenges once full rather than growing without bound.
-func TestChallengeGuardExpiryAndCap(t *testing.T) {
+// The single-use guard forgets a challenge only after it has expired,
+// remembers it across a restart, and refuses new challenges once full rather
+// than growing without bound.
+func TestChallengeGuardExpiryRestartAndCap(t *testing.T) {
+	srv, _ := testServer(t)
+	ctx := context.Background()
 	now := time.Unix(1_700_000_000, 0)
-	g := newChallengeGuard(func() time.Time { return now })
-	if !g.use([]byte("a")) || g.use([]byte("a")) {
+	g := newChallengeGuard(srv.store, func() time.Time { return now })
+	if !g.use(ctx, []byte("a")) || g.use(ctx, []byte("a")) {
 		t.Fatal("a challenge was not single-use")
 	}
+	// A restart is a new guard on the same database.
+	restarted := newChallengeGuard(srv.store, func() time.Time { return now })
+	if restarted.use(ctx, []byte("a")) {
+		t.Fatal("a restart forgot a used challenge")
+	}
 	now = now.Add(passkeyChallengeTTL - time.Second)
-	if g.use([]byte("a")) {
+	if g.use(ctx, []byte("a")) {
 		t.Fatal("a challenge was reusable before it expired")
 	}
-	for i := 0; len(g.seen) < challengeGuardMax; i++ {
-		g.seen[[32]byte{byte(i), byte(i >> 8), byte(i >> 16)}] = now.Add(time.Hour)
+	now = now.Add(2 * time.Minute)
+	if !g.use(ctx, []byte("a")) {
+		t.Fatal("an expired entry was never forgotten")
 	}
-	if g.use([]byte("b")) {
+	g.count = challengeGuardMax
+	if g.use(ctx, []byte("b")) {
 		t.Fatal("a full guard accepted a new challenge")
 	}
 }
