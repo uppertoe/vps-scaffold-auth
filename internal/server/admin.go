@@ -32,6 +32,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/groups/{name}/members/confirm", s.handleAdminConfirmMembers)
 	mux.HandleFunc("POST /admin/groups/{name}/includes", s.handleAdminAddInclude)
 	mux.HandleFunc("POST /admin/groups/{name}/sync", s.handleAdminSyncGroup)
+	mux.HandleFunc("POST /admin/groups/{name}/keep", s.handleAdminKeepMembers)
 	mux.HandleFunc("POST /admin/groups/{name}/includes/delete", s.handleAdminRemoveInclude)
 	mux.HandleFunc("POST /admin/groups/{name}/members/delete", s.handleAdminRemoveMember)
 	mux.HandleFunc("GET /admin/access", s.handleAdminAccess)
@@ -916,6 +917,12 @@ func (s *Server) feedViewFor(group string, syncStates map[string]store.GroupSync
 		if fv.Pending {
 			fv.PendingAdd, fv.PendingRemove = st.PendingAddList, st.PendingRemoveList
 			fv.PendingHash = st.PendingHash
+			if s.cfg.FeedAutoApplyAfter > 0 {
+				fv.Kept = st.KeptHash != "" && st.KeptHash == st.PendingHash
+				if !fv.Kept && !st.HeldSince.IsZero() {
+					fv.AutoAt = s.stampMin(st.HeldSince.Add(s.cfg.FeedAutoApplyAfter))
+				}
+			}
 		}
 	}
 	if r, ok := s.feeds.retryFor(group); ok {

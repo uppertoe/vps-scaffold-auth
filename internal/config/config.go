@@ -73,11 +73,16 @@ type Config struct {
 	// FeedAlertURL (optional; an ntfy topic URL suits), as does every change
 	// the gateway applies without an administrator. FeedAlertToken, if set, is
 	// sent as a bearer token (an ntfy publish token for a write-only user).
-	GroupFeeds      []GroupFeed
-	FeedInterval    time.Duration
-	FeedAlertURL    string
-	FeedAlertToken  string
-	DisplayLocation *time.Location
+	GroupFeeds   []GroupFeed
+	FeedInterval time.Duration
+	// FeedAutoApplyAfter, when set (GROUP_FEED_AUTO_APPLY_AFTER), applies a
+	// held change on its own once the same change has been held this long,
+	// unless an administrator chose to keep the current members. Zero keeps
+	// every held change until an administrator accepts it.
+	FeedAutoApplyAfter time.Duration
+	FeedAlertURL       string
+	FeedAlertToken     string
+	DisplayLocation    *time.Location
 
 	SessionTTL         time.Duration
 	SessionRenew       time.Duration
@@ -317,10 +322,28 @@ func Load() (*Config, error) {
 	if c.GroupFeeds, err = parseGroupFeeds(getenv("GROUP_FEEDS", ""), c.CookieInsecure); err != nil {
 		return nil, err
 	}
+	for _, g := range strings.FieldsFunc(getenv("GROUP_FEED_ROTATING", ""), func(r rune) bool { return r == ',' || r == ' ' }) {
+		found := false
+		for i := range c.GroupFeeds {
+			if c.GroupFeeds[i].Group == g {
+				c.GroupFeeds[i].Rotating, found = true, true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("GROUP_FEED_ROTATING names %q, which is not a group in GROUP_FEEDS", g)
+		}
+	}
 	c.FeedInterval = DefaultFeedInterval
 	if v := strings.TrimSpace(getenv("GROUP_FEED_INTERVAL", "")); v != "" {
 		if c.FeedInterval, err = time.ParseDuration(v); err != nil || c.FeedInterval < 5*time.Minute {
 			return nil, fmt.Errorf("GROUP_FEED_INTERVAL must be a duration of at least 5m")
+		}
+	}
+	if v := strings.TrimSpace(getenv("GROUP_FEED_AUTO_APPLY_AFTER", "")); v != "" {
+		// At least an hour, so an administrator always has time to see the
+		// alert and keep the current members.
+		if c.FeedAutoApplyAfter, err = time.ParseDuration(v); err != nil || c.FeedAutoApplyAfter < time.Hour {
+			return nil, fmt.Errorf("GROUP_FEED_AUTO_APPLY_AFTER must be a duration of at least 1h")
 		}
 	}
 	c.FeedAlertURL = strings.TrimSpace(getenv("GROUP_FEED_ALERT_URL", ""))

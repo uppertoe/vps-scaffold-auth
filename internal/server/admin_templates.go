@@ -215,6 +215,10 @@ type feedView struct {
 	PendingAdd    []string
 	PendingRemove []string
 	PendingHash   string
+	// AutoAt is when the held change applies on its own; Kept, that an
+	// administrator chose to keep the current members instead.
+	AutoAt string
+	Kept   bool
 	// Retry is set while a failed fetch is waiting to be tried again.
 	Retry *feedRetryView
 }

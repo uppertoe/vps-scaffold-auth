@@ -56,6 +56,13 @@
         {{if .Pending}}
         {{if .PendingAdd}}<p style="margin:8px 0 2px">The change would add {{len .PendingAdd}}:</p><div class="muted pendinglist">{{range $i, $e := .PendingAdd}}{{if $i}}, {{end}}{{$e}}{{end}}</div>{{end}}
         {{if .PendingRemove}}<p style="margin:8px 0 2px">The change would remove {{len .PendingRemove}}:</p><div class="muted pendinglist">{{range $i, $e := .PendingRemove}}{{if $i}}, {{end}}{{$e}}{{end}}</div>{{end}}
+        {{if .AutoAt}}
+        <form class="inlineform" method="post" action="/admin/groups/{{$group}}/keep" style="margin-top:8px">
+          <input type="hidden" name="csrf" value="{{$csrf}}">
+          <input type="hidden" name="hash" value="{{.PendingHash}}">
+          <button type="submit" class="ghost">Keep current members</button>
+        </form>
+        {{end}}
         <details class="confirm">
           <summary>Accept the change</summary>
           <div class="confirmbody">
