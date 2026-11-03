@@ -172,8 +172,18 @@ func TestPasskeyOfferOnlyWhereItHelps(t *testing.T) {
 	if rec := phoneSignIn(t, c, sender, "user@example.com"); rec.Code != http.StatusOK {
 		t.Fatalf("first phone sign-in: %d", rec.Code)
 	}
-	if rec := phoneSignIn(t, c, sender, "user@example.com"); rec.Code != http.StatusFound {
-		t.Fatalf("the offer repeated on a phone that has seen it: %d", rec.Code)
+	// Declined once, it is offered again at the next emailed code, so a person
+	// who chose "Not now" still has a way to add one later.
+	if rec := phoneSignIn(t, c, sender, "user@example.com"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Sign in faster on this phone") {
+		t.Fatalf("the offer was not repeated at the next emailed code: %d", rec.Code)
+	}
+	// A phone holding the old 90-day cookie is offered too, and the cookie is cleared.
+	c.cookies[passkeyOfferedCookie] = &http.Cookie{Name: passkeyOfferedCookie, Value: "1"}
+	if rec := phoneSignIn(t, c, sender, "user@example.com"); rec.Code != http.StatusOK {
+		t.Fatalf("a phone with the old cookie was not offered: %d", rec.Code)
+	}
+	if c.cookies[passkeyOfferedCookie] != nil {
+		t.Error("the old offer cookie was not cleared")
 	}
 	// A guest is never offered one.
 	c = newClient(t, srv.Handler())

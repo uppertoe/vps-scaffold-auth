@@ -2,7 +2,7 @@
 title: Passkeys
 summary: How a person signs in on their phone with a passkey instead of an emailed code, and the rules that keep a passkey as safe as the sign-in it replaces.
 weight: 4
-lastmod: 2026-11-02
+lastmod: 2026-11-03
 ---
 
 ## What a passkey changes
@@ -24,8 +24,9 @@ servers do.
 ## Adding a passkey
 
 A person signs in on their phone with an emailed code as before. The gateway
-then offers to add a passkey, once every ninety days on each phone, and the
-person can decline. Their passkeys page lists each passkey with the date it
+then offers to add a passkey, and the person can decline. The offer comes
+after every sign-in with an emailed code on a phone, so a person who
+declined can add one the next time. Their passkeys page lists each passkey with the date it
 was added and when it was last used, and a passkey can be removed there. If a
 person loses a phone, they remove its passkey and sign in with an emailed code
 until they add a new one. Whenever a passkey is added, the gateway emails the

@@ -53,10 +53,11 @@ import (
 const (
 	passkeyChallengeTTL = 10 * time.Minute
 	passkeyFreshness    = 15 * time.Minute
-	// passkeyOfferedCookie stops the after-sign-in offer from repeating on a
-	// phone whose owner has seen it. It carries no authority.
+	// passkeyOfferedCookie once stopped the offer repeating for 90 days. The
+	// offer now follows every emailed-code sign-in on a phone, so that a
+	// person who chose "Not now" can still add a passkey later; a phone still
+	// holding the old cookie has it cleared.
 	passkeyOfferedCookie = "vps_auth_pk_offered"
-	passkeyOfferEvery    = 90 * 24 * time.Hour
 )
 
 //go:embed static/passkey.js
@@ -239,17 +240,16 @@ func (s *Server) passkeyRegisterOptionsFor(w http.ResponseWriter, r *http.Reques
 }
 
 // shouldOfferPasskey decides whether completeLogin shows the offer to add a
-// passkey: only on a phone, only for a staff or administrator account signed
-// in with an email code, and not again on a phone that has seen it recently.
+// passkey: on a phone, for a staff or administrator account, after every
+// sign-in with an emailed code. An emailed code on a phone is the moment a
+// passkey would have saved the person a step; "Not now" costs one tap. A
+// phone that already holds one of the person's passkeys says so if they tap
+// Add (excludeCredentials).
 func (s *Server) shouldOfferPasskey(r *http.Request, role string, pk int64) bool {
 	if !s.cfg.PasskeysEnabled || pk != 0 || !isPhone(r) {
 		return false
 	}
-	if role != authz.RoleUser && role != authz.RoleAdmin {
-		return false
-	}
-	_, err := r.Cookie(passkeyOfferedCookie)
-	return err != nil
+	return role == authz.RoleUser || role == authz.RoleAdmin
 }
 
 // offerPasskey renders the offer in place of the redirect, once the session
@@ -260,10 +260,12 @@ func (s *Server) offerPasskey(w http.ResponseWriter, r *http.Request, email, rd 
 		log.Printf("passkey offer for %s: %v", email, err)
 		return false
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: passkeyOfferedCookie, Value: "1", Path: "/", MaxAge: int(passkeyOfferEvery.Seconds()),
-		Secure: !s.cfg.CookieInsecure, HttpOnly: true, SameSite: http.SameSiteLaxMode,
-	})
+	if _, err := r.Cookie(passkeyOfferedCookie); err == nil {
+		http.SetCookie(w, &http.Cookie{
+			Name: passkeyOfferedCookie, Value: "", Path: "/", MaxAge: -1,
+			Secure: !s.cfg.CookieInsecure, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		})
+	}
 	pp.Next = s.loginRedirect(rd)
 	s.render(w, http.StatusOK, "passkey_offer", pageData{Redirect: rd, Passkey: pp})
 	return true
