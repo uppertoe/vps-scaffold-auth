@@ -26,6 +26,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/{$}", s.handleAdminHome)
 	mux.HandleFunc("GET /admin/groups", s.handleAdminGroups)
 	mux.HandleFunc("POST /admin/groups", s.handleAdminCreateGroup)
+	mux.HandleFunc("GET /admin/groups/{name}", s.handleAdminGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/delete", s.handleAdminDeleteGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/label", s.handleAdminGroupLabel)
 	mux.HandleFunc("POST /admin/groups/{name}/members", s.handleAdminAddMember)
@@ -791,19 +792,60 @@ func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
 
 // --- Groups ---
 
+// handleAdminGroups lists the groups. A link from before groups had their own
+// pages (?open=name) goes to that group's page.
 func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
-	groups, err := s.store.ListGroups(r.Context())
+	view, missing, routeGroupsOn, err := s.groupViews(r)
 	if err != nil {
 		s.adminError(w, r)
 		return
+	}
+	if open := normalizeGroupName(r.URL.Query().Get("open")); open != "" {
+		for _, g := range view {
+			if g.Name == open {
+				http.Redirect(w, r, "/admin/groups/"+open, http.StatusFound)
+				return
+			}
+		}
+	}
+	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{
+		Title: "Groups", Groups: view,
+		MissingGroups: missing, RouteGroupsOn: routeGroupsOn,
+	})
+}
+
+// handleAdminGroup shows one group: its source, members, includes and label.
+func (s *Server) handleAdminGroup(w http.ResponseWriter, r *http.Request) {
+	view, _, _, err := s.groupViews(r)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	name := normalizeGroupName(r.PathValue("name"))
+	for i := range view {
+		if view[i].Name == name {
+			s.renderAdmin(w, r, http.StatusOK, "admin_group", adminData{
+				Title: name, Group: &view[i], OpenGroup: name,
+			})
+			return
+		}
+	}
+	http.Redirect(w, r, "/admin/groups", http.StatusFound)
+}
+
+// groupViews builds every group's view, the groups the routes require that
+// do not exist, and whether the route manifest was read.
+func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, bool, error) {
+	groups, err := s.store.ListGroups(r.Context())
+	if err != nil {
+		return nil, nil, false, err
 	}
 	routeGroups, routeGroupsOn := s.routeGroups()
 	cardTargets := map[string]bool{}
 	if routeGroupsOn {
 		codes, err := s.store.ListBreakGlassCodes(r.Context())
 		if err != nil {
-			s.adminError(w, r)
-			return
+			return nil, nil, false, err
 		}
 		for _, c := range codes {
 			cardTargets[normalizeGroupName(c.TargetGroup)] = true
@@ -811,13 +853,11 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	includes, err := s.store.ListGroupIncludes(r.Context())
 	if err != nil {
-		s.adminError(w, r)
-		return
+		return nil, nil, false, err
 	}
 	syncStates, err := s.store.ListGroupSyncStates(r.Context())
 	if err != nil {
-		s.adminError(w, r)
-		return
+		return nil, nil, false, err
 	}
 	includedIn := map[string][]string{}
 	for g, incs := range includes {
@@ -831,8 +871,7 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 		existing[g.Name] = true
 		members, err := s.store.ListGroupMembers(r.Context(), g.Name)
 		if err != nil {
-			s.adminError(w, r)
-			return
+			return nil, nil, false, err
 		}
 		mv := make([]memberView, 0, len(members))
 		for _, m := range members {
@@ -886,14 +925,7 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(missing, func(i, j int) bool { return missing[i].Name < missing[j].Name })
-	open := normalizeGroupName(r.URL.Query().Get("open"))
-	if !existing[open] {
-		open = ""
-	}
-	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{
-		Title: "Groups", Groups: view, OpenGroup: open,
-		MissingGroups: missing, RouteGroupsOn: routeGroupsOn,
-	})
+	return view, missing, routeGroupsOn, nil
 }
 
 // feedViewFor describes a feed-filled group's source and last sync for the

@@ -3,29 +3,25 @@
 <h1>Access log</h1>
 <p class="sub">Login attempts and the apps each person has reached. App access is deduplicated to one row per person, app, and hour &mdash; not per request.</p>
 
-<div class="panel">
-  <form method="get" action="/admin/access" class="row">
-    <div style="flex:1 1 280px">
-      <label for="email">Filter by email</label>
-      <input id="email" name="email" type="email" value="{{.FilterEmail}}" placeholder="person@example.com">
-    </div>
-    <div style="flex:0 0 auto; align-self:end">
-      <button type="submit">Filter</button>
-      {{if .FilterEmail}}<a href="/admin/access" style="margin-left:10px">Clear</a>{{end}}
-    </div>
-  </form>
-</div>
+<form method="get" action="/admin/access" class="panel">
+  <label for="email" style="margin-top:0">Filter by email</label>
+  <div class="inlineform" style="margin-top:0">
+    <input id="email" name="email" type="email" value="{{.FilterEmail}}" placeholder="person@example.com">
+    <button type="submit">Filter</button>
+    {{if .FilterEmail}}<a href="/admin/access">Clear</a>{{end}}
+  </div>
+</form>
 
 {{if .PasskeysOn}}
 <div class="panel">
-  <h2 style="margin-top:0">Passkeys</h2>
+  <h2>Passkeys</h2>
   {{if .PasskeysRemoved}}<p class="muted">The passkeys have been removed.</p>{{end}}
   {{if .Passkeys}}
   <p>This person has {{len .Passkeys}} {{if eq (len .Passkeys) 1}}passkey{{else}}passkeys{{end}}.</p>
-  <div class="tablewrap"><table>
+  <div class="tablewrap"><table class="stack">
     <thead><tr><th>Passkey</th><th>Added</th><th>Last used</th></tr></thead>
     <tbody>
-    {{range .Passkeys}}<tr><td>{{.Name}}</td><td class="muted">{{.Added}}</td><td class="muted">{{.Used}}</td></tr>{{end}}
+    {{range .Passkeys}}<tr><td>{{.Name}}</td><td class="when" data-label="Added">{{.Added}}</td><td class="when" data-label="Last used">{{.Used}}</td></tr>{{end}}
     </tbody>
   </table></div>
   <form method="post" action="/admin/passkeys/remove" style="margin-top:12px">
@@ -41,17 +37,17 @@
 {{end}}
 
 <div class="panel">
-  <h2 style="margin-top:0">App access</h2>
+  <h2>App access</h2>
   {{if .AppAccess}}
-  <div class="tablewrap"><table>
+  <div class="tablewrap"><table class="stack">
     <thead><tr><th>When</th><th>Email</th><th>App</th><th>Type</th></tr></thead>
     <tbody>
     {{range .AppAccess}}
       <tr>
-        <td class="muted">{{.Time}}</td>
-        <td>{{.Email}}</td>
-        <td><code class="mono">{{.Host}}</code></td>
-        <td>{{if .BreakGlass}}<span class="pill off">break-glass</span>{{else if .Guest}}<span class="pill guest">guest</span>{{else}}<span class="pill ok">login</span>{{end}}</td>
+        <td class="when">{{.Time}}</td>
+        <td data-label="Email">{{.Email}}</td>
+        <td data-label="App"><code class="mono">{{.Host}}</code></td>
+        <td data-label="Type">{{if .BreakGlass}}<span class="pill off">break-glass</span>{{else if .Guest}}<span class="pill guest">guest</span>{{else}}<span class="pill ok">login</span>{{end}}</td>
       </tr>
     {{end}}
     </tbody>
@@ -62,18 +58,18 @@
 </div>
 
 <div class="panel">
-  <h2 style="margin-top:0">Login attempts</h2>
+  <h2>Login attempts</h2>
   {{if .AuthEvents}}
-  <div class="tablewrap"><table>
+  <div class="tablewrap"><table class="stack">
     <thead><tr><th>When</th><th>Email</th><th>Step</th><th>Outcome</th><th>Client IP</th></tr></thead>
     <tbody>
     {{range .AuthEvents}}
       <tr>
-        <td class="muted">{{.Time}}</td>
-        <td>{{.Email}}</td>
-        <td><code class="mono">{{.Type}}</code></td>
-        <td>{{if .OK}}<span class="pill ok">{{.Outcome}}</span>{{else}}<span class="pill off">{{.Outcome}}</span>{{end}}</td>
-        <td><code class="mono">{{.ClientIP}}</code></td>
+        <td class="when">{{.Time}}</td>
+        <td data-label="Email">{{.Email}}</td>
+        <td data-label="Step"><code class="mono">{{.Type}}</code></td>
+        <td data-label="Outcome">{{if .OK}}<span class="pill ok">{{.Outcome}}</span>{{else}}<span class="pill off">{{.Outcome}}</span>{{end}}</td>
+        <td data-label="Client IP"><code class="mono">{{.ClientIP}}</code></td>
       </tr>
     {{end}}
     </tbody>

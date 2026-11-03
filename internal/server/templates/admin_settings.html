@@ -8,14 +8,14 @@
   <input type="hidden" name="csrf" value="{{$.CSRF}}">
 
   <div class="panel">
-    <h2 style="margin-top:0">Break-glass access</h2>
+    <h2>Break-glass access</h2>
     <label for="hours">Session duration (hours)</label>
     <input id="hours" name="hours" type="number" min="0.25" max="12" step="0.25" value="{{.BreakGlassHours}}" style="max-width:160px">
     <p class="muted">How long a session granted by scanning a break-glass card lasts (maximum 12 hours). These sessions are never renewed and cannot be revoked once issued — revoking a code only blocks new scans — so they expire only at this timeout. Keep it short.</p>
   </div>
 
   <div class="panel">
-    <h2 style="margin-top:0">Use notifications</h2>
+    <h2>Use notifications</h2>
     <label for="emails">Notify emails</label>
     <input id="emails" name="emails" type="text" value="{{.NotifyEmails}}" placeholder="oncall@example.com, lead@example.com">
     <p class="muted">Comma-separated. Emailed whenever a break-glass code is used. Leave blank to disable email notifications.</p>

@@ -8,7 +8,7 @@
   <input type="hidden" name="csrf" value="{{$.CSRF}}">
 
   <div class="panel">
-    <h2 style="margin-top:0">Text</h2>
+    <h2>Text</h2>
     <label for="title">Title</label>
     <input id="title" name="title" type="text" value="{{.Title}}" placeholder="{{.Placeholder.Title}}">
 
@@ -21,7 +21,7 @@
   </div>
 
   <div class="panel">
-    <h2 style="margin-top:0">Colours</h2>
+    <h2>Colours</h2>
     <p class="muted">Defaults are the RCH palette. Body text and the panel tint adapt automatically.</p>
     <div class="row">
       <div class="swatch"><label for="header_color">Header</label><input id="header_color" name="header_color" type="color" value="{{.HeaderColor}}"></div>
@@ -34,7 +34,7 @@
 
   <div class="row">
     <div class="panel" style="flex:1 1 240px">
-      <h2 style="margin-top:0">Site logo</h2>
+      <h2>Site logo</h2>
       <p class="muted">Shown on the sign-in pages. A colour logo works — it inverts to white automatically in dark mode. PNG, JPEG, or SVG, under 2 MB.</p>
       {{if .HasLogo}}
         <p><img src="/admin/branding/logo/img" alt="Current site logo" style="max-height:64px;max-width:100%;padding:8px;border:1px solid #ccd0d5;border-radius:8px"></p>
@@ -45,7 +45,7 @@
     </div>
 
     <div class="panel" style="flex:1 1 240px">
-      <h2 style="margin-top:0">PDF card logo</h2>
+      <h2>PDF card logo</h2>
       <p class="muted">Default logo on break-glass cards, which have a dark header — use a white/light version. Leave blank to reuse the site logo.</p>
       {{if .HasPDFLogo}}
         <p><img src="/admin/branding/pdflogo/img" alt="Current PDF card logo" style="max-height:64px;max-width:100%;background:#003a5c;padding:8px;border-radius:8px"></p>
@@ -56,7 +56,7 @@
     </div>
 
     <div class="panel" style="flex:1 1 240px">
-      <h2 style="margin-top:0">Glyph</h2>
+      <h2>Glyph</h2>
       <p class="muted">Optional accent icon shown above the label on cards. PNG, JPEG, or SVG.</p>
       {{if .HasGlyph}}
         <p><img src="/admin/branding/glyph/img" alt="Current glyph" style="max-height:64px;max-width:100%;padding:8px;border:1px solid #ccd0d5;border-radius:8px"></p>

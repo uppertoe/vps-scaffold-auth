@@ -11,7 +11,7 @@
 </div>
 
 <div class="panel">
-  <h2 style="margin-top:0">Needs attention</h2>
+  <h2>Needs attention</h2>
   {{if .Attention}}
   <ul class="todo">
     {{if .MissingGroups}}
@@ -21,18 +21,18 @@
     {{end}}
     {{if .UnusedGroups}}
     <li>No app uses {{if eq (len .UnusedGroups) 1}}this group{{else}}these groups{{end}}:
-      {{range $i, $g := .UnusedGroups}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}.
-      If {{if eq (len .UnusedGroups) 1}}it is{{else}}they are{{end}} left over from a removed app, you can delete {{if eq (len .UnusedGroups) 1}}it{{else}}them{{end}} on the <a href="/admin/groups">Groups page</a>.</li>
+      {{range $i, $g := .UnusedGroups}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}.
+      If {{if eq (len .UnusedGroups) 1}}it is{{else}}they are{{end}} left over from a removed app, you can delete {{if eq (len .UnusedGroups) 1}}it on its own page{{else}}each one on its own page{{end}}.</li>
     {{end}}
     {{if .FeedProblems}}
     <li>The feed for {{if eq (len .FeedProblems) 1}}this group{{else}}these groups{{end}} needs attention:
-      {{range $i, $g := .FeedProblems}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}.
-      The members have been kept as they were. Open the group on the <a href="/admin/groups">Groups page</a> to see why.</li>
+      {{range $i, $g := .FeedProblems}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}.
+      The members have been kept as they were. Open the group to see why.</li>
     {{end}}
     {{if .FeedIncludes}}
     <li>{{if eq (len .FeedIncludes) 1}}This synced group still includes{{else}}These synced groups still include{{end}} other groups:
-      {{range $i, $g := .FeedIncludes}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}.
-      A synced group should admit only the people its feed lists. Remove the includes on the <a href="/admin/groups">Groups page</a>.</li>
+      {{range $i, $g := .FeedIncludes}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}.
+      A synced group should admit only the people its feed lists. Remove the includes on the group's own page.</li>
     {{end}}
     {{if .AdminsWithoutTOTP}}
     <li>{{if eq (len .AdminsWithoutTOTP) 1}}This administrator has{{else}}These administrators have{{end}} not set up two-factor sign-in:
@@ -50,16 +50,16 @@
 
 {{if .Sites}}
 <div class="panel">
-  <h2 style="margin-top:0">Who can reach what</h2>
+  <h2>Who can reach what</h2>
   <p class="muted">Each site admits anyone who meets one of its rules. Where a site lists several, it may apply them to different paths.</p>
   <div class="tablewrap">
-  <table>
+  <table class="stack">
     <thead><tr><th>Site</th><th>Who can reach it</th></tr></thead>
     <tbody>
     {{range .Sites}}
       <tr>
         <td><code class="mono">{{.Host}}</code></td>
-        <td>
+        <td data-label="Who can reach it">
           {{range .Rules}}
           <div>
             {{if eq .Kind "public"}}Open to everyone{{if .Reason}}: <span class="muted">{{.Reason}}</span>{{end}}
@@ -67,7 +67,7 @@
             {{else if eq .Kind "guests"}}Anyone signed in, including guests
             {{else if eq .Kind "signed-in"}}Anyone signed in
             {{else if eq .Kind "domains"}}Anyone signed in with an address at {{range $i, $d := .Values}}{{if $i}}, {{end}}{{$d}}{{end}}
-            {{else if eq .Kind "groups"}}{{range $i, $g := .Values}}{{if $i}}, {{end}}{{if eq $g "admin"}}Administrators{{else}}{{if not $i}}Members of {{end}}<a href="/admin/groups?open={{$g}}#g-{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}{{end}}
+            {{else if eq .Kind "groups"}}{{range $i, $g := .Values}}{{if $i}}, {{end}}{{if eq $g "admin"}}Administrators{{else}}{{if not $i}}Members of {{end}}<a href="/admin/groups/{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}{{end}}
             {{end}}
           </div>
           {{end}}

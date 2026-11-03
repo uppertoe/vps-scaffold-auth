@@ -238,7 +238,7 @@ func TestSyncedGroupIsReadOnlyOnAdminPages(t *testing.T) {
 	srv.syncFeed(context.Background(), "rch-consultants", "group feed", "")
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	page := c.get("/admin/groups?open=rch-consultants", nil).Body.String()
+	page := c.get("/admin/groups/rch-consultants", nil).Body.String()
 	if !strings.Contains(page, "Members come from the feed at") || strings.Contains(page, `action="/admin/groups/rch-consultants/members"`) {
 		t.Error("synced group page shows edit controls or lacks the feed note")
 	}
@@ -488,8 +488,8 @@ func TestGroupsPageListsFeedGroupBeforeFirstSuccessfulSync(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	page := c.get("/admin/groups?open=rch-consultants", nil).Body.String()
-	for _, want := range []string{`id="g-rch-consultants"`, "not created yet", "The feed could not be used", `action="/admin/groups/rch-consultants/sync"`} {
+	page := c.get("/admin/groups/rch-consultants", nil).Body.String()
+	for _, want := range []string{"not created yet", "The feed could not be used", `action="/admin/groups/rch-consultants/sync"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("groups page lacks %q", want)
 		}
@@ -742,7 +742,7 @@ func TestGroupsPageShowsAWaitingRetry(t *testing.T) {
 	srv.scheduledSync(context.Background(), "rch-consultants")
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	page := c.get("/admin/groups?open=rch-consultants", nil).Body.String()
+	page := c.get("/admin/groups/rch-consultants", nil).Body.String()
 	for _, want := range []string{"did not succeed. The feed could not be used: the feed answered 500.", "The gateway will try again at", "3 more times, before it records the failure."} {
 		if !strings.Contains(page, want) {
 			t.Errorf("groups page lacks %q", want)
@@ -989,7 +989,7 @@ func TestGroupsPageOffersKeepCurrentMembers(t *testing.T) {
 	srv.sender = sender
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	page := c.get("/admin/groups?open=rch-consultants", nil).Body.String()
+	page := c.get("/admin/groups/rch-consultants", nil).Body.String()
 	for _, want := range []string{"It will be applied automatically at", `action="/admin/groups/rch-consultants/keep"`, "Keep current members"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("groups page lacks %q", want)
@@ -999,7 +999,7 @@ func TestGroupsPageOffersKeepCurrentMembers(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("keep: %d", rec.Code)
 	}
-	page = c.get("/admin/groups?open=rch-consultants", nil).Body.String()
+	page = c.get("/admin/groups/rch-consultants", nil).Body.String()
 	if strings.Contains(page, `action="/admin/groups/rch-consultants/keep"`) || !strings.Contains(page, "kept the current members") {
 		t.Error("the page still offers to keep a kept change")
 	}

@@ -22,13 +22,15 @@ type adminData struct {
 	AdminEmail string
 	Notice     string
 	Warning    string
-	// Groups page: the group to show expanded (the one just acted on).
+	// Group page: the group shown, so the menu marks Groups.
 	OpenGroup string
 	// Overview page.
 	Overview *overviewView
 	// Bulk add confirmation page.
 	Bulk   *bulkPlan
 	Groups []groupView
+	// Group page: the one group shown.
+	Group *groupView
 	// Groups page: groups the routes require that do not exist yet, and
 	// whether the route manifest (ROUTE_GROUPS_FILE) was read at all.
 	MissingGroups []missingGroupView
@@ -379,7 +381,7 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
+	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err

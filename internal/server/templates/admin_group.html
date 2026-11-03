@@ -1,0 +1,166 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+{{$csrf := .CSRF}}
+{{with .Group}}
+{{$group := .Name}}
+<a class="back" href="/admin/groups">&larr; Groups</a>
+<h1><code class="mono" style="font-size:inherit">{{.Name}}</code></h1>
+<p class="sub">{{if .Label}}{{.Label}}{{else}}This group has no label.{{end}}</p>
+
+<dl class="facts">
+  <div><dt>Members</dt><dd>{{if .NotYetCreated}}<span class="pill tag" title="The feed has not answered yet. The group is created by its first successful sync.">not created yet</span>{{else}}{{len .Members}}{{end}}</dd></div>
+  <div><dt>Membership</dt><dd>{{if .Feed}}Filled from a feed{{else}}Managed here{{end}}</dd></div>
+  <div><dt>Used by</dt>{{if .Hosts}}<dd>{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}</dd>{{else if .Unused}}<dd><span class="pill tag" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">Not used by any app</span></dd>{{else}}<dd class="none">No app</dd>{{end}}</div>
+  <div><dt>Also admitted by</dt>{{if .IncludedIn}}<dd>{{range $i, $g := .IncludedIn}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}</dd>{{else}}<dd class="none">No other group</dd>{{end}}</div>
+</dl>
+
+{{with .Feed}}
+<div class="panel">
+  <div class="head">
+    <h2>Feed</h2>
+    <form method="post" action="/admin/groups/{{$group}}/sync">
+      <input type="hidden" name="csrf" value="{{$csrf}}">
+      <button type="submit" class="ghost small">Sync now</button>
+    </form>
+  </div>
+  <p>Members come from the feed at <code class="mono">{{.Host}}</code>, which is fetched every hour.</p>
+  {{if eq .Status "ok"}}<p class="muted" style="margin:0">Last synced {{.LastSuccess}}. {{.Detail}}</p>
+  {{else if .Status}}<div class="callout{{if not .Pending}} bad{{end}}"><p>The last sync, at {{.LastAttempt}}, did not change the members. {{.Detail}}{{if .LastSuccess}} The last successful sync was {{.LastSuccess}}.{{end}}</p></div>
+  {{else}}<p class="muted" style="margin:0">The feed has not been fetched yet.</p>{{end}}
+  {{with .Retry}}<p class="muted" style="margin:8px 0 0">The fetch at {{.At}} did not succeed. {{.Reason}} The gateway will try again at {{.Next}}, {{if eq .Left 1}}once more{{else}}{{.Left}} more times{{end}}, before it records the failure.</p>{{end}}
+  {{if .Pending}}
+  <div class="change">
+    {{if .PendingAdd}}<div><h3 class="add">The change would add {{len .PendingAdd}}</h3><ul>{{range .PendingAdd}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+    {{if .PendingRemove}}<div><h3 class="remove">The change would remove {{len .PendingRemove}}</h3><ul>{{range .PendingRemove}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+  </div>
+  <div class="actionsrow">
+    {{if .AutoAt}}
+    <form method="post" action="/admin/groups/{{$group}}/keep">
+      <input type="hidden" name="csrf" value="{{$csrf}}">
+      <input type="hidden" name="hash" value="{{.PendingHash}}">
+      <button type="submit" class="ghost">Keep current members</button>
+    </form>
+    {{end}}
+    <details class="confirm">
+      <summary>Accept the change</summary>
+      <div class="confirmbody">
+        <p>Accepting applies exactly the change listed above. If the feed has changed since, nothing is applied and the new change is held for checking instead.</p>
+        <form class="inline" method="post" action="/admin/groups/{{$group}}/sync">
+          <input type="hidden" name="csrf" value="{{$csrf}}">
+          <input type="hidden" name="accept" value="1">
+          <input type="hidden" name="hash" value="{{.PendingHash}}">
+          <button type="submit" class="danger">Apply the feed</button>
+        </form>
+      </div>
+    </details>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{if not .NotYetCreated}}
+<div class="panel">
+  <h2>Members</h2>
+  {{if not .Feed}}
+  <form method="post" action="/admin/groups/{{.Name}}/members">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <label for="add-{{.Name}}" style="margin-top:0">Add members</label>
+    <textarea id="add-{{.Name}}" name="emails" rows="2" required placeholder="name@example.org"></textarea>
+    <p class="hint">Add one address, or paste several, one per line or separated by commas.</p>
+    <button type="submit" style="margin-top:12px">Add members</button>
+  </form>
+  {{end}}
+  {{if .Members}}
+  {{if .Feed}}
+  <ul class="addresses">
+    {{range .Members}}<li>{{.Email}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</li>{{end}}
+  </ul>
+  {{else}}
+  <div class="tablewrap" style="margin-top:22px">
+  <table>
+    <tbody>
+    {{range .Members}}
+      <tr>
+        <td>{{.Email}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</td>
+        <td class="actions">
+          <form class="inline" method="post" action="/admin/groups/{{$group}}/members/delete">
+            <input type="hidden" name="csrf" value="{{$csrf}}">
+            <input type="hidden" name="email" value="{{.Email}}">
+            <button type="submit" class="ghost" aria-label="Remove {{.Email}} from {{$group}}">Remove</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{end}}
+  {{else}}
+  <p class="muted" style="margin:{{if .Feed}}0{{else}}18px 0 0{{end}}">No members.</p>
+  {{end}}
+</div>
+
+{{if or .Includes (not .Feed)}}
+<div class="panel">
+  <h2>Also admits the members of</h2>
+  {{if .Includes}}
+  <div class="tablewrap">
+  <table>
+    <tbody>
+    {{range .Includes}}
+    <tr>
+      <td><a href="/admin/groups/{{.}}"><code class="mono">{{.}}</code></a></td>
+      <td class="actions">
+        <form class="inline" method="post" action="/admin/groups/{{$group}}/includes/delete">
+          <input type="hidden" name="csrf" value="{{$csrf}}">
+          <input type="hidden" name="included" value="{{.}}">
+          <button type="submit" class="ghost">Stop including</button>
+        </form>
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <p class="muted" style="margin:0">No other groups are included.</p>
+  {{end}}
+  {{if and .IncludeOptions (not .Feed)}}
+  <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/includes" style="margin-top:{{if .Includes}}34px{{else}}14px{{end}}">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <select name="included" aria-label="Group to include in {{.Name}}" required>
+      <option value="">Choose a group to include</option>
+      {{range .IncludeOptions}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+    <button type="submit" class="ghost">Include</button>
+  </form>
+  {{end}}
+</div>
+{{end}}
+
+<div class="panel">
+  <h2>Label</h2>
+  <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/label" style="margin:0">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input name="label" type="text" maxlength="200" value="{{.Label}}" aria-label="Label for {{.Name}}" placeholder="Label (optional)">
+    <button type="submit" class="ghost">Save label</button>
+  </form>
+</div>
+
+{{if not .Feed}}
+<div class="panel danger-zone">
+  <details class="confirm">
+    <summary>Delete this group</summary>
+    <div class="confirmbody">
+      <p>Deleting <code class="mono">{{.Name}}</code> removes {{if eq (len .Members) 1}}its member{{else}}all {{len .Members}} of its members{{end}} from it. Apps that require this group will then refuse {{if eq (len .Members) 1}}that person{{else}}them{{end}}.</p>
+      <form class="inline" method="post" action="/admin/groups/{{.Name}}/delete">
+        <input type="hidden" name="csrf" value="{{$csrf}}">
+        <button type="submit" class="danger">Delete {{.Name}}</button>
+      </form>
+    </div>
+  </details>
+</div>
+{{end}}
+{{end}}
+{{end}}
+{{end}}

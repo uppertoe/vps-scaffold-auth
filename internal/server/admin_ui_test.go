@@ -59,12 +59,12 @@ func TestAdminNoticeComesFromTheActionNotTheURL(t *testing.T) {
 	// A real action does, once.
 	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
 	rec := c.postForm("/admin/groups/team/members", url.Values{"csrf": {tok}, "email": {"a@example.com"}})
-	if loc := rec.Header().Get("Location"); rec.Code != http.StatusFound || !strings.Contains(loc, "open=team") || strings.Contains(loc, "done=") {
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusFound || loc != "/admin/groups/team" {
 		t.Fatalf("add member = %d %q", rec.Code, loc)
 	}
-	body := c.get("/admin/groups?open=team", nil).Body.String()
-	if !strings.Contains(body, "The member has been added.") || !strings.Contains(body, `id="g-team" open`) {
-		t.Error("notice or open group missing after the action")
+	body := c.get("/admin/groups/team", nil).Body.String()
+	if !strings.Contains(body, "The member has been added.") || !strings.Contains(body, `action="/admin/groups/team/label"`) {
+		t.Error("notice or group page missing after the action")
 	}
 	if body := c.get("/admin/groups", nil).Body.String(); strings.Contains(body, `class="notice`) {
 		t.Error("notice shown a second time")
@@ -82,13 +82,13 @@ func TestAdminAddMemberRefusesBadEmailWithWarning(t *testing.T) {
 	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
 
 	rec := c.postForm("/admin/groups/team/members", url.Values{"csrf": {tok}, "email": {"not an email"}})
-	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "open=team") {
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/groups/team" {
 		t.Fatalf("bad email = %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 	if members, _ := srv.store.ListGroupMembers(ctx, "team"); len(members) != 0 {
 		t.Errorf("bad email stored: %v", members)
 	}
-	if page := c.get("/admin/groups?open=team", nil).Body.String(); !strings.Contains(page, `class="notice warn"`) {
+	if page := c.get("/admin/groups/team", nil).Body.String(); !strings.Contains(page, `class="notice warn"`) {
 		t.Error("warning missing")
 	}
 }
@@ -100,11 +100,15 @@ func TestAdminOpenGroupMustExist(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	if body := c.get("/admin/groups?open=nope", nil).Body.String(); strings.Contains(body, " open>") {
-		t.Error("a group that does not exist caused a group to open")
+	if rec := c.get("/admin/groups/nope", nil); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/groups" {
+		t.Errorf("a group that does not exist = %d %q, want a redirect to the list", rec.Code, rec.Header().Get("Location"))
 	}
-	if body := c.get("/admin/groups?open=TEAM", nil).Body.String(); !strings.Contains(body, `id="g-team" open`) {
-		t.Error("existing group (normalised) not opened")
+	if rec := c.get("/admin/groups?open=nope", nil); rec.Code != http.StatusOK {
+		t.Errorf("an old link to a missing group = %d, want the list", rec.Code)
+	}
+	// An old link (?open=) goes to the group's own page, name normalised.
+	if rec := c.get("/admin/groups?open=TEAM", nil); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/groups/team" {
+		t.Errorf("old link to an existing group = %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 }
 

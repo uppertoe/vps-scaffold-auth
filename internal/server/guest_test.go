@@ -473,7 +473,7 @@ func TestGroupPageMarksMemberNotOnAllowList(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	body := c.get("/admin/groups", nil).Body.String()
+	body := c.get("/admin/groups/reviewers", nil).Body.String()
 
 	const mark = "not on the allow-list"
 	if strings.Count(body, mark) != 1 {

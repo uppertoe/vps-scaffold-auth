@@ -76,11 +76,11 @@ func TestGroupsPageShowsRouteGroups(t *testing.T) {
 	loginAs(t, c, sender, "admin@example.com", nil)
 	body := c.get("/admin/groups", nil).Body.String()
 
-	missing := body[strings.Index(body, "do not exist yet"):strings.Index(body, `<h2 style="margin-top:0">Groups</h2>`)]
+	missing := body[strings.Index(body, "do not exist yet"):strings.Index(body, `<h2>Managed here</h2>`)]
 	if !strings.Contains(missing, `value="planka-users"`) {
 		t.Error("missing group planka-users not offered for creation")
 	}
-	if !strings.Contains(missing, "boards.example.com, planka.example.com") {
+	if !strings.Contains(missing, "boards.example.com<br>planka.example.com") {
 		t.Error("hosts for planka-users not shown")
 	}
 	if !strings.Contains(missing, "Break-glass cards target this group") {
@@ -89,15 +89,15 @@ func TestGroupsPageShowsRouteGroups(t *testing.T) {
 	if strings.Contains(missing, `value="prototypes"`) {
 		t.Error("existing group offered for creation")
 	}
-	if !strings.Contains(body, "Used by narrator.example.com") {
+	if !strings.Contains(body, `<td data-label="Used by">narrator.example.com</td>`) {
 		t.Error("existing group's hosts not shown")
 	}
 	old := body[strings.Index(body, ">old-group<"):]
-	if !strings.Contains(old[:400], "not used by any app") {
+	if !strings.Contains(old[:700], "Not used by any app") {
 		t.Error("unused group not flagged")
 	}
 	proto := body[strings.Index(body, ">prototypes<"):]
-	if strings.Contains(proto[:300], "not used by any app") {
+	if strings.Contains(proto[:500], "Not used by any app") {
 		t.Error("used group flagged as unused")
 	}
 }

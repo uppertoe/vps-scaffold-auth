@@ -19,7 +19,7 @@
     {{end}}
   </div>
   <div class="panel" style="flex:1 1 320px">
-    <h2 style="margin-top:0">Details</h2>
+    <h2>Details</h2>
     <table>
       <tr><th>Label</th><td>{{.Label}}</td></tr>
       <tr><th>Note</th><td>{{if .Note}}{{.Note}}{{else}}<span class="muted">—</span>{{end}}</td></tr>
@@ -32,7 +32,7 @@
 </div>
 
 <div class="panel">
-  <h2 style="margin-top:0">Manage</h2>
+  <h2>Manage</h2>
   <details class="confirm">
     <summary>Re-mint this code</summary>
     <div class="confirmbody">
@@ -60,7 +60,7 @@
 
 {{with .CodeBranding}}
 <div class="panel">
-  <h2 style="margin-top:0">Card customisation</h2>
+  <h2>Card customisation</h2>
   <p class="muted">Override the PDF for this card. Leave a field blank to inherit the global <a href="/admin/branding">PDF branding</a>.</p>
   <form method="post" action="/admin/break/{{$.Code.ID}}/branding" enctype="multipart/form-data">
     <input type="hidden" name="csrf" value="{{$.CSRF}}">
@@ -100,7 +100,7 @@
 {{end}}
 
 <div class="panel">
-  <h2 style="margin-top:0">Use log</h2>
+  <h2>Use log</h2>
   {{if .Events}}
   <table>
     <thead><tr><th>Time</th><th>Outcome</th><th>Client IP</th><th>User agent</th></tr></thead>
