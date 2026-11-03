@@ -1182,7 +1182,11 @@ func likeContains(sub string) string {
 func accessWhere(f AccessFilter, withHost bool) (string, []any) {
 	where := ` WHERE created_at >= ?`
 	args := []any{f.Since.Unix()}
-	if f.Email != "" {
+	switch {
+	case f.Email != "" && f.EmailExact:
+		where += ` AND email = ?`
+		args = append(args, strings.ToLower(f.Email))
+	case f.Email != "":
 		where += ` AND email LIKE ? ESCAPE '\'`
 		args = append(args, likeContains(f.Email))
 	}
@@ -1271,8 +1275,7 @@ func (s *SQLite) SummarisePeople(ctx context.Context, f AccessFilter, dayOffset 
 		return nil, err
 	}
 	for i := range out {
-		out[i].Host = strings.Join(sites[out[i].Email], ",")
-		out[i].Kind = strings.Join(kinds[out[i].Email], ",")
+		out[i].Sites, out[i].Kinds = sites[out[i].Email], kinds[out[i].Email]
 	}
 	return out, nil
 }
@@ -1296,6 +1299,9 @@ func (s *SQLite) AppAccessHosts(ctx context.Context, since time.Time) ([]string,
 
 func (s *SQLite) ListAuthEventsFiltered(ctx context.Context, f AccessFilter, limit int) ([]AuthEvent, error) {
 	where, args := accessWhere(f, false)
+	if f.RefusedOnly {
+		where += ` AND outcome <> 'ok'`
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, email, event_type, outcome, client_ip, user_agent, created_at FROM auth_events`+where+
 			` ORDER BY created_at DESC, id DESC LIMIT ?`, append(args, limit)...)

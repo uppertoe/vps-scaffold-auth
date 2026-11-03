@@ -91,6 +91,15 @@ func TestAccessAuditHourlyBucket(t *testing.T) {
 		t.Fatalf("next-hour rows = %d, want 2", len(rows))
 	}
 
+	// A host that is not a hostname is not recorded, so nobody can invent
+	// sites in the log through the Host header.
+	for _, bad := range []string{"planka,fake.example.com", "a b.example.com", "x<y>.example.com"} {
+		a.record(ctx, "user@example.com", bad, "", t0.Add(2*time.Hour))
+	}
+	if rows, _ := srv.store.ListAppAccess(ctx, "user@example.com", 100, 0); len(rows) != 2 {
+		t.Fatalf("after malformed hosts rows = %d, want 2 (ignored)", len(rows))
+	}
+
 	// A blank host (a /verify with no X-Forwarded-Host) is ignored.
 	a.record(ctx, "user@example.com", "", "", t0.Add(2*time.Hour))
 	if rows, _ := srv.store.ListAppAccess(ctx, "user@example.com", 100, 0); len(rows) != 2 {

@@ -233,11 +233,15 @@ type AppAccess struct {
 }
 
 // AccessFilter narrows the access log. Email matches any address containing
-// it (case-insensitive); Host matches one site exactly; empty fields match all.
+// it (case-insensitive), or only that address when EmailExact is set; Host
+// matches one site exactly; empty fields match all. RefusedOnly keeps only
+// auth events whose outcome was not "ok".
 type AccessFilter struct {
-	Email string
-	Host  string
-	Since time.Time
+	Email       string
+	EmailExact  bool
+	Host        string
+	Since       time.Time
+	RefusedOnly bool
 }
 
 // AccessSummary is one person's use of one site over a period.
@@ -246,6 +250,9 @@ type AccessSummary struct {
 	First, Last       time.Time
 	Hours             int // distinct hours with at least one visit
 	Days              int // distinct days with at least one visit
+	// Sites and Kinds are set by SummarisePeople: every site the person
+	// used, and every kind of session other than an ordinary one.
+	Sites, Kinds []string
 }
 
 // Branding holds the admin-configurable content rendered on break-glass PDF
@@ -479,9 +486,8 @@ type Store interface {
 	// row per person, site and kind, newest last visit first. dayOffset (in
 	// seconds east of UTC) sets where a day starts when counting days.
 	SummariseAppAccess(ctx context.Context, f AccessFilter, dayOffset int) ([]AccessSummary, error)
-	// SummarisePeople folds the rows matching f into one row per person:
-	// Host lists the sites (comma-separated, sorted) and Kind the kinds of
-	// session other than an ordinary one, newest last visit first.
+	// SummarisePeople folds the rows matching f into one row per person,
+	// with their sites and kinds of session, newest last visit first.
 	SummarisePeople(ctx context.Context, f AccessFilter, dayOffset int) ([]AccessSummary, error)
 	// AppAccessHosts lists the sites with an app-access row since since.
 	AppAccessHosts(ctx context.Context, since time.Time) ([]string, error)

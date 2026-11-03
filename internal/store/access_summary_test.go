@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,16 +72,42 @@ func TestSummariseAppAccess(t *testing.T) {
 		}
 	}
 	// amy's guest visit shares an hour with her first ordinary one.
-	if amy == nil || amy.Hours != 9 || amy.Days != 2 || amy.Host != "planka.x.org" || amy.Kind != "guest" {
+	if amy == nil || amy.Hours != 9 || amy.Days != 2 || len(amy.Sites) != 1 || amy.Sites[0] != "planka.x.org" || len(amy.Kinds) != 1 || amy.Kinds[0] != "guest" {
 		t.Errorf("amy as a person: %+v", amy)
 	}
 	add("bob@x.org", "planka.x.org", "", base)
 	people, _ = s.SummarisePeople(ctx, AccessFilter{Email: "bob", Since: base.Add(-time.Hour)}, 0)
-	if len(people) != 1 || people[0].Host != "docs.x.org,planka.x.org" {
+	if len(people) != 1 || strings.Join(people[0].Sites, " ") != "docs.x.org planka.x.org" {
 		t.Errorf("bob's sites: %+v", people)
+	}
+	// A whole address matches only itself, not every address containing it.
+	add("joamy@x.org", "docs.x.org", "", base)
+	got, _ = s.SummariseAppAccess(ctx, AccessFilter{Email: "amy@x.org", EmailExact: true, Since: base.Add(-time.Hour)}, 0)
+	for _, g := range got {
+		if g.Email != "amy@x.org" {
+			t.Errorf("exact filter for amy@x.org matched %s", g.Email)
+		}
 	}
 	hosts, _ := s.AppAccessHosts(ctx, base.Add(-60*24*time.Hour))
 	if len(hosts) != 2 || hosts[0] != "docs.x.org" {
 		t.Errorf("hosts: %v", hosts)
+	}
+}
+
+// "Refused only" is applied when the events are read, so refusals older than
+// any number of successful sign-ins are still found.
+func TestRefusedOnlyReadsPastSuccesses(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	at := time.Unix(1_800_000_000, 0)
+	if err := s.RecordAuthEvent(ctx, AuthEvent{Email: "a@x.org", EventType: "verify", Outcome: "wrong_code", CreatedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 50; i++ {
+		s.RecordAuthEvent(ctx, AuthEvent{Email: "a@x.org", EventType: "login", Outcome: "ok", CreatedAt: at.Add(time.Duration(i) * time.Minute)})
+	}
+	got, err := s.ListAuthEventsFiltered(ctx, AccessFilter{Since: at.Add(-time.Hour), RefusedOnly: true}, 10)
+	if err != nil || len(got) != 1 || got[0].Outcome != "wrong_code" {
+		t.Fatalf("refused only = %+v, %v", got, err)
 	}
 }

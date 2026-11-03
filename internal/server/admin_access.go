@@ -133,7 +133,10 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 		dur = 7 * 24 * time.Hour
 	}
 	now := s.now()
-	f := store.AccessFilter{Email: person, Host: site, Since: now.Add(-dur)}
+	problems := q.Get("show") == "problems"
+	// A whole address matches only that person; part of one matches every
+	// address containing it.
+	f := store.AccessFilter{Email: person, EmailExact: plainAddress(person), Host: site, Since: now.Add(-dur), RefusedOnly: problems}
 	_, offset := now.In(s.tzloc()).Zone()
 
 	sums, err := s.store.SummariseAppAccess(r.Context(), f, offset)
@@ -151,7 +154,7 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
-	v := &accessView{Person: person, Site: site, Period: period, ProblemsOnly: q.Get("show") == "problems", Sites: hosts}
+	v := &accessView{Person: person, Site: site, Period: period, ProblemsOnly: problems, Sites: hosts}
 	for _, p := range accessPeriods {
 		v.Periods = append(v.Periods, accessPeriodOption{Key: p.Key, Label: p.Label, Selected: p.Key == period})
 	}
@@ -171,26 +174,18 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, p := range people {
-			kinds := strings.Split(p.Kind, ",")
 			v.People = append(v.People, accessPersonView{
 				Email: p.Email, Link: v.link(p.Email, site, v.ProblemsOnly),
-				Sites: strings.Split(p.Host, ","),
-				Guest: slices.Contains(kinds, session.KindGuest), Break: slices.Contains(kinds, session.KindBreakGlass),
+				Sites: p.Sites,
+				Guest: slices.Contains(p.Kinds, session.KindGuest), Break: slices.Contains(p.Kinds, session.KindBreakGlass),
 				Last: s.stampMin(p.Last), Days: p.Days, Hours: p.Hours,
 			})
 		}
 		v.Uses = nil
 	}
 	v.SignIns = s.foldSignIns(events)
-	if v.ProblemsOnly {
-		kept := v.SignIns[:0]
-		for _, si := range v.SignIns {
-			if !si.OK {
-				kept = append(kept, si)
-			}
-		}
-		v.SignIns = kept
-	}
+	// Events older than the scan were not read, so the list is incomplete.
+	v.SignInsCapped = len(events) == signInScan
 	v.SignInsShown = signInShown
 	if person == "" {
 		v.SignInsShown = signInShownAll
@@ -282,7 +277,9 @@ func (s *Server) foldSignIns(events []store.AuthEvent) []signInView {
 			}
 			continue
 		case ok && e.EventType == store.AuthEventLogin:
-			row.OK, row.Result, row.How = true, "Signed in", "Email code"
+			// How is unknown if the first step was not read (it fell
+			// outside the scan) or was not recorded.
+			row.OK, row.Result, row.How = true, "Signed in", "Unknown"
 			if p := open[e.Email]; p != nil && e.CreatedAt.Sub(p.at) <= 30*time.Minute {
 				row.How = p.first
 				if p.totp {

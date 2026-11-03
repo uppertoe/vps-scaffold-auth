@@ -43,7 +43,10 @@ func (a *accessAudit) record(ctx context.Context, email, host, kind string, now 
 		host = h
 	}
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	if host == "" {
+	// Only a hostname is recorded. The header comes from the client's Host,
+	// which may hold characters (a comma, a space) that would let an
+	// authenticated user invent sites in the log.
+	if host == "" || strings.Trim(host, "abcdefghijklmnopqrstuvwxyz0123456789-.") != "" {
 		return
 	}
 	bucket := now.Unix() / 3600
