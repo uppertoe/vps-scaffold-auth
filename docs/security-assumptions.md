@@ -117,7 +117,8 @@ These risks are known. The design docs explain each one for the department.
 - Ending sessions early needs one gateway process per database: the cutoffs
   are held in memory and written through to SQLite. The gateway enforces it:
   a second process on the same database refuses to start
-  (`lockDatabase`, `TestOneGatewayPerDatabase`).
+  (`lockDatabase`, `TestOneGatewayPerDatabase`). The lock needs a local
+  volume; a network file system may not honour it.
 - A sibling app can overwrite the session cookie outright. Every site on the
   shared cookie domain must be one the department trusts; a third-party or
   untrusted app belongs on a separate domain with its own gateway.
@@ -127,10 +128,13 @@ These risks are known. The design docs explain each one for the department.
   takes longer), and a group change in the same second as a renewal costs a
   few extra renewals within that second. Finer times would change the
   session format and sign everyone out.
-- While every sign-in mail slot is busy, a code request saves and sends
-  nothing, for every address alike (`mailSaturated`,
-  `TestCodeRequestDuringAFloodSavesNothing`); the person asks again once the
-  flood drains.
+- While every sign-in mail slot is busy, a code request sends nothing and
+  stores only an insert-if-absent decoy that leaves no cooldown, for every
+  address alike, as when over the send limit; a wrong guess is answered as at
+  any other time, so the flood cannot be seen (`mailSaturated`,
+  `TestCodeRequestDuringAFloodCannotBeSeen`). The person asks again once the
+  flood drains. A code saved just as the last slot fills may go unsent; the
+  person asks again after the cooldown.
 - One administrator can act as another, because the person who issues a
   second-factor secret sees it once.
 - A passkey is as safe as the phone and the Apple or Google account that
