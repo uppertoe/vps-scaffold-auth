@@ -6,6 +6,7 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -73,8 +74,13 @@ type Config struct {
 	// FeedAlertURL (optional; an ntfy topic URL suits), as does every change
 	// the gateway applies without an administrator. FeedAlertToken, if set, is
 	// sent as a bearer token (an ntfy publish token for a write-only user).
-	GroupFeeds   []GroupFeed
-	FeedInterval time.Duration
+	GroupFeeds []GroupFeed
+	// MemberReaders are the apps that may ask who is in a group
+	// (MEMBER_READERS, tokens in MEMBER_READER_TOKEN_<APP>), served on
+	// MembersListenAddr, a port Caddy never proxies. Empty: no endpoint.
+	MemberReaders     []MemberReader
+	MembersListenAddr string
+	FeedInterval      time.Duration
 	// FeedAutoApplyAfter, when set (GROUP_FEED_AUTO_APPLY_AFTER), applies a
 	// held change on its own once the same change has been held this long,
 	// unless an administrator chose to keep the current members. Zero keeps
@@ -321,6 +327,18 @@ func Load() (*Config, error) {
 
 	if c.GroupFeeds, err = parseGroupFeeds(getenv("GROUP_FEEDS", ""), c.CookieInsecure); err != nil {
 		return nil, err
+	}
+	if c.MemberReaders, err = parseMemberReaders(getenv("MEMBER_READERS", "")); err != nil {
+		return nil, err
+	}
+	if len(c.MemberReaders) > 0 {
+		c.MembersListenAddr = strings.TrimSpace(getenv("MEMBERS_LISTEN_ADDR", DefaultMembersListenAddr))
+		if _, _, err := net.SplitHostPort(c.MembersListenAddr); err != nil {
+			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR %q: %v", c.MembersListenAddr, err)
+		}
+		if sameListener(c.MembersListenAddr, c.ListenAddr) {
+			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR must use a different port from LISTEN_ADDR, which Caddy proxies")
+		}
 	}
 	for _, g := range strings.FieldsFunc(getenv("GROUP_FEED_ROTATING", ""), func(r rune) bool { return r == ',' || r == ' ' }) {
 		found := false

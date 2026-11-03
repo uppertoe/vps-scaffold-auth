@@ -244,6 +244,13 @@ type AccessFilter struct {
 	RefusedOnly bool
 }
 
+// MemberReadSummary is one app's reads of one group's members.
+type MemberReadSummary struct {
+	App, Group  string
+	First, Last time.Time
+	Reads       int
+}
+
 // AccessSummary is one person's use of one site over a period.
 type AccessSummary struct {
 	Email, Host, Kind string
@@ -489,6 +496,13 @@ type Store interface {
 	// SummarisePeople folds the rows matching f into one row per person,
 	// with their sites and kinds of session, newest last visit first.
 	SummarisePeople(ctx context.Context, f AccessFilter, dayOffset int) ([]AccessSummary, error)
+	// GroupMembersResolved returns the addresses group admits, through its
+	// includes too; exists is false for a group that does not exist.
+	GroupMembersResolved(ctx context.Context, group string) (members []string, exists bool, err error)
+	// RecordMemberRead notes that an app read a group's members.
+	RecordMemberRead(ctx context.Context, app, group string, at time.Time) error
+	// SummariseMemberReads returns which apps read which groups since since.
+	SummariseMemberReads(ctx context.Context, since time.Time) ([]MemberReadSummary, error)
 	// AppAccessHosts lists the sites with an app-access row since since.
 	AppAccessHosts(ctx context.Context, since time.Time) ([]string, error)
 	// ListAuthEventsFiltered returns login-flow events matching f (Host is

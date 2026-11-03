@@ -37,6 +37,7 @@ type Server struct {
 	// passkeyChallenges makes each passkey challenge single-use (passkeys.go).
 	passkeyChallenges *challengeGuard
 	access            *accessAudit
+	members           *membersAPI   // the members endpoint (see members_api.go)
 	groupRecheck      *groupRecheck // refusal-path group re-reads (group_recheck.go)
 	feeds             *feedSyncer   // groups filled from endpoints (group_feeds.go)
 	csp               string        // precomputed Content-Security-Policy (see cspPolicy)
@@ -85,6 +86,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		wrongCodes:   limiterOr(cfg.RateLimitWrongCodesPerIP, cfg.RateLimitPerIP),
 		breakLimiter: newBreakLimiter(cfg),
 		access:       newAccessAudit(st, cfg.AuditRetention),
+		members:      newMembersAPI(cfg.MemberReaders),
 		groupRecheck: newGroupRecheck(),
 		feeds:        newFeedSyncer(cfg.GroupFeeds),
 		csp:          cspPolicy(cfg.Domain, cfg.AllowApexRedirect),
