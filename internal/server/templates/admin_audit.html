@@ -6,17 +6,17 @@
 <div class="panel">
   {{if .AdminEvents}}
   <div class="tablewrap">
-  <table>
+  <table class="stack">
     <thead><tr><th>When</th><th>Admin</th><th>Action</th><th>Target</th><th>Detail</th><th>Client IP</th></tr></thead>
     <tbody>
     {{range .AdminEvents}}
       <tr>
-        <td class="muted">{{.Time}}</td>
-        <td>{{.Actor}}</td>
-        <td title="{{.Action}}">{{.ActionLabel}}</td>
-        <td>{{.Target}}</td>
-        <td class="muted">{{.Detail}}</td>
-        <td><code class="mono">{{.ClientIP}}</code></td>
+        <td class="when">{{.Time}}</td>
+        <td data-label="Admin">{{.Actor}}</td>
+        <td data-label="Action" title="{{.Action}}">{{.ActionLabel}}</td>
+        <td data-label="Target">{{.Target}}</td>
+        <td data-label="Detail" class="muted">{{.Detail}}</td>
+        <td data-label="Client IP"><code class="mono">{{.ClientIP}}</code></td>
       </tr>
     {{end}}
     </tbody>

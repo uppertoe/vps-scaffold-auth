@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"net/url"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 )
@@ -58,17 +57,17 @@ func (s *Server) noticeCookieName() string {
 }
 
 // redirectDone sends the browser back to path after an admin action, with the
-// notice code in a short-lived cookie and, for the Groups page, the group to
-// show expanded.
+// notice code in a short-lived cookie.
 func (s *Server) redirectDone(w http.ResponseWriter, r *http.Request, path, done, group string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: s.noticeCookieName(), Value: done, Path: "/", MaxAge: 30,
 		HttpOnly: true, Secure: !s.cfg.CookieInsecure, SameSite: http.SameSiteStrictMode,
 	})
 	target := path
-	// Only a well-formed group name goes into the Location header.
+	// An action on a group returns to that group's page. Only a well-formed
+	// group name goes into the Location header.
 	if group != "" && authz.ValidGroupName(group) {
-		target += "?" + url.Values{"open": {group}}.Encode() + "#g-" + group
+		target += "/" + group
 	}
 	http.Redirect(w, r, target, http.StatusFound)
 }
