@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -36,10 +37,14 @@ func newSessionCutoffs(ctx context.Context, st store.Store) (*sessionCutoffs, er
 	if err != nil {
 		return nil, err
 	}
-	// Membership changes only through this process (the admin pages and
-	// the feeds, which sync at start), so nothing has changed yet.
-	return &sessionCutoffs{ended: ended}, nil
+	// The last membership change is stored like a cutoff, so a change made
+	// just before a restart still reaches every session after it.
+	return &sessionCutoffs{ended: ended, groupsChangedAt: ended[groupsKey]}, nil
 }
+
+// groupsKey stores the time of the last membership change among the cutoffs.
+// It has no "@", so it is never a person's address.
+const groupsKey = "groups"
 
 func cardKey(id int64) string { return "card:" + strconv.FormatInt(id, 10) }
 
@@ -67,6 +72,11 @@ func (s *Server) endSessions(ctx context.Context, key string, now time.Time) err
 // request, and forgets the refusal path's cached results.
 func (s *Server) markGroupsChanged(at time.Time) {
 	s.groupRecheck.forgetAll()
+	// Stored first, so a restart cannot forget the change. If the write
+	// fails, the change still reaches every session in this process.
+	if err := s.store.EndSessionsBefore(context.Background(), groupsKey, at); err != nil {
+		log.Printf("record membership change: %v", err)
+	}
 	c := s.cutoffs
 	c.mu.Lock()
 	if at.Unix() > c.groupsChangedAt {
@@ -95,7 +105,7 @@ func (s *Server) sessionEnded(id *session.Identity, now time.Time) bool {
 	c := s.cutoffs
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if at, ok := c.ended[id.Email]; ok && auth <= at {
+	if at, ok := c.ended[id.Email]; ok && id.Email != groupsKey && auth <= at {
 		return true
 	}
 	if id.PK != 0 {
@@ -123,7 +133,10 @@ func (s *Server) groupsStale(id *session.Identity) bool {
 	c := s.cutoffs
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return id.Iat < c.groupsChangedAt
+	// At or before: a change in the same second as the session's groups were
+	// worked out may have come after it. The renewal sets Iat to the current
+	// second, so this repeats only within that second.
+	return c.groupsChangedAt != 0 && id.Iat <= c.groupsChangedAt
 }
 
 // readSession is the only way the gateway reads a session: a signed session

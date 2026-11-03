@@ -677,8 +677,11 @@ func (s *Server) checkCSRF(w http.ResponseWriter, r *http.Request) bool {
 // Best-effort: a write failure is logged but does not undo the action that has
 // already happened. Call it AFTER the mutation succeeds.
 func (s *Server) auditAdmin(r *http.Request, action, target, detail string) {
+	// The raw read, not readSession: requireAdmin has already admitted this
+	// request, and an administrator who has just ended their own sessions
+	// (replacing their authenticator, say) must still be named as the actor.
 	actor := ""
-	if id, ok := s.readSession(r, s.now()); ok {
+	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
 		actor = id.Email
 	}
 	if err := s.store.RecordAdminEvent(r.Context(), store.AdminEvent{

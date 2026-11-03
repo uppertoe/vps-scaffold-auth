@@ -42,6 +42,7 @@ type Server struct {
 	members           *membersAPI     // the members endpoint (see members_api.go)
 	cutoffs           *sessionCutoffs // sessions ended early (see session_cutoffs.go)
 	mailSlots         chan struct{}   // emails being sent (see sendMail)
+	noticeSlots       chan struct{}   // security notices being sent (see sendNotice)
 	groupRecheck      *groupRecheck   // refusal-path group re-reads (group_recheck.go)
 	feeds             *feedSyncer     // groups filled from endpoints (group_feeds.go)
 	csp               string          // precomputed Content-Security-Policy (see cspPolicy)
@@ -98,6 +99,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		groupRecheck: newGroupRecheck(),
 		cutoffs:      cutoffs,
 		mailSlots:    make(chan struct{}, maxMailSends),
+		noticeSlots:  make(chan struct{}, maxMailSends),
 		feeds:        newFeedSyncer(cfg.GroupFeeds),
 		csp:          cspPolicy(cfg.Domain, cfg.AllowApexRedirect),
 		pages:        tmpls,

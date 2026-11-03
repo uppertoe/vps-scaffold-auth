@@ -198,6 +198,9 @@ type Pending struct {
 type Offer struct {
 	CodeID int64  `json:"cid"`
 	Label  string `json:"lbl"`
+	// Gen identifies the card's code when it was scanned, so an offer from
+	// before a re-mint cannot be activated after it.
+	Gen string `json:"gen,omitempty"`
 }
 
 // Manager issues and reads the typed cookies.

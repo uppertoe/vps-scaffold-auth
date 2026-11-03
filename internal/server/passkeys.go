@@ -797,7 +797,7 @@ func renewWithin(d time.Duration) string {
 // sign-in code, so mail delivery never delays the page.
 func (s *Server) notifyPasskeyAdded(r *http.Request, to string, now time.Time) {
 	msg := s.passkeyAddedEmail(to, passkeyDevice(r.UserAgent()), now)
-	s.sendMail("passkey notice to "+to, func(ctx context.Context) error { return s.sender.Send(ctx, msg) })
+	s.sendNotice("passkey notice to "+to, func(ctx context.Context) error { return s.sender.Send(ctx, msg) })
 }
 
 // passkeyAddedData is the view model for the passkey notice. The template

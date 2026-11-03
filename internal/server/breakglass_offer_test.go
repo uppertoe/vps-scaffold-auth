@@ -232,3 +232,21 @@ func denialCSRF(t *testing.T, c *client) string {
 	t.Helper()
 	return extractCSRF(t, c.get("/denied?rd=https://app.example.com/", nil).Body.String())
 }
+
+// An offer made before a card is re-minted cannot be activated after it.
+func TestBreakGlassActivateRefusedAfterRemint(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "user@example.com", nil)
+	mintScanToken(t, srv, c, "Lab 1", "g")
+	codes, _ := srv.store.ListBreakGlassCodes(context.Background())
+	if err := srv.store.RemintBreakGlassCode(context.Background(), codes[0].ID, "enc-new", "hash-new"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := c.postForm("/break/activate", url.Values{"csrf": {denialCSRF(t, c)}}); rec.Code == http.StatusFound {
+		t.Fatal("an offer from before the re-mint was activated")
+	}
+	if rec := c.get("/verify", requireGroups("g")); rec.Code == http.StatusOK {
+		t.Fatal("the re-minted card granted a session")
+	}
+}

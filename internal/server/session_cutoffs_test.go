@@ -274,3 +274,78 @@ func TestMailSendsAreBounded(t *testing.T) {
 		t.Fatal("no send started once the others had finished")
 	}
 }
+
+// A removal from a group is enforced after a restart, and when it falls in the
+// same second as the session's groups were worked out.
+func TestGroupRemovalSurvivesRestartAndSameSecond(t *testing.T) {
+	for _, tc := range []string{"restart", "same second"} {
+		t.Run(tc, func(t *testing.T) {
+			srv, sender := testServer(t)
+			ctx := context.Background()
+			fixed := time.Now()
+			srv.now = func() time.Time { return fixed }
+			srv.store.CreateGroup(ctx, "team", "")
+			srv.store.AddGroupMember(ctx, "team", "amy@example.com")
+			user, admin := newClient(t, srv.Handler()), newClient(t, srv.Handler())
+			loginAs(t, user, sender, "amy@example.com", nil)
+			loginAs(t, admin, sender, "admin@example.com", nil)
+			if rec := user.get("/verify", requireGroups("team")); rec.Code != http.StatusOK {
+				t.Fatalf("before removal = %d", rec.Code)
+			}
+			if tc == "restart" {
+				srv.now = func() time.Time { return fixed.Add(time.Second) }
+			}
+			csrf := adminCSRF(t, admin, "/admin/groups/team")
+			if rec := admin.postForm("/admin/groups/team/members/delete", url.Values{"csrf": {csrf}, "email": {"amy@example.com"}}); rec.Code != http.StatusFound {
+				t.Fatalf("remove member = %d", rec.Code)
+			}
+			h := srv.Handler()
+			if tc == "restart" {
+				restarted, err := New(srv.cfg, srv.store, srv.sender)
+				if err != nil {
+					t.Fatal(err)
+				}
+				restarted.now = srv.now
+				h = restarted.Handler()
+			}
+			rc := &client{t: t, h: h, cookies: user.cookies}
+			if rec := rc.get("/verify", requireGroups("team")); rec.Code == http.StatusOK {
+				t.Fatal("a removed member still reaches the group's app")
+			}
+		})
+	}
+}
+
+// An administrator who ends their own sessions is still named in the audit.
+func TestAuditNamesAnAdminWhoEndsTheirOwnSessions(t *testing.T) {
+	srv, sender := testServer(t)
+	admin := newClient(t, srv.Handler())
+	loginAs(t, admin, sender, "admin@example.com", nil)
+	for i := 1; i <= 2; i++ {
+		at := time.Now().Add(time.Duration(i) * time.Second)
+		srv.now = func() time.Time { return at }
+		csrf := adminCSRF(t, admin, "/admin/totp")
+		admin.postForm("/admin/totp/generate", url.Values{"csrf": {csrf}, "email": {"admin@example.com"}})
+	}
+	events, _ := srv.store.ListAdminEvents(context.Background(), 5, 0)
+	if len(events) == 0 || events[0].Action != store.AdminActionTOTPGenerate || events[0].Actor != "admin@example.com" {
+		t.Fatalf("latest audit row = %+v", events)
+	}
+}
+
+// A security notice is sent even while sign-in codes fill every mail slot.
+func TestNoticesHaveTheirOwnSlots(t *testing.T) {
+	srv, _ := testServer(t)
+	release := make(chan struct{})
+	defer close(release)
+	for i := 0; i < maxMailSends; i++ {
+		srv.sendMail("code", func(ctx context.Context) error { <-release; return nil })
+	}
+	ran := make(chan struct{}, 1)
+	srv.sendNotice("notice", func(ctx context.Context) error { ran <- struct{}{}; return nil })
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a notice waited behind sign-in codes")
+	}
+}

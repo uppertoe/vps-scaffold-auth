@@ -734,6 +734,14 @@ func (s *Server) sendCode(r *http.Request, emailAddr string, now time.Time) erro
 	return nil
 }
 
+// cardGeneration names a card's current code without revealing it: a re-mint
+// changes it. It is a digest of the stored hash, cut short, since it travels
+// in the offer cookie.
+func cardGeneration(code store.BreakGlassCode) string {
+	h := sha256.Sum256([]byte("offer-gen\x00" + code.TokenHash))
+	return hex.EncodeToString(h[:8])
+}
+
 // maxMailSends bounds the emails the gateway sends at once. The rate limits
 // slow any one address or network, but nothing else bounds how many sends a
 // flood from many networks starts; each holds a goroutine and a connection
@@ -745,14 +753,24 @@ const maxMailSends = 16
 // way, this one is not sent and the refusal is logged: the person can ask
 // again, and the gateway stays up for everyone else.
 func (s *Server) sendMail(what string, send func(ctx context.Context) error) {
+	s.sendMailVia(s.mailSlots, what, send)
+}
+
+// sendNotice sends a security notice (a passkey added) through slots of its
+// own, so a flood of sign-in codes cannot crowd it out.
+func (s *Server) sendNotice(what string, send func(ctx context.Context) error) {
+	s.sendMailVia(s.noticeSlots, what, send)
+}
+
+func (s *Server) sendMailVia(slots chan struct{}, what string, send func(ctx context.Context) error) {
 	select {
-	case s.mailSlots <- struct{}{}:
+	case slots <- struct{}{}:
 	default:
-		log.Printf("send %s: not sent, %d emails are already being sent", what, maxMailSends)
+		log.Printf("send %s: not sent, %d emails of this kind are already being sent", what, cap(slots))
 		return
 	}
 	go func() {
-		defer func() { <-s.mailSlots }()
+		defer func() { <-slots }()
 		// Detached context: the originating request is already answered.
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -1413,7 +1431,7 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	// strand them, and a guest login is cheap to redo.
 	if id, ok := s.readSession(r, now); ok && id.Kind == "" {
 		rd := authz.SafeRedirect(code.Redirect, s.cfg.Domain, s.cfg.BreakGlassRedirect)
-		if err := s.sessions.SetOffer(w, session.Offer{CodeID: code.ID, Label: code.Label}, s.cfg.OTPTTL, now); err != nil {
+		if err := s.sessions.SetOffer(w, session.Offer{CodeID: code.ID, Label: code.Label, Gen: cardGeneration(code)}, s.cfg.OTPTTL, now); err != nil {
 			// Non-fatal: fall through to a normal grant rather than fail the scan.
 			log.Printf("break-glass set offer: %v", err)
 		} else {
@@ -1485,10 +1503,9 @@ func (s *Server) grantBreakGlass(w http.ResponseWriter, r *http.Request, code st
 // cross-origin) is the real defense; without it a malicious sibling could force a
 // session downgrade + a spoofed "granted" audit row against a signed-in user. The
 // code id from the offer is re-looked-up and re-checked active, so a card revoked
-// between scan and tap grants nothing. A card RE-MINTED (token rotated, still
-// active) in that window still activates — re-mint keeps the card live, so
-// honouring an in-flight offer for the same scope is intended; only revoke cuts a
-// pending offer off.
+// between scan and tap grants nothing, and neither does a card RE-MINTED in that
+// window: the offer names the code it was made from (cardGeneration), and a
+// re-mint ends the card's sessions, so it ends a pending offer too.
 func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	ip := clientIP(r)
@@ -1538,8 +1555,10 @@ func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}
-	if !ok || code.Status != store.BreakGlassActive {
-		log.Printf("break-glass activate denied (inactive/unknown code %d) from %s", offer.CodeID, ip)
+	// A re-mint replaces the card's code and ends its sessions, so an offer
+	// made from the old code is refused like a revoked card.
+	if !ok || code.Status != store.BreakGlassActive || offer.Gen != cardGeneration(code) {
+		log.Printf("break-glass activate denied (inactive, unknown or re-minted code %d) from %s", offer.CodeID, ip)
 		s.render(w, http.StatusNotFound, "message", pageData{
 			Title:   "Access code not available",
 			Message: "This emergency access code is not active. Please contact an administrator.",
