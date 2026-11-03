@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
+	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 	"github.com/uppertoe/vps-scaffold-auth/internal/passkey"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
@@ -786,6 +788,39 @@ func (s *Server) notifyPasskeyAdded(r *http.Request, to string, now time.Time) {
 	}()
 }
 
+// passkeyAddedData is the view model for the passkey notice. The template
+// renders with text/template, which does not escape, so every string is
+// HTML-escaped by renderPasskeyAddedHTML; the colours are validated "#rrggbb".
+type passkeyAddedData struct {
+	BrandName, Added, OK, NotYou, Link string
+	HeaderColor, HeaderText            string
+	AccentColor, AccentText            string
+}
+
+// renderPasskeyAddedHTML lays the notice out like the sign-in code email, in
+// the admin branding's colours, falling back to plain paragraphs if the
+// template ever fails so that the notice is still sent.
+func (s *Server) renderPasskeyAddedHTML(added, ok, notYou, link string, now time.Time) string {
+	header := breakglass.DefaultPalette.Header
+	accent := breakglass.DefaultPalette.Accent
+	if b, err := s.publicBrandingAt(context.Background(), now); err == nil {
+		header = hexOrDefault(b.headerColor, header)
+		accent = hexOrDefault(b.accentColor, accent)
+	}
+	esc := html.EscapeString
+	var buf bytes.Buffer
+	err := s.emailTmpl.ExecuteTemplate(&buf, "email_passkey_added", passkeyAddedData{
+		BrandName: esc(s.cfg.BrandName), Added: esc(added), OK: esc(ok), NotYou: esc(notYou), Link: esc(link),
+		HeaderColor: header, HeaderText: emailTextOn(header),
+		AccentColor: accent, AccentText: emailTextOn(accent),
+	})
+	if err == nil {
+		return buf.String()
+	}
+	log.Printf("render passkey notice: %v", err)
+	return `<p>` + esc(added) + `</p><p>` + esc(ok) + `</p><p>` + esc(notYou) + `</p><p><a href="` + esc(link) + `">Your passkeys</a></p>`
+}
+
 // passkeyDevice names the kind of phone for the notice, or "" if unknown.
 func passkeyDevice(ua string) string {
 	switch {
@@ -809,12 +844,6 @@ func (s *Server) passkeyAddedEmail(to, device string, now time.Time) email.Messa
 	const notYou = "If you did not add it, open Your passkeys, remove it, then contact an administrator for assistance."
 	link := s.passkeysURL()
 	text := first + "\n\n" + ok + "\n\n" + notYou + "\n\nYour passkeys: " + link + "\n"
-	esc := html.EscapeString
-	htmlBody := `<!DOCTYPE html><html lang="en"><body style="margin:0;padding:24px;background:#f6f7f9;font:16px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1c1e21">` +
-		`<div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:14px;padding:28px 24px">` +
-		`<p style="margin:0 0 12px">` + esc(first) + `</p>` +
-		`<p style="margin:0 0 12px">` + esc(ok) + `</p>` +
-		`<p style="margin:0 0 20px">If you did not add it, open <a href="` + esc(link) + `" style="color:#2563eb">Your passkeys</a>, remove it, then contact an administrator for assistance.</p>` +
-		`</div></body></html>`
+	htmlBody := s.renderPasskeyAddedHTML(first, ok, notYou, link, now)
 	return email.Message{To: to, Subject: "A passkey has been added to your account", Text: text, HTML: htmlBody}
 }

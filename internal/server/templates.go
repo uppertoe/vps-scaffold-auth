@@ -113,7 +113,7 @@ func loadTemplates() (pages, error) {
 // is HTML-escaped by the caller before rendering; every other field is numeric
 // or a validated hex colour, so emitting them verbatim is safe.
 func loadEmailTemplate() (*texttemplate.Template, error) {
-	return texttemplate.ParseFS(templatesFS, "templates/email_code.html")
+	return texttemplate.ParseFS(templatesFS, "templates/email_code.html", "templates/email_passkey_added.html")
 }
 
 // render writes a page using the base layout. On error it falls back to a plain
