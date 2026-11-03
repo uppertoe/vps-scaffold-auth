@@ -74,9 +74,11 @@ has its own test, named in the table.
 | G17 | A passkey signs in only through a ceremony on the sign-in host itself, with the person verified, answering a fresh single-use challenge, signed by the stored key. | `passkey.VerifyAssertion`, `challengeGuard`, `handlePasskeyLogin` | `TestSignInRefusals`, `TestRegistrationRefusals`, `FuzzVerifyNeverAcceptsWithoutTheKey`, `TestPasskeySignInRefusals`; e2e: *a passkey made on a phone signs in on its own…* (a whole-domain ceremony is refused) |
 | G18 | Adding a passkey needs a recent sign-in with an emailed code (a passkey sign-in never counts), the challenge minted for that account, and for an administrator the second factor, checked before any ceremony. | `freshSignIn`, `mayAddPasskeyNow`, `handlePasskeyConfirmCode`, `handlePasskeyRegister` | `TestAddingAPasskeyNeedsARecentSignIn`, `TestAPasskeySessionCannotAddAnotherPasskey`, `TestRegistrationChallengeIsBoundToItsAccount`, `TestAdminPasskeys`, `TestRegistrationPostsDoNotSpendAdminCodeAttempts` |
 | G19 | A passkey satisfies the admin second factor only if it was added, with TOTP on, by an administrator who had passed it; a passkey sign-in re-checks the current rules and never makes a guest. | `adminGrade` in `handlePasskeyRegister`, `handlePasskeyLogin` | `TestPasskeyFromBeforePromotionStillNeedsTOTP`, `TestPasskeyAddedWhileTOTPOffIsNotAdminGrade`, `TestAdminPasskeys`, `TestPasskeySignInRefusals` |
-| G20 | Once a passkey is removed, the sessions it started lose the admin pages and the passkeys page at once and the tools at their next renewal; passkey IDs are never reused. | `passkeyStillValid` in `requireAdmin`, `passkeySession` and `renewSessionWith`; `AUTOINCREMENT` | `TestRemovingAPasskeyEndsItsSessions`, `TestRemovedPasskeyLosesAdminPagesAtOnce`, `TestPasskeyIDsAreNeverReused`; e2e: *…until it is removed* |
+| G20 | Once a passkey is removed, the sessions it started end at their next request, everywhere; passkey IDs are never reused. | `passkeyKey` in `sessionEnded`; `passkeyStillValid` in `requireAdmin`, `passkeySession` and `renewSessionWith`; `AUTOINCREMENT` | `TestRemovingAPasskeyEndsItsSessions`, `TestRemovedPasskeyLosesAdminPagesAtOnce`, `TestPasskeyIDsAreNeverReused`; e2e: *…until it is removed* |
 | G21 | Scripts run only on the pages that use a passkey, only from the gateway itself, and only when passkeys are on. | `render`, `passkeyPages` | `TestPasskeysOffByDefault`; e2e: *the sign-in pages carry their security headers through Caddy* |
 | G22 | An app learns who is in a group only for the groups listed for its own token, only on a port Caddy never proxies and only from a private address, and only as the gateway applies membership now; the base roles are never readable, a group it may not read looks the same as one that does not exist, and every read is recorded. | `parseMemberReaders`, `MembersHandler`, `handleGroupMembers`, `GroupMembersResolved` | `TestMemberReadersRefused`, `TestMembersEndpointAnswersOnlyTheAppsOwnGroups`, `TestMembersEndpointRefusals`, `TestMembersAreNotServedOnThePublicListener`, `TestMembersReadsAreAudited`, `TestGroupMembersResolved` |
+| G23 | A session ends at its next request once its person signs out everywhere, their authenticator is replaced or removed, its passkey is removed, or its break-glass card is revoked or re-minted; none outlives `SESSION_MAX_AGE`; a membership change reaches every session at its next request. | `readSession`, `sessionEnded`, `groupsStale`, `endSessions` | `TestSignOutEverywhere`, `TestAdminSignsAPersonOutEverywhere`, `TestSessionMaxAge`, `TestGroupRemovalTakesEffectAtOnce`, `TestRevokingACardEndsItsSessions`, `TestReplacingAnAuthenticatorEndsSessions`, `TestRemovingAPasskeyEndsItsSessions` |
+| G24 | A flood of sign-in requests from many networks cannot start more than a fixed number of email sends at once. | `sendMail` | `TestMailSendsAreBounded` |
 
 ## What this repository cannot prove
 
@@ -109,8 +111,11 @@ These risks are known. The design docs explain each one for the department.
   identity, and can make the access log record a visit to the auth host.
 - An older Safari, which sends no `Sec-Fetch-Site`, can be made to sign out or
   start a sign-in by another site. It cannot complete one.
-- A stolen session works until it expires or the person's listing is removed.
-  Sessions have no absolute lifetime yet.
+- A stolen session works until it expires, the person's listing is removed, or
+  the person (or an administrator) signs them out on every device. One device's
+  session cannot be ended on its own. No session outlives `SESSION_MAX_AGE`.
+- Ending sessions early relies on one gateway process per database: the
+  cutoffs are held in memory and written through to SQLite.
 - A sibling app can overwrite the session cookie outright.
 - One administrator can act as another, because the person who issues a
   second-factor secret sees it once.

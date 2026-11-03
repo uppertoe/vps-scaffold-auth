@@ -62,16 +62,14 @@ and an authenticator code, as before.
 ## Ending access
 
 A session started with a passkey names that passkey. When the passkey is
-removed, the session loses the admin pages and the passkeys page at once, and
-loses the tools at its next renewal, which comes within the server's renewal
-interval, an hour unless the server sets another. A person removes their own passkeys on their passkeys
+removed, the session ends at its next request, on the tools as well as the
+admin pages. A person removes their own passkeys on their passkeys
 page. An administrator removes all of one person's passkeys on that person's
 access page, and the removal is recorded in the admin audit.
 
-This gives the gateway its first way to end one person's sessions without
-signing everyone out, but only for sessions started with a passkey. A session
-started with an emailed code still ends only when it expires or when the
-person's listing is removed.
+Sessions started with an emailed code can be ended too: the person, or an
+administrator, can sign them out on every device, as
+[Signing in](signing-in.md) describes.
 
 ## The rules the gateway enforces
 

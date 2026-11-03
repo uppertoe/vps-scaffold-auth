@@ -56,6 +56,9 @@ type adminData struct {
 	Passkeys        []passkeyRow
 	PasskeyRenew    string
 	PasskeysRemoved bool
+	// Access log, one person chosen: offer to sign them out everywhere.
+	EndSessionsFor string
+	SessionsEnded  bool
 }
 
 // stamp renders t in the configured display timezone (default UTC). The "MST"
@@ -282,6 +285,7 @@ var adminActionLabels = map[string]string{
 	store.AdminActionGroupSync:          "Group synced from feed",
 	store.AdminActionTOTPGenerate:       "Two-factor secret issued",
 	store.AdminActionTOTPRemove:         "Two-factor removed",
+	store.AdminActionSessionsEnd:        "Signed out on every device",
 	store.AdminActionSettingsUpdate:     "Settings changed",
 	store.AdminActionBrandingUpdate:     "Branding changed",
 }
@@ -347,7 +351,7 @@ func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, status int,
 		data.CSRF = tok
 	}
 	data.Active = page
-	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
+	if id, ok := s.readSession(r, s.now()); ok {
 		data.AdminEmail = id.Email
 	}
 	if data.Notice == "" && data.Warning == "" {

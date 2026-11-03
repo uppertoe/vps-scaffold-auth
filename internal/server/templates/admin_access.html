@@ -32,6 +32,19 @@
 </form>
 {{end}}
 
+{{if .EndSessionsFor}}
+<div class="panel">
+  <h2>Sessions</h2>
+  {{if .SessionsEnded}}<p class="muted">This person has been signed out on every device.</p>{{end}}
+  <p class="muted" style="margin-bottom:0">Signing out on every device ends every session this person has, including one someone else may be using. The person can sign in again with an email code.</p>
+  <form method="post" action="/admin/sessions/end" style="margin:0">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="email" value="{{.EndSessionsFor}}">
+    <button type="submit" class="danger">Sign out on every device</button>
+  </form>
+</div>
+{{end}}
+
 {{if .PasskeysOn}}
 <div class="panel">
   <h2>Passkeys</h2>

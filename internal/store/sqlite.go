@@ -197,6 +197,10 @@ CREATE TABLE IF NOT EXISTS app_access (
 );
 CREATE INDEX IF NOT EXISTS idx_app_access_email ON app_access(email, created_at);
 CREATE INDEX IF NOT EXISTS idx_app_access_created ON app_access(created_at);
+CREATE TABLE IF NOT EXISTS session_cutoffs (
+	key        TEXT PRIMARY KEY,
+	ended_at   INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS member_reads (
 	app        TEXT NOT NULL,
 	group_name TEXT NOT NULL,
@@ -1379,6 +1383,36 @@ func (s *SQLite) PruneAuditBefore(ctx context.Context, cutoff time.Time) error {
 	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM admin_events WHERE created_at < ?`, cut)
 	return err
+}
+
+// EndSessionsBefore records that every session for key that began at or
+// before at has ended. key is a person's address, or "card:<id>" for the
+// sessions a break-glass card granted. A later time replaces an earlier one;
+// an earlier one never replaces a later one.
+func (s *SQLite) EndSessionsBefore(ctx context.Context, key string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_cutoffs (key, ended_at) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET ended_at = MAX(ended_at, excluded.ended_at)`, key, at.Unix())
+	return err
+}
+
+// ListSessionCutoffs returns every recorded cutoff, as Unix seconds by key.
+func (s *SQLite) ListSessionCutoffs(ctx context.Context) (map[string]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key, ended_at FROM session_cutoffs`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var k string
+		var at int64
+		if err := rows.Scan(&k, &at); err != nil {
+			return nil, err
+		}
+		out[k] = at
+	}
+	return out, rows.Err()
 }
 
 // GroupMembersResolved returns the addresses a group admits: its own members

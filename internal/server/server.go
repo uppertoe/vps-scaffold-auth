@@ -4,6 +4,8 @@
 package server
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -37,10 +39,12 @@ type Server struct {
 	// passkeyChallenges makes each passkey challenge single-use (passkeys.go).
 	passkeyChallenges *challengeGuard
 	access            *accessAudit
-	members           *membersAPI   // the members endpoint (see members_api.go)
-	groupRecheck      *groupRecheck // refusal-path group re-reads (group_recheck.go)
-	feeds             *feedSyncer   // groups filled from endpoints (group_feeds.go)
-	csp               string        // precomputed Content-Security-Policy (see cspPolicy)
+	members           *membersAPI     // the members endpoint (see members_api.go)
+	cutoffs           *sessionCutoffs // sessions ended early (see session_cutoffs.go)
+	mailSlots         chan struct{}   // emails being sent (see sendMail)
+	groupRecheck      *groupRecheck   // refusal-path group re-reads (group_recheck.go)
+	feeds             *feedSyncer     // groups filled from endpoints (group_feeds.go)
+	csp               string          // precomputed Content-Security-Policy (see cspPolicy)
 	pages             pages
 	adminPages        pages
 	emailTmpl         *texttemplate.Template
@@ -68,6 +72,10 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	if err != nil {
 		return nil, err
 	}
+	cutoffs, err := newSessionCutoffs(context.Background(), st)
+	if err != nil {
+		return nil, fmt.Errorf("session cutoffs: %w", err)
+	}
 	secrets, err := secretbox.NewFromConfig(cfg.SessionSecret, cfg.DataEncryptionKey)
 	if err != nil {
 		return nil, err
@@ -88,6 +96,8 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		access:       newAccessAudit(st, cfg.AuditRetention),
 		members:      newMembersAPI(cfg.MemberReaders),
 		groupRecheck: newGroupRecheck(),
+		cutoffs:      cutoffs,
+		mailSlots:    make(chan struct{}, maxMailSends),
 		feeds:        newFeedSyncer(cfg.GroupFeeds),
 		csp:          cspPolicy(cfg.Domain, cfg.AllowApexRedirect),
 		pages:        tmpls,

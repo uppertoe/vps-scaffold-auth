@@ -452,7 +452,7 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 		if err := s.store.ApplyGroupSync(dbCtx, group, add, remove, events); err != nil {
 			return finish(store.GroupSyncFailed, "The gateway could not update members.")
 		}
-		s.groupRecheck.forgetAll()
+		s.markGroupsChanged(now)
 		// A change applied without an administrator is announced, so the
 		// roster cannot widen access unseen.
 		if !accept {

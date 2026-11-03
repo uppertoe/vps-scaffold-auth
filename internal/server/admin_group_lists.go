@@ -152,7 +152,7 @@ func (s *Server) addMembers(w http.ResponseWriter, r *http.Request, group string
 		s.adminError(w, r)
 		return
 	}
-	s.groupRecheck.forgetAll()
+	s.markGroupsChanged(s.now())
 	for _, e := range added {
 		s.auditAdmin(r, store.AdminActionGroupAddMember, group, e)
 	}
@@ -187,7 +187,7 @@ func (s *Server) handleAdminAddInclude(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
-	s.groupRecheck.forgetAll()
+	s.markGroupsChanged(s.now())
 	s.auditAdmin(r, store.AdminActionGroupIncludeAdd, group, included)
 	s.redirectDone(w, r, "/admin/groups", "include-added", group)
 }
@@ -202,7 +202,7 @@ func (s *Server) handleAdminRemoveInclude(w http.ResponseWriter, r *http.Request
 		s.adminError(w, r)
 		return
 	}
-	s.groupRecheck.forgetAll()
+	s.markGroupsChanged(s.now())
 	s.auditAdmin(r, store.AdminActionGroupIncludeRemove, group, included)
 	s.redirectDone(w, r, "/admin/groups", "include-removed", group)
 }
@@ -247,7 +247,7 @@ func (s *Server) handleAdminSyncGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := "group feed"
-	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
+	if id, ok := s.readSession(r, s.now()); ok {
 		actor = id.Email
 	}
 	// Detached from the request: closing the tab must not fail the sync.

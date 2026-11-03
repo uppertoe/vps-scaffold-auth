@@ -210,6 +210,12 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 		v.SignIns, v.SignInsCapped = v.SignIns[:v.SignInsShown], true
 	}
 	data := adminData{Title: "Access log", FilterEmail: person, Access: v}
+	// Signing out everywhere, like the passkeys panel, needs one whole
+	// address, not part of one.
+	if plainAddress(person) {
+		data.EndSessionsFor = person
+		data.SessionsEnded = q.Get("sessions_ended") == "1"
+	}
 	// The passkeys panel needs one whole address, not part of one.
 	if s.cfg.PasskeysEnabled && plainAddress(person) {
 		keys, err := s.store.ListPasskeys(r.Context(), person)
@@ -307,6 +313,8 @@ func (s *Server) foldSignIns(events []store.AuthEvent) []signInView {
 			row.OK, row.Result, row.How = true, "Passkey added", "Passkey"
 		case ok && e.EventType == store.AuthEventPasskeyRemove:
 			row.OK, row.Result, row.How = true, "Passkey removed", "Passkey"
+		case ok && e.EventType == store.AuthEventSessionsEnd:
+			row.OK, row.Result, row.How = true, "Signed out on every device", "Sign-out page"
 		default:
 			row.Result, row.How = refusedLabel(e.EventType, e.Outcome), stepLabel(e.EventType)
 		}

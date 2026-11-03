@@ -141,6 +141,9 @@ type Identity struct {
 	// person proved who they are. Adding a passkey requires a recent one.
 	// Zero in a session minted before this field existed.
 	Auth int64 `json:"auth,omitempty"`
+	// Card is the break-glass card whose scan granted this session, zero for
+	// any other kind. Revoking or re-minting the card ends the session.
+	Card int64 `json:"card,omitempty"`
 }
 
 // Grant is how a session was earned, carried unchanged across renewals.
@@ -149,6 +152,7 @@ type Grant struct {
 	TOTP bool
 	PK   int64
 	Auth int64 // zero means now
+	Card int64 // the break-glass card, for a break-glass session
 }
 
 // PasskeyChallenge is the random challenge for one passkey ceremony. For
@@ -299,7 +303,7 @@ func (m *Manager) IssueSessionGrant(w http.ResponseWriter, email, groups string,
 	if auth == 0 {
 		auth = now.Unix()
 	}
-	id := Identity{Email: email, Groups: groups, Iat: now.Unix(), Kind: g.Kind, TTL: int64(ttl.Seconds()), TOTP: g.TOTP, PK: g.PK, Auth: auth}
+	id := Identity{Email: email, Groups: groups, Iat: now.Unix(), Kind: g.Kind, TTL: int64(ttl.Seconds()), TOTP: g.TOTP, PK: g.PK, Auth: auth, Card: g.Card}
 	tok, err := m.encode(typSession, id, now.Add(ttl))
 	if err != nil {
 		return err

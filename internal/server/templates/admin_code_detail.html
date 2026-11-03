@@ -36,7 +36,7 @@
   <details class="confirm">
     <summary>Re-mint this code</summary>
     <div class="confirmbody">
-      <p>Re-minting issues a new code. Every card already printed for this location stops working, so print and place the new card straight away.</p>
+      <p>Re-minting issues a new code. Every card already printed for this location stops working, and the sessions its scans have granted end, so print and place the new card straight away.</p>
       <form class="inline" method="post" action="/admin/break/{{.ID}}/remint">
         <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <button type="submit" class="danger">Re-mint the code</button>
@@ -47,7 +47,7 @@
   <details class="confirm">
     <summary>Revoke this code</summary>
     <div class="confirmbody">
-      <p>Revoking refuses every future scan of this card at once. Sessions already granted by a scan last until their own short timeout.</p>
+      <p>Revoking refuses every future scan of this card at once, and ends the sessions its scans have granted.</p>
       <form class="inline" method="post" action="/admin/break/{{.ID}}/revoke">
         <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <button type="submit" class="danger">Revoke the code</button>
