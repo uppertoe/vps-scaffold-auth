@@ -63,22 +63,25 @@
      signed-in administrator. The tabs scroll sideways on a narrow screen. */
   header.bar {
     background: var(--surface); border-bottom: 1px solid var(--border);
-    padding: 0 28px; display: flex; align-items: stretch; gap: 28px; flex-wrap: wrap;
+    padding: 0 28px; display: flex; align-items: stretch; gap: 28px; flex-wrap: nowrap;
   }
   header.bar strong { font-size: 15px; display: flex; align-items: center; padding: 14px 0; white-space: nowrap; }
-  header.bar nav { display: flex; gap: 2px; overflow-x: auto; flex: 1 1 auto; -webkit-overflow-scrolling: touch; }
+  /* The menu scrolls sideways only. The current page's underline is drawn
+     inside its link, so nothing overflows downwards and no vertical scroll
+     bar appears. */
+  header.bar nav { display: flex; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; flex: 1 1 0; min-width: 0; -webkit-overflow-scrolling: touch; }
+  header.bar nav::-webkit-scrollbar { display: none; }
   header.bar nav a {
     display: flex; align-items: center; padding: 0 12px; white-space: nowrap;
     color: var(--muted); font-size: 14px; font-weight: 500; text-decoration: none;
-    border-bottom: 2px solid transparent; margin-bottom: -1px;
   }
   header.bar nav a:hover { color: var(--text); }
-  header.bar nav a[aria-current=page] { color: var(--text); border-bottom-color: var(--accent); }
-  header.bar .who { font-size: 13px; color: var(--muted); white-space: nowrap; display: flex; gap: 14px; align-items: center; }
+  header.bar nav a[aria-current=page] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  header.bar .who { font-size: 13px; color: var(--muted); white-space: nowrap; display: flex; gap: 14px; align-items: center; flex: none; }
   main { max-width: 1040px; margin: 0 auto; padding: 32px 28px 72px; }
   @media (max-width: 720px) {
-    header.bar { padding: 0 16px; gap: 0 16px; }
-    header.bar nav { order: 3; flex-basis: 100%; margin: 0 -16px; padding: 0 8px; border-top: 1px solid var(--line); }
+    header.bar { padding: 0 16px; gap: 0 16px; flex-wrap: wrap; }
+    header.bar nav { order: 3; flex: 1 1 100%; margin: 0 -16px; padding: 0 8px; border-top: 1px solid var(--line); }
     header.bar nav a { padding: 10px 10px; }
     header.bar .who { margin-left: auto; }
     main { padding: 22px 16px 56px; }
