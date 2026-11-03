@@ -111,7 +111,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	// Anti-replay reads the clock through s.now so tests sharing a fake clock stay
 	// consistent with the rest of the server.
 	s.totpReplay = newTOTPReplay(func() time.Time { return s.now() })
-	s.passkeyChallenges = newChallengeGuard(func() time.Time { return s.now() })
+	s.passkeyChallenges = newChallengeGuard(st, func() time.Time { return s.now() })
 	if s.policy.OpenRegistration() {
 		log.Printf("authz: OPEN REGISTRATION enabled (ALLOWED_EMAIL_DOMAINS contains %q): any email verified by one-time code is admitted as a user. Private apps behind this auth must gate by group or domain, not a bare `import protected`. On a shared server prefer OPEN_REGISTRATION_HOSTS, which opens one app only.", authz.Wildcard)
 	}

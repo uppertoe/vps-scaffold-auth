@@ -349,3 +349,44 @@ func TestNoticesHaveTheirOwnSlots(t *testing.T) {
 		t.Fatal("a notice waited behind sign-in codes")
 	}
 }
+
+// While every mail slot is busy, a code request sends nothing and leaves no
+// cooldown, for a permitted address and a decoy alike, so the person can ask
+// again as soon as the flood drains. A wrong guess is answered as at any other
+// time, so the flood (which only permitted addresses can cause) cannot be
+// seen, and through it the allow-list.
+func TestCodeRequestDuringAFloodCannotBeSeen(t *testing.T) {
+	srv, sender := testServer(t)
+	ctx := context.Background()
+	release := make(chan struct{})
+	for i := 0; i < maxMailSends; i++ {
+		srv.sendMail("held", func(ctx context.Context) error { <-release; return nil })
+	}
+	c := newClient(t, srv.Handler())
+	sender.reset()
+	minExpiry := srv.now().Add(srv.cfg.OTPTTL - srv.cfg.OTPResendCooldown)
+	for _, addr := range []string{"amy@example.com", "stranger@elsewhere.org"} {
+		probe := newClient(t, srv.Handler())
+		if rec := probe.postForm("/request", url.Values{"email": {addr}}); rec.Code != http.StatusOK {
+			t.Fatalf("request %s = %d", addr, rec.Code)
+		}
+		if recent, _ := srv.store.HasRecentCode(ctx, addr, minExpiry); recent {
+			t.Errorf("the flood left %s waiting out a cooldown", addr)
+		}
+		if body := probe.postForm("/verify-code", url.Values{"code": {"000000"}}).Body.String(); !strings.Contains(body, "Incorrect code") {
+			t.Errorf("a wrong guess for %s during the flood was not answered as incorrect", addr)
+		}
+	}
+	if len(sender.notices) != 0 || sender.code() != "" {
+		t.Error("a code was sent during the flood")
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(srv.mailSlots) > 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	loginAs(t, c, sender, "amy@example.com", nil)
+	if rec := verifyAny(c); rec.Code != http.StatusOK {
+		t.Fatalf("signing in after the flood = %d", rec.Code)
+	}
+}

@@ -197,6 +197,10 @@ CREATE TABLE IF NOT EXISTS app_access (
 );
 CREATE INDEX IF NOT EXISTS idx_app_access_email ON app_access(email, created_at);
 CREATE INDEX IF NOT EXISTS idx_app_access_created ON app_access(created_at);
+CREATE TABLE IF NOT EXISTS used_challenges (
+	hash  BLOB PRIMARY KEY,
+	until INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS session_cutoffs (
 	key        TEXT PRIMARY KEY,
 	ended_at   INTEGER NOT NULL
@@ -1383,6 +1387,33 @@ func (s *SQLite) PruneAuditBefore(ctx context.Context, cutoff time.Time) error {
 	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM admin_events WHERE created_at < ?`, cut)
 	return err
+}
+
+// UseChallenge records a passkey challenge, by its hash, as used until until.
+// It reports false if the challenge is already recorded and its entry has not
+// yet expired. One statement does both, so two posts of the same challenge
+// cannot both succeed.
+func (s *SQLite) UseChallenge(ctx context.Context, hash []byte, until, now time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO used_challenges (hash, until) VALUES (?, ?)
+		 ON CONFLICT(hash) DO UPDATE SET until = excluded.until WHERE used_challenges.until < ?`,
+		hash, until.Unix(), now.Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// PruneChallenges deletes expired challenge entries and returns how many
+// remain.
+func (s *SQLite) PruneChallenges(ctx context.Context, now time.Time) (int, error) {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM used_challenges WHERE until < ?`, now.Unix()); err != nil {
+		return 0, err
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM used_challenges`).Scan(&n)
+	return n, err
 }
 
 // EndSessionsBefore records that every session for key that began at or

@@ -71,7 +71,7 @@ has its own test, named in the table.
 | G14 | The gateway refuses to start on an unsafe or malformed setting. | `config.validate` | the `TestLoad…` tests, `TestMalformedBooleanRefused` |
 | G15 | One anonymous visitor cannot exhaust the gateway. | Body and header caps, upload checks, the logo cache | `TestPublicFormsCapBodies`, `TestDeclaredOversizeIsRefused`, `TestCheckRasterRefusesCraftedPNGs`, `TestCheckSVG` |
 | G16 | Mail is never sent unencrypted, and a notification webhook cannot reach the host or cloud metadata. | `email/smtp.go`, `breakglass.dialGuarded` | `TestWebhookRefusesNameResolvingToBlockedAddress`, `TestWebhookDoesNotFollowRedirects` |
-| G17 | A passkey signs in only through a ceremony on the sign-in host itself, with the person verified, answering a fresh single-use challenge, signed by the stored key. | `passkey.VerifyAssertion`, `challengeGuard`, `handlePasskeyLogin` | `TestSignInRefusals`, `TestRegistrationRefusals`, `FuzzVerifyNeverAcceptsWithoutTheKey`, `TestPasskeySignInRefusals`; e2e: *a passkey made on a phone signs in on its own…* (a whole-domain ceremony is refused) |
+| G17 | A passkey signs in only through a ceremony on the sign-in host itself, with the person verified, answering a fresh challenge used once even across a restart, signed by the stored key. | `passkey.VerifyAssertion`, `challengeGuard`, `handlePasskeyLogin` | `TestChallengeGuardExpiryRestartAndCap`, `TestSignInRefusals`, `TestRegistrationRefusals`, `FuzzVerifyNeverAcceptsWithoutTheKey`, `TestPasskeySignInRefusals`; e2e: *a passkey made on a phone signs in on its own…* (a whole-domain ceremony is refused) |
 | G18 | Adding a passkey needs a recent sign-in with an emailed code (a passkey sign-in never counts), the challenge minted for that account, and for an administrator the second factor, checked before any ceremony. | `freshSignIn`, `mayAddPasskeyNow`, `handlePasskeyConfirmCode`, `handlePasskeyRegister` | `TestAddingAPasskeyNeedsARecentSignIn`, `TestAPasskeySessionCannotAddAnotherPasskey`, `TestRegistrationChallengeIsBoundToItsAccount`, `TestAdminPasskeys`, `TestRegistrationPostsDoNotSpendAdminCodeAttempts` |
 | G19 | A passkey satisfies the admin second factor only if it was added, with TOTP on, by an administrator who had passed it; a passkey sign-in re-checks the current rules and never makes a guest. | `adminGrade` in `handlePasskeyRegister`, `handlePasskeyLogin` | `TestPasskeyFromBeforePromotionStillNeedsTOTP`, `TestPasskeyAddedWhileTOTPOffIsNotAdminGrade`, `TestAdminPasskeys`, `TestPasskeySignInRefusals` |
 | G20 | Once a passkey is removed, the sessions it started end at their next request, everywhere; passkey IDs are never reused. | `passkeyKey` in `sessionEnded`; `passkeyStillValid` in `requireAdmin`, `passkeySession` and `renewSessionWith`; `AUTOINCREMENT` | `TestRemovingAPasskeyEndsItsSessions`, `TestRemovedPasskeyLosesAdminPagesAtOnce`, `TestPasskeyIDsAreNeverReused`; e2e: *…until it is removed* |
@@ -114,9 +114,27 @@ These risks are known. The design docs explain each one for the department.
 - A stolen session works until it expires, the person's listing is removed, or
   the person (or an administrator) signs them out on every device. One device's
   session cannot be ended on its own. No session outlives `SESSION_MAX_AGE`.
-- Ending sessions early relies on one gateway process per database: the
-  cutoffs are held in memory and written through to SQLite.
-- A sibling app can overwrite the session cookie outright.
+- Ending sessions early needs one gateway process per database: the cutoffs
+  are held in memory and written through to SQLite. The gateway enforces it:
+  a second process on the same database refuses to start
+  (`lockDatabase`, `TestOneGatewayPerDatabase`). The lock needs a local
+  volume; a network file system may not honour it.
+- A sibling app can overwrite the session cookie outright. Every site on the
+  shared cookie domain must be one the department trusts; a third-party or
+  untrusted app belongs on a separate domain with its own gateway.
+- Cutoffs and sign-in times are whole seconds, and a session that began in
+  the same second as a cutoff counts as ended. The edge fails safe: a sign-in
+  in the same second as "sign out on every device" is refused (a real sign-in
+  takes longer), and a group change in the same second as a renewal costs a
+  few extra renewals within that second. Finer times would change the
+  session format and sign everyone out.
+- While every sign-in mail slot is busy, a code request sends nothing and
+  stores only an insert-if-absent decoy that leaves no cooldown, for every
+  address alike, as when over the send limit; a wrong guess is answered as at
+  any other time, so the flood cannot be seen (`mailSaturated`,
+  `TestCodeRequestDuringAFloodCannotBeSeen`). The person asks again once the
+  flood drains. A code saved just as the last slot fills may go unsent; the
+  person asks again after the cooldown.
 - One administrator can act as another, because the person who issues a
   second-factor secret sees it once.
 - A passkey is as safe as the phone and the Apple or Google account that
@@ -128,9 +146,6 @@ These risks are known. The design docs explain each one for the department.
   registration is signed. The account holder is emailed whenever a passkey
   is added (`notifyPasskeyAdded`, `TestAddingAPasskeySendsANotice`), and the
   key is listed on their passkeys page and the access page until removed.
-- The single-use guard on challenges is in memory: a restart forgets it, so a
-  captured sign-in post and its challenge cookie could be replayed within ten
-  minutes of a restart. Capturing them needs the TLS session.
 - Rolling back to a build without passkeys keeps passkey sessions renewing
   whatever happens to their passkeys, and keeps an admin passkey session's
   second-factor mark. If a passkey compromise coincides with a rollback,

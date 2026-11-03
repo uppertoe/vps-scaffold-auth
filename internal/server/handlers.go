@@ -647,6 +647,18 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		recent = true
 	}
 	switch {
+	case s.mailSaturated():
+		// Every mail slot is in use: a flood. No code is sent and no send
+		// token is spent, for either kind of address. As when over the send
+		// limit, a decoy is stored only if no code exists: a live code is never
+		// overwritten, a wrong guess is answered "incorrect" as at any other
+		// time (so the flood cannot be seen, and through it the allow-list),
+		// and the decoy's expiry falls just short of the cooldown window, so
+		// the person's next request after the flood sends a code at once.
+		log.Printf("request for %s: no code sent, %d emails are already being sent", emailAddr, maxMailSends)
+		if err := s.storeDecoyCode(r.Context(), emailAddr, now); err != nil {
+			log.Printf("store decoy code for %s: %v", emailAddr, err)
+		}
 	case recent:
 		// No-op: a live code was issued within the cooldown. Don't mint, don't
 		// email, don't spend a send token. The existing code's attempt counter
@@ -755,6 +767,11 @@ const maxMailSends = 16
 func (s *Server) sendMail(what string, send func(ctx context.Context) error) {
 	s.sendMailVia(s.mailSlots, what, send)
 }
+
+// mailSaturated reports whether every sign-in mail slot is in use. It reads
+// global state only, never the address, so permitted and decoy addresses take
+// the same branch.
+func (s *Server) mailSaturated() bool { return len(s.mailSlots) >= cap(s.mailSlots) }
 
 // sendNotice sends a security notice (a passkey added) through slots of its
 // own, so a flood of sign-in codes cannot crowd it out.
