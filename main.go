@@ -102,7 +102,27 @@ func run() error {
 	defer stop()
 	srv.StartFeeds(ctx)
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	// The members endpoint has its own listener, on a port Caddy never
+	// proxies, so membership is never served through the public site.
+	var membersServer *http.Server
+	if len(cfg.MemberReaders) > 0 {
+		membersServer = &http.Server{
+			Addr:              cfg.MembersListenAddr,
+			Handler:           srv.MembersHandler(),
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      15 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    16 << 10,
+		}
+		go func() {
+			log.Printf("members endpoint listening on %s for %d app(s)", cfg.MembersListenAddr, len(cfg.MemberReaders))
+			if err := membersServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("members endpoint: %w", err)
+			}
+		}()
+	}
 	go func() {
 		log.Printf("listening on %s (email backend: %s, totp: %v)", cfg.ListenAddr, cfg.EmailBackend, cfg.TOTPEnabled)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -117,6 +137,9 @@ func run() error {
 		log.Print("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		if membersServer != nil {
+			_ = membersServer.Shutdown(shutdownCtx)
+		}
 		return httpServer.Shutdown(shutdownCtx)
 	}
 }

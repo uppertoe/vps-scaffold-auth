@@ -52,6 +52,8 @@ type accessView struct {
 	SignIns              []signInView
 	SignInsCapped        bool
 	SignInsShown         int
+	// Reads of group members by apps over the period (members_api.go).
+	MemberReads []memberReadView
 	// Links that keep the other filters: everything, and refused only.
 	AllLink, ProblemsLink string
 	Filtered              bool
@@ -97,6 +99,12 @@ type accessUseView struct {
 	Guest, Break bool
 	First, Last  string
 	Days, Hours  int
+}
+
+// memberReadView is one app's reads of one group over the period.
+type memberReadView struct {
+	App, Group, Source, Last string
+	Reads                    int
 }
 
 // accessPersonView is one person's use of every site over the period.
@@ -182,6 +190,14 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		v.Uses = nil
+	}
+	reads, err := s.store.SummariseMemberReads(r.Context(), f.Since)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	for _, m := range reads {
+		v.MemberReads = append(v.MemberReads, memberReadView{App: m.App, Group: m.Group, Source: m.Source, Last: s.stampMin(m.Last), Reads: m.Reads})
 	}
 	v.SignIns = s.foldSignIns(events)
 	// Events older than the scan were not read, so the list is incomplete.

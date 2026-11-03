@@ -120,6 +120,26 @@
 </div>
 {{end}}
 
+{{if .MemberReads}}
+<div class="panel">
+  <h2>Apps that read group members</h2>
+  <div class="tablewrap"><table class="stack">
+    <thead><tr><th>App</th><th>Group</th><th>From</th><th>Last read</th><th class="num">Reads</th></tr></thead>
+    <tbody>
+    {{range .MemberReads}}
+      <tr>
+        <td><code class="mono">{{.App}}</code></td>
+        <td data-label="Group"><a href="/admin/groups/{{.Group}}"><code class="mono">{{.Group}}</code></a></td>
+        <td data-label="From"><code class="mono">{{.Source}}</code></td>
+        <td class="when" data-label="Last read">{{.Last}}</td>
+        <td class="num" data-label="Reads">{{.Reads}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table></div>
+</div>
+{{end}}
+
 <div class="panel">
   <div class="head">
     <h2>Sign-ins</h2>

@@ -111,3 +111,46 @@ func TestRefusedOnlyReadsPastSuccesses(t *testing.T) {
 		t.Fatalf("refused only = %+v, %v", got, err)
 	}
 }
+
+// A group's resolved members are exactly the addresses whose sign-in groups
+// include it, through includes at any depth, and a loop of includes ends.
+func TestGroupMembersResolved(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, g := range []string{"top", "mid", "low", "aside"} {
+		if err := s.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.AddGroupMember(ctx, "top", "t@x.org")
+	s.AddGroupMember(ctx, "mid", "m@x.org")
+	s.AddGroupMember(ctx, "low", "l@x.org")
+	s.AddGroupMember(ctx, "low", "t@x.org")
+	s.AddGroupMember(ctx, "aside", "a@x.org")
+	s.AddGroupInclude(ctx, "top", "mid")
+	s.AddGroupInclude(ctx, "mid", "low")
+	// A loop slipped past the include check must still end.
+	s.db.ExecContext(ctx, `INSERT INTO group_includes (group_name, included, created_at) VALUES ('low', 'top', 0)`)
+
+	got, exists, err := s.GroupMembersResolved(ctx, "top")
+	if err != nil || !exists || strings.Join(got, " ") != "l@x.org m@x.org t@x.org" {
+		t.Fatalf("top = %v %v %v", got, exists, err)
+	}
+	for _, e := range []string{"t@x.org", "m@x.org", "l@x.org", "a@x.org"} {
+		groups, _ := s.GroupsForEmail(ctx, e)
+		in := false
+		for _, g := range groups {
+			in = in || g == "top"
+		}
+		listed := strings.Contains(" "+strings.Join(got, " ")+" ", " "+e+" ")
+		if in != listed {
+			t.Errorf("%s: sign-in groups %v, listed in top = %v", e, groups, listed)
+		}
+	}
+	if got, exists, err := s.GroupMembersResolved(ctx, "nope"); exists || err != nil || got != nil {
+		t.Errorf("missing group = %v %v %v", got, exists, err)
+	}
+	if got, exists, _ := s.GroupMembersResolved(ctx, "aside"); !exists || len(got) != 1 {
+		t.Errorf("aside = %v", got)
+	}
+}

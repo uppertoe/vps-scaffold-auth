@@ -197,6 +197,17 @@ CREATE TABLE IF NOT EXISTS app_access (
 );
 CREATE INDEX IF NOT EXISTS idx_app_access_email ON app_access(email, created_at);
 CREATE INDEX IF NOT EXISTS idx_app_access_created ON app_access(created_at);
+CREATE TABLE IF NOT EXISTS member_reads (
+	app        TEXT NOT NULL,
+	group_name TEXT NOT NULL,
+	source     TEXT NOT NULL,
+	bucket     INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	last_at    INTEGER NOT NULL,
+	reads      INTEGER NOT NULL DEFAULT 1,
+	UNIQUE (app, group_name, source, bucket)
+);
+CREATE INDEX IF NOT EXISTS idx_member_reads_last ON member_reads(last_at);
 CREATE TABLE IF NOT EXISTS admin_events (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	actor      TEXT NOT NULL,
@@ -1363,8 +1374,82 @@ func (s *SQLite) PruneAuditBefore(ctx context.Context, cutoff time.Time) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM app_access WHERE created_at < ?`, cut); err != nil {
 		return err
 	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM member_reads WHERE last_at < ?`, cut); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM admin_events WHERE created_at < ?`, cut)
 	return err
+}
+
+// GroupMembersResolved returns the addresses a group admits: its own members
+// and, through includes, the members of every group it includes, and so on
+// down. It is the inverse of GroupsForEmail: an address is listed here
+// exactly when group is among GroupsForEmail(address). exists is false when
+// the group does not exist.
+func (s *SQLite) GroupMembersResolved(ctx context.Context, group string) (members []string, exists bool, err error) {
+	var one int
+	switch err := s.db.QueryRowContext(ctx, `SELECT 1 FROM groups WHERE name = ?`, group).Scan(&one); {
+	case err == sql.ErrNoRows:
+		return nil, false, nil
+	case err != nil:
+		return nil, false, err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`WITH RECURSIVE g(name) AS (
+		   SELECT ?
+		   UNION
+		   SELECT gi.included FROM group_includes gi JOIN g ON gi.group_name = g.name
+		 )
+		 SELECT DISTINCT email FROM group_members WHERE group_name IN (SELECT name FROM g) ORDER BY email`, group)
+	if err != nil {
+		return nil, true, err
+	}
+	defer rows.Close()
+	members = []string{}
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			return nil, true, err
+		}
+		members = append(members, e)
+	}
+	return members, true, rows.Err()
+}
+
+// RecordMemberRead notes that app read group's members from source (the
+// caller's address), folded to one row per app, group, source and hour with a
+// count of reads. A token used from a second container shows as a second
+// source.
+func (s *SQLite) RecordMemberRead(ctx context.Context, app, group, source string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO member_reads (app, group_name, source, bucket, created_at, last_at) VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(app, group_name, source, bucket) DO UPDATE SET reads = reads + 1, last_at = excluded.last_at`,
+		app, group, source, at.Unix()/3600, at.Unix(), at.Unix())
+	return err
+}
+
+// SummariseMemberReads returns one row per app and group read since since,
+// newest last read first.
+func (s *SQLite) SummariseMemberReads(ctx context.Context, since time.Time) ([]MemberReadSummary, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT app, group_name, source, MIN(created_at), MAX(last_at), SUM(reads)
+		 FROM member_reads WHERE last_at >= ?
+		 GROUP BY app, group_name, source ORDER BY MAX(last_at) DESC, app, group_name, source`, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MemberReadSummary
+	for rows.Next() {
+		var m MemberReadSummary
+		var first, last int64
+		if err := rows.Scan(&m.App, &m.Group, &m.Source, &first, &last, &m.Reads); err != nil {
+			return nil, err
+		}
+		m.First, m.Last = time.Unix(first, 0), time.Unix(last, 0)
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // GetCodeBranding returns a code's branding overrides (empty = inherit global).

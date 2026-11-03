@@ -516,6 +516,52 @@ still reach an app during a time-critical event (e.g. a code stroke).
 > factor. That is the point — the mitigations are the short TTL, the mandatory
 > audit log, the admin notification on every use, and instant revocation.
 
+
+### Group members for apps
+
+Apps learn a person's groups on every request through `Remote-Groups`. For
+work an app does outside a request, such as a weekly email to a group, the
+gateway can tell the app who is in the group, so membership is kept in the
+gateway and nowhere else.
+
+```
+MEMBER_READERS=teaching-cases=teaching_cases_coordinators,rch-consultants
+MEMBER_READER_TOKEN_TEACHING_CASES=<openssl rand -hex 32>
+```
+
+Each app has its own token (32 or more characters, never shared between
+apps) and may read only the groups listed for it. The base roles (`admin`,
+`user`, `guest`) can never be listed.
+
+The endpoint is served on its own port, `MEMBERS_LISTEN_ADDR` (default
+`:8081`), which Caddy never proxies, so only containers on the server's
+Docker network can reach it. Never publish this port (no `ports:` entry in
+compose). The gateway refuses to start if that port is the one in
+`LISTEN_ADDR`, answers only callers on a loopback or private address (every
+Docker network is one, and a published port keeps the caller's public
+address), and refuses any request that carries forwarding headers.
+
+```
+GET http://auth:8081/v1/groups/{group}/members
+Authorization: Bearer <token>
+
+200 {"group": "...", "members": ["a@…", "b@…"], "as_of": "2026-11-03T10:00:00Z"}
+401 no token, or a token the gateway does not know
+403 a group this app may not read, or a group that does not exist (the same answer),
+    or a caller outside the private network
+405 any method but GET
+429 more than 120 reads a minute from one app
+```
+
+The members are the people the gateway applies now: the group's own members
+and, through includes, the members of every group it includes, as
+`Remote-Groups` gives them at sign-in. A held feed change is not included
+until it is applied, and an address the allow-list does not admit is left
+out, so a guest member is never reported. Each read is recorded, one row per
+app, group, caller address and hour, and listed on the Access log under "Apps
+that read group members". A token used from a second container shows there
+as a second address.
+
 ## Security notes
 
 - **Every app on the cookie domain is trusted equally.** The session cookie is
