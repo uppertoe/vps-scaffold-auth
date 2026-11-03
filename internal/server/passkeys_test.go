@@ -568,4 +568,26 @@ func TestAddingAPasskeySendsANotice(t *testing.T) {
 	if !strings.Contains(notice.HTML, `href="https://auth.example.com/passkeys"`) {
 		t.Error("notice HTML has no link to the passkeys page")
 	}
+	// The HTML is the branded layout, not the plain fallback, and carries the
+	// same sentences as the text part.
+	for _, want := range []string{
+		">A passkey has been added to your account</h1>",
+		"on 2 November 2026 at 3:14 pm, on an iPhone.",
+		">Your passkeys</a>",
+	} {
+		if !strings.Contains(notice.HTML, want) {
+			t.Errorf("notice HTML lacks %q", want)
+		}
+	}
+}
+
+// The notice's HTML template does not escape, so the gateway must: a brand
+// name with markup in it is shown as text.
+func TestPasskeyNoticeEscapesTheBrandName(t *testing.T) {
+	srv, _ := pkServer(t, nil)
+	srv.cfg.BrandName = `<b>RCH</b> & co`
+	msg := srv.passkeyAddedEmail("user@example.com", "an iPhone", time.Unix(1_700_000_000, 0))
+	if strings.Contains(msg.HTML, "<b>RCH</b>") || !strings.Contains(msg.HTML, "&lt;b&gt;RCH&lt;/b&gt; &amp; co") {
+		t.Fatalf("brand name not escaped in the notice:\n%s", msg.HTML)
+	}
 }
