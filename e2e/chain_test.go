@@ -432,6 +432,46 @@ func TestChain(t *testing.T) {
 		}
 	})
 
+	t.Run("the session cookie in odd forms admits no one and reaches no app", func(t *testing.T) {
+		var token string
+		for _, c := range alice.jar.Cookies(&url.URL{Scheme: "https", Host: "app." + domain}) {
+			if c.Name == cookieKey {
+				token = c.Value
+			}
+		}
+		if token == "" {
+			t.Fatal("alice has no session cookie")
+		}
+		// A fresh browser sends hand-written cookie headers, as a sibling
+		// site or a script could arrange.
+		odd := newBrowser(t)
+		refused := map[string]string{
+			"a second session cookie beside the real one": cookieKey + "=" + token + "; " + cookieKey + "=forged",
+			"the real token under a name in other case":   strings.ToUpper(cookieKey) + "=" + token,
+			"the real token under a lookalike name":       cookieKey + "_=" + token,
+		}
+		for what, cookie := range refused {
+			r := odd.get("https://app."+domain+"/", map[string]string{"Cookie": cookie})
+			if r.status != http.StatusFound || !strings.HasPrefix(r.location(), authHost+"/login") {
+				t.Errorf("%s: %d to %q, want sign-in", what, r.status, r.location())
+			}
+		}
+		// On a public app and a public path, every copy of the session
+		// cookie is removed, wherever it sits among the app's own cookies.
+		for _, target := range []string{"https://public." + domain + "/", "https://mixed." + domain + "/webhooks/x"} {
+			h := appSees(t, odd.get(target, map[string]string{
+				"Cookie": "app_a=1; " + cookieKey + "=" + token + "; app_b=2; " + cookieKey + "=second",
+			}))
+			sent := strings.Join(h["Cookie"], "; ")
+			if strings.Contains(sent, cookieKey+"=") {
+				t.Errorf("%s received the session cookie: %s", target, sent)
+			}
+			if !strings.Contains(sent, "app_a=1") || !strings.Contains(sent, "app_b=2") {
+				t.Errorf("%s lost the app's own cookies: %s", target, sent)
+			}
+		}
+	})
+
 	t.Run("an address at the wrong domain is declined before a code is sent", func(t *testing.T) {
 		b := newBrowser(t)
 		before := mailsTo(t, "bob@outside.example")
@@ -516,7 +556,7 @@ func TestChain(t *testing.T) {
 		}
 	})
 
-	t.Run("an admin change through Caddy reaches a session at its next renewal", func(t *testing.T) {
+	t.Run("an admin change through Caddy reaches a session at its next request", func(t *testing.T) {
 		page := boss.get(authHost+"/admin/groups", nil)
 		csrf := hidden(page.body).Get("csrf")
 		if csrf == "" {
@@ -537,7 +577,8 @@ func TestChain(t *testing.T) {
 		if bare.status != http.StatusForbidden {
 			t.Errorf("admin change without a form token: %d", bare.status)
 		}
-		time.Sleep(4 * time.Second)
+		// No waiting for a renewal: a membership change reaches the session
+		// at its next request.
 		h := appSees(t, alice.get("https://reports."+domain+"/", nil))
 		if h.Get("Remote-Groups") != "user,reports" {
 			t.Errorf("alice's groups after renewal = %q", h.Get("Remote-Groups"))

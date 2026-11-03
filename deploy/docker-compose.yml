@@ -26,6 +26,12 @@ services:
       - DOMAIN=${DOMAIN}
     volumes:
       - auth_data:/data
+    # This sample joins one shared "caddy" network to stay short. On the
+    # scaffold's servers it is not the layout: the gateway shares auth_proxy with
+    # Caddy, and each app sits on its own <app>_proxy network that only Caddy
+    # joins. The scaffold's compose audit refuses a network shared by two apps,
+    # and apps publish no ports. An app trusts the Remote-* headers only because
+    # nothing but Caddy can reach it, so never put apps on one network together.
     networks:
       - caddy
     read_only: true
