@@ -232,6 +232,22 @@ type AppAccess struct {
 	CreatedAt time.Time
 }
 
+// AccessFilter narrows the access log. Email matches any address containing
+// it (case-insensitive); Host matches one site exactly; empty fields match all.
+type AccessFilter struct {
+	Email string
+	Host  string
+	Since time.Time
+}
+
+// AccessSummary is one person's use of one site over a period.
+type AccessSummary struct {
+	Email, Host, Kind string
+	First, Last       time.Time
+	Hours             int // distinct hours with at least one visit
+	Days              int // distinct days with at least one visit
+}
+
 // Branding holds the admin-configurable content rendered on break-glass PDF
 // cards. Logo and Glyph are raw image bytes (PNG/JPEG/SVG) with their MIME type;
 // either may be empty.
@@ -459,6 +475,19 @@ type Store interface {
 	// ListAppAccess returns app-access rows, newest first, paginated. An empty
 	// email lists across all addresses.
 	ListAppAccess(ctx context.Context, email string, limit, offset int) ([]AppAccess, error)
+	// SummariseAppAccess folds the hourly app-access rows matching f into one
+	// row per person, site and kind, newest last visit first. dayOffset (in
+	// seconds east of UTC) sets where a day starts when counting days.
+	SummariseAppAccess(ctx context.Context, f AccessFilter, dayOffset int) ([]AccessSummary, error)
+	// SummarisePeople folds the rows matching f into one row per person:
+	// Host lists the sites (comma-separated, sorted) and Kind the kinds of
+	// session other than an ordinary one, newest last visit first.
+	SummarisePeople(ctx context.Context, f AccessFilter, dayOffset int) ([]AccessSummary, error)
+	// AppAccessHosts lists the sites with an app-access row since since.
+	AppAccessHosts(ctx context.Context, since time.Time) ([]string, error)
+	// ListAuthEventsFiltered returns login-flow events matching f (Host is
+	// ignored), newest first, at most limit.
+	ListAuthEventsFiltered(ctx context.Context, f AccessFilter, limit int) ([]AuthEvent, error)
 	// PruneAuditBefore deletes auth_events and app_access rows older than cutoff,
 	// enforcing the retention window.
 	PruneAuditBefore(ctx context.Context, cutoff time.Time) error

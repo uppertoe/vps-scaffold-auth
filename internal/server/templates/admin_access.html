@@ -1,16 +1,36 @@
 {{define "title"}}{{.Title}}{{end}}
 {{define "content"}}
+{{with .Access}}
 <h1>Access log</h1>
-<p class="sub">Login attempts and the apps each person has reached. App access is deduplicated to one row per person, app, and hour &mdash; not per request.</p>
+<p class="sub">The sites each person has used, and every sign-in. Narrow the page to one person, one site or a shorter period.</p>
 
-<form method="get" action="/admin/access" class="panel">
-  <label for="email" style="margin-top:0">Filter by email</label>
-  <div class="inlineform" style="margin-top:0">
-    <input id="email" name="email" type="email" value="{{.FilterEmail}}" placeholder="person@example.com">
-    <button type="submit">Filter</button>
-    {{if .FilterEmail}}<a href="/admin/access">Clear</a>{{end}}
+<form method="get" action="/admin/access" class="panel filters">
+  <div class="row">
+    <div>
+      <label for="email">Person</label>
+      <input id="email" name="email" type="text" value="{{.Person}}" placeholder="Name or address" autocomplete="off">
+    </div>
+    <div>
+      <label for="site">Site</label>
+      <select id="site" name="site">
+        <option value="">All sites</option>
+        {{$site := .Site}}{{range .Sites}}<option value="{{.}}"{{if eq . $site}} selected{{end}}>{{.}}</option>{{end}}
+      </select>
+    </div>
+    <div>
+      <label for="period">Period</label>
+      <select id="period" name="period">
+        {{range .Periods}}<option value="{{.Key}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+      </select>
+    </div>
+  </div>
+  {{if .ProblemsOnly}}<input type="hidden" name="show" value="problems">{{end}}
+  <div class="actionsrow">
+    <button type="submit">Show</button>
+    {{if .Filtered}}<a href="/admin/access">Clear the filters</a>{{end}}
   </div>
 </form>
+{{end}}
 
 {{if .PasskeysOn}}
 <div class="panel">
@@ -31,51 +51,103 @@
   </form>
   <p class="muted">Anyone signed in with a removed passkey is signed out within {{.PasskeyRenew}}. The person can still sign in with an email code.</p>
   {{else}}
-  <p class="muted">This person has no passkeys.</p>
+  <p class="muted" style="margin:0">This person has no passkeys.</p>
   {{end}}
 </div>
 {{end}}
 
+{{with .Access}}
 <div class="panel">
-  <h2>App access</h2>
-  {{if .AppAccess}}
+  <h2>Sites</h2>
+  {{if .SiteSummary}}
   <div class="tablewrap"><table class="stack">
-    <thead><tr><th>When</th><th>Email</th><th>App</th><th>Type</th></tr></thead>
+    <thead><tr><th>Site</th><th class="num">People</th><th>Last visit</th></tr></thead>
     <tbody>
-    {{range .AppAccess}}
+    {{range .SiteSummary}}
       <tr>
-        <td class="when">{{.Time}}</td>
-        <td data-label="Email">{{.Email}}</td>
-        <td data-label="App"><code class="mono">{{.Host}}</code></td>
-        <td data-label="Type">{{if .BreakGlass}}<span class="pill off">break-glass</span>{{else if .Guest}}<span class="pill guest">guest</span>{{else}}<span class="pill ok">login</span>{{end}}</td>
+        <td><a href="{{.Link}}"><code class="mono">{{.Host}}</code></a></td>
+        <td class="num" data-label="People">{{.People}}</td>
+        <td class="when" data-label="Last visit">{{.Last}}</td>
       </tr>
     {{end}}
     </tbody>
   </table></div>
   {{else}}
-  <p class="muted">No app-access records{{if .FilterEmail}} for this address{{end}} yet.</p>
+  <p class="muted" style="margin:0">Nobody has used a site in this period{{if or .Person .Site}} that matches the filters{{end}}.</p>
   {{end}}
 </div>
 
+{{if .People}}
 <div class="panel">
-  <h2>Login attempts</h2>
-  {{if .AuthEvents}}
+  <h2>People</h2>
+  <p class="muted">Choose a person to see each site they used, their sign-ins and their passkeys.</p>
   <div class="tablewrap"><table class="stack">
-    <thead><tr><th>When</th><th>Email</th><th>Step</th><th>Outcome</th><th>Client IP</th></tr></thead>
+    <thead><tr><th>Person</th><th>Sites</th><th>Last visit</th><th class="num">Days</th><th class="num">Hours</th></tr></thead>
     <tbody>
-    {{range .AuthEvents}}
+    {{range .People}}
       <tr>
-        <td class="when">{{.Time}}</td>
-        <td data-label="Email">{{.Email}}</td>
-        <td data-label="Step"><code class="mono">{{.Type}}</code></td>
-        <td data-label="Outcome">{{if .OK}}<span class="pill ok">{{.Outcome}}</span>{{else}}<span class="pill off">{{.Outcome}}</span>{{end}}</td>
-        <td data-label="Client IP"><code class="mono">{{.ClientIP}}</code></td>
+        <td><a href="{{.Link}}">{{.Email}}</a>{{if .Guest}} <span class="pill tag">guest</span>{{end}}{{if .Break}} <span class="pill off">break-glass</span>{{end}}</td>
+        <td data-label="Sites">{{range $i, $h := .Sites}}{{if $i}}<br>{{end}}<code class="mono">{{$h}}</code>{{end}}</td>
+        <td class="when" data-label="Last visit">{{.Last}}</td>
+        <td class="num" data-label="Days">{{.Days}}</td>
+        <td class="num" data-label="Hours">{{.Hours}}</td>
       </tr>
     {{end}}
     </tbody>
   </table></div>
+</div>
+{{end}}
+
+{{if .Uses}}
+<div class="panel">
+  <h2>Who used which site</h2>
+  <p class="muted">A day or an hour counts once however many times the person opened the site in it.</p>
+  <div class="tablewrap"><table class="stack">
+    <thead><tr><th>Person</th><th>Site</th><th>Last visit</th><th class="num">Days</th><th class="num">Hours</th><th>First visit</th></tr></thead>
+    <tbody>
+    {{range .Uses}}
+      <tr>
+        <td><a href="{{.PersonLink}}">{{.Email}}</a>{{if .Guest}} <span class="pill tag">guest</span>{{end}}{{if .Break}} <span class="pill off">break-glass</span>{{end}}</td>
+        <td data-label="Site"><code class="mono">{{.Host}}</code></td>
+        <td class="when" data-label="Last visit">{{.Last}}</td>
+        <td class="num" data-label="Days">{{.Days}}</td>
+        <td class="num" data-label="Hours">{{.Hours}}</td>
+        <td class="when" data-label="First visit">{{.First}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table></div>
+</div>
+{{end}}
+
+<div class="panel">
+  <div class="head">
+    <h2>Sign-ins</h2>
+    <div class="seg" role="group" aria-label="Which sign-ins to show">
+      <a href="{{.AllLink}}"{{if not .ProblemsOnly}} aria-current="true"{{end}}>All</a>
+      <a href="{{.ProblemsLink}}"{{if .ProblemsOnly}} aria-current="true"{{end}}>Refused only</a>
+    </div>
+  </div>
+  {{if .SignIns}}
+  <div class="tablewrap"><table class="stack">
+    <thead><tr><th>When</th><th>Person</th><th>Result</th><th>How</th><th>Device</th><th>Client IP</th></tr></thead>
+    <tbody>
+    {{range .SignIns}}
+      <tr>
+        <td class="when">{{.Time}}</td>
+        <td data-label="Person">{{.Email}}</td>
+        <td data-label="Result">{{if .OK}}<span class="pill ok">{{.Result}}</span>{{else}}<span class="pill off">{{.Result}}</span>{{end}}</td>
+        <td data-label="How">{{.How}}</td>
+        <td data-label="Device">{{if .Device}}{{.Device}}{{else}}<span class="muted">Unknown</span>{{end}}</td>
+        <td data-label="Client IP"><code class="mono">{{.IP}}</code></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table></div>
+  {{if .SignInsCapped}}<p class="muted" style="margin:14px 0 0">Only the {{.SignInsShown}} most recent are shown. Choose a person or a shorter period to see others.</p>{{end}}
   {{else}}
-  <p class="muted">No login attempts{{if .FilterEmail}} for this address{{end}} yet.</p>
+  <p class="muted" style="margin:0">{{if .ProblemsOnly}}No sign-in has been refused in this period{{else}}Nobody has signed in in this period{{end}}{{if .Person}} with an address matching the filter{{end}}.</p>
   {{end}}
 </div>
+{{end}}
 {{end}}

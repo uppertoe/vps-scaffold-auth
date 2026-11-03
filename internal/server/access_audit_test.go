@@ -79,6 +79,9 @@ func TestAccessAuditHourlyBucket(t *testing.T) {
 
 	a.record(ctx, "user@example.com", "app.example.com", "", t0)
 	a.record(ctx, "user@example.com", "app.example.com", "", t0.Add(40*time.Minute)) // same hour
+	// The same site written differently is the same site.
+	a.record(ctx, "user@example.com", "App.Example.com:443", "", t0.Add(41*time.Minute))
+	a.record(ctx, "user@example.com", "app.example.com.", "", t0.Add(42*time.Minute))
 	if rows, _ := srv.store.ListAppAccess(ctx, "user@example.com", 100, 0); len(rows) != 1 {
 		t.Fatalf("same-hour rows = %d, want 1", len(rows))
 	}

@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"log"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +37,12 @@ func newAccessAudit(st store.Store, retention time.Duration) *accessAudit {
 // the database only on the first sighting of a (principal, app, kind) tuple in a
 // given hour. A blank host (a /verify with no X-Forwarded-Host) is ignored.
 func (a *accessAudit) record(ctx context.Context, email, host, kind string, now time.Time) {
+	// One site is one host: "Planka.example.org" and "planka.example.org:443"
+	// are the same site, so they share a row.
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	if host == "" {
 		return
 	}

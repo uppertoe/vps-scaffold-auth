@@ -223,6 +223,15 @@
   .inlineform input[type=text], .inlineform input[type=email], .inlineform select { flex: 1 1 220px; width: auto; padding: 7px 10px; font-size: 14px; }
   .inlineform button { margin-top: 0; }
 
+  /* A two- or three-way switch made of links. */
+  .seg { display: inline-flex; border: 1px solid var(--input-border); border-radius: 8px; overflow: hidden; }
+  .seg a { padding: 5px 12px; font-size: 13px; font-weight: 600; color: var(--muted); text-decoration: none; }
+  .seg a + a { border-left: 1px solid var(--input-border); }
+  .seg a:hover { background: var(--surface-2); color: var(--text); }
+  .seg a[aria-current] { background: var(--accent-soft); color: var(--accent); }
+  .filters .row > div { flex: 1 1 200px; }
+  .filters label { margin-top: 0; }
+
   /* Overview tiles. */
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 24px; }
   .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; text-decoration: none; color: inherit; display: block; }

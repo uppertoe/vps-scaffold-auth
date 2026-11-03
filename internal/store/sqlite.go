@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -1168,6 +1169,151 @@ func (s *SQLite) RecordAppAccess(ctx context.Context, a AppAccess) error {
 		 ON CONFLICT(email, host, kind, bucket) DO NOTHING`,
 		a.Email, a.Host, a.Kind, a.Bucket, a.CreatedAt.Unix())
 	return err
+}
+
+// likeContains is a LIKE pattern matching any text containing sub, with the
+// pattern characters in sub escaped (ESCAPE '\').
+func likeContains(sub string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return "%" + r.Replace(strings.ToLower(sub)) + "%"
+}
+
+// accessWhere builds the WHERE clause shared by the access-log queries.
+func accessWhere(f AccessFilter, withHost bool) (string, []any) {
+	where := ` WHERE created_at >= ?`
+	args := []any{f.Since.Unix()}
+	if f.Email != "" {
+		where += ` AND email LIKE ? ESCAPE '\'`
+		args = append(args, likeContains(f.Email))
+	}
+	if withHost && f.Host != "" {
+		where += ` AND host = ?`
+		args = append(args, f.Host)
+	}
+	return where, args
+}
+
+func (s *SQLite) SummariseAppAccess(ctx context.Context, f AccessFilter, dayOffset int) ([]AccessSummary, error) {
+	where, args := accessWhere(f, true)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT email, host, kind, MIN(created_at), MAX(created_at), COUNT(*),
+		        COUNT(DISTINCT (bucket * 3600 + ?) / 86400)
+		 FROM app_access`+where+`
+		 GROUP BY email, host, kind
+		 ORDER BY MAX(created_at) DESC, email, host`,
+		append([]any{dayOffset}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AccessSummary
+	for rows.Next() {
+		var a AccessSummary
+		var first, last int64
+		if err := rows.Scan(&a.Email, &a.Host, &a.Kind, &first, &last, &a.Hours, &a.Days); err != nil {
+			return nil, err
+		}
+		a.First, a.Last = time.Unix(first, 0), time.Unix(last, 0)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) SummarisePeople(ctx context.Context, f AccessFilter, dayOffset int) ([]AccessSummary, error) {
+	where, args := accessWhere(f, true)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT email, MIN(created_at), MAX(created_at), COUNT(DISTINCT bucket),
+		        COUNT(DISTINCT (bucket * 3600 + ?) / 86400)
+		 FROM app_access`+where+`
+		 GROUP BY email
+		 ORDER BY MAX(created_at) DESC, email`,
+		append([]any{dayOffset}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	var out []AccessSummary
+	for rows.Next() {
+		var a AccessSummary
+		var first, last int64
+		if err := rows.Scan(&a.Email, &first, &last, &a.Hours, &a.Days); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		a.First, a.Last = time.Unix(first, 0), time.Unix(last, 0)
+		out = append(out, a)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Each person's sites and kinds, read separately so each list is sorted
+	// and distinct without relying on GROUP_CONCAT ordering.
+	sites := map[string][]string{}
+	kinds := map[string][]string{}
+	pairs, err := s.db.QueryContext(ctx, `SELECT DISTINCT email, host, kind FROM app_access`+where+` ORDER BY email, host, kind`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer pairs.Close()
+	for pairs.Next() {
+		var e, h, k string
+		if err := pairs.Scan(&e, &h, &k); err != nil {
+			return nil, err
+		}
+		if l := sites[e]; len(l) == 0 || l[len(l)-1] != h {
+			sites[e] = append(l, h)
+		}
+		if k != "" && !slices.Contains(kinds[e], k) {
+			kinds[e] = append(kinds[e], k)
+		}
+	}
+	if err := pairs.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Host = strings.Join(sites[out[i].Email], ",")
+		out[i].Kind = strings.Join(kinds[out[i].Email], ",")
+	}
+	return out, nil
+}
+
+func (s *SQLite) AppAccessHosts(ctx context.Context, since time.Time) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT host FROM app_access WHERE created_at >= ? ORDER BY host`, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) ListAuthEventsFiltered(ctx context.Context, f AccessFilter, limit int) ([]AuthEvent, error) {
+	where, args := accessWhere(f, false)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, email, event_type, outcome, client_ip, user_agent, created_at FROM auth_events`+where+
+			` ORDER BY created_at DESC, id DESC LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuthEvent
+	for rows.Next() {
+		var e AuthEvent
+		var created int64
+		if err := rows.Scan(&e.ID, &e.Email, &e.EventType, &e.Outcome, &e.ClientIP, &e.UserAgent, &created); err != nil {
+			return nil, err
+		}
+		e.CreatedAt = time.Unix(created, 0)
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // ListAppAccess returns app-access rows, newest first. Empty email = all.
