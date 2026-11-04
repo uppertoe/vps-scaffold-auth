@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
@@ -1054,6 +1055,17 @@ func (s *Server) handleAdminAddMember(w http.ResponseWriter, r *http.Request) {
 	s.renderAdmin(w, r, http.StatusOK, "admin_bulk_add", adminData{Title: "Add members", Bulk: plan})
 }
 
+// validCardLabel reports whether a break-glass card label may become part of
+// a session's principal: no "@", no comma and no control character.
+func validCardLabel(label string) bool {
+	for _, r := range label {
+		if r == '@' || r == ',' || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // clampLabel trims a group label and caps it at 200 characters.
 func clampLabel(label string) string {
 	label = trimField(label)
@@ -1146,6 +1158,17 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 	if label == "" || group == "" {
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title: "Missing fields", Message: "A label and a target group are both required.",
+		})
+		return
+	}
+	// The label becomes the session's principal, "breakglass:<label>", which
+	// apps read as Remote-User and Remote-Email. An "@" could make an app that
+	// takes the domain after the last "@" read the card as a department
+	// address, a comma could split a header list, and a line break has no
+	// place in a header.
+	if !validCardLabel(label) {
+		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
+			Title: "Invalid label", Message: "A label cannot contain \"@\", a comma or a line break.",
 		})
 		return
 	}

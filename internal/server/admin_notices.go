@@ -33,6 +33,7 @@ var adminWarnings = map[string]string{
 	"members-none":      "No members have been added, because none were ticked.",
 	"members-refused":   "No members have been added. The allow-list does not admit those addresses, and the gateway does not add such an address to a group an application reads as one of its own roles.",
 	"include-cycle":     "The group has not been included, because that would make a group include itself.",
+	"include-refused":   "The group has not been included, because some of its members are outside the allow-list and this group is an application role.",
 	"group-synced":      "The members of this group come from its feed, so they cannot be changed here. To add people alongside them, include this group in another group.",
 	"sync-held":         "The members have been kept as they were, because the change is large enough to need checking. The group lists what would change; accept it there if it is right.",
 	"sync-nothing-held": "No change is held for this group, so nothing has been applied.",

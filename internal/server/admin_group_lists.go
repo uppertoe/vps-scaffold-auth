@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -179,6 +180,11 @@ func (s *Server) handleAdminAddInclude(w http.ResponseWriter, r *http.Request) {
 		s.redirectDone(w, r, "/admin/groups", "group-synced", group)
 		return
 	}
+	before, err := s.appRoleOutsiders(r)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
 	if err := s.store.AddGroupInclude(r.Context(), group, included); err != nil {
 		if errors.Is(err, store.ErrIncludeCycle) {
 			s.redirectDone(w, r, "/admin/groups", "include-cycle", group)
@@ -187,9 +193,67 @@ func (s *Server) handleAdminAddInclude(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
+	// An include must not bring an address the allow-list does not admit
+	// into a group an application reads as one of its own roles, directly or
+	// through groups that include this one. Sessions drop such groups for
+	// those addresses anyway (withoutAppRolesForOutsider); refusing the
+	// include keeps the groups pages truthful. A failure to check undoes the
+	// include rather than keep one that could not be checked.
+	after, err := s.appRoleOutsiders(r)
+	if err != nil || gainedOutsider(before, after) {
+		if rmErr := s.store.RemoveGroupInclude(r.Context(), group, included); rmErr != nil {
+			log.Printf("undo include %s <- %s: %v", group, included, rmErr)
+		}
+		if err != nil {
+			s.adminError(w, r)
+			return
+		}
+		s.redirectDone(w, r, "/admin/groups", "include-refused", group)
+		return
+	}
 	s.markGroupsChanged(s.now())
 	s.auditAdmin(r, store.AdminActionGroupIncludeAdd, group, included)
 	s.redirectDone(w, r, "/admin/groups", "include-added", group)
+}
+
+// appRoleOutsiders lists, for each hand-managed application-role group, the
+// addresses it admits through includes that the allow-list does not admit.
+func (s *Server) appRoleOutsiders(r *http.Request) (map[string]map[string]bool, error) {
+	out := map[string]map[string]bool{}
+	for g := range s.appRoleGroups() {
+		if _, feed := s.feedFor(g); feed {
+			continue
+		}
+		members, exists, err := s.store.GroupMembersResolved(r.Context(), g)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			continue
+		}
+		for _, m := range members {
+			if !s.policy.Allowed(m) {
+				if out[g] == nil {
+					out[g] = map[string]bool{}
+				}
+				out[g][m] = true
+			}
+		}
+	}
+	return out, nil
+}
+
+// gainedOutsider reports whether any group admits an outside address in
+// after that it did not admit in before.
+func gainedOutsider(before, after map[string]map[string]bool) bool {
+	for g, set := range after {
+		for m := range set {
+			if !before[g][m] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) handleAdminRemoveInclude(w http.ResponseWriter, r *http.Request) {

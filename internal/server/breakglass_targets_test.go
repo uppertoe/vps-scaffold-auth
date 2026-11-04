@@ -351,3 +351,69 @@ func TestGuestCannotReachAppRoleThroughInclude(t *testing.T) {
 		t.Errorf("staff through the same include = %d, want 200", rec.Code)
 	}
 }
+
+// Including a group with outside members in an application-role group,
+// directly or through a group that the role includes, is refused and undone;
+// an include of staff only goes ahead.
+func TestIncludeBringingOutsidersIntoAppRoleRefused(t *testing.T) {
+	srv, sender := appRoleServer(t, nil)
+	ctx := context.Background()
+	for _, g := range []string{"airdb_admin", "middle", "collaborators", "staff"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := srv.store.AddGroupMembers(ctx, "collaborators", []string{strangerAddr}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.AddGroupMembers(ctx, "staff", []string{"staff@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.AddGroupInclude(ctx, "airdb_admin", "middle"); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	include := func(group, included string) string {
+		c.postForm("/admin/groups/"+group+"/includes", url.Values{"csrf": {tok}, "included": {included}})
+		ck := c.cookies[srv.noticeCookieName()]
+		if ck == nil {
+			return ""
+		}
+		return ck.Value
+	}
+	for _, g := range []string{"airdb_admin", "middle"} {
+		if loc := include(g, "collaborators"); !strings.Contains(loc, "include-refused") {
+			t.Fatalf("include of outsiders into %s: %q, want include-refused", g, loc)
+		}
+		members, _, _ := srv.store.GroupMembersResolved(ctx, "airdb_admin")
+		for _, m := range members {
+			if m == strangerAddr {
+				t.Fatalf("the refused include into %s was kept", g)
+			}
+		}
+	}
+	if loc := include("airdb_admin", "staff"); !strings.Contains(loc, "include-added") {
+		t.Fatalf("include of staff: %q, want include-added", loc)
+	}
+}
+
+// A card label that could pass for an address or split a header list is
+// refused; an ordinary label with punctuation is accepted.
+func TestCardLabelRefusesAtCommaAndLineBreak(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	for _, label := range []string{"ops@example.com", "ED, Resus", "Ward\nB"} {
+		rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {label}, "group_new": {"ward-b"}})
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Invalid label") {
+			t.Errorf("label %q: %d, want 400 Invalid label", label, rec.Code)
+		}
+	}
+	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Children's ED/Resus (CCU)"}, "group_new": {"ward-b"}})
+	if rec.Code == http.StatusBadRequest {
+		t.Fatalf("an ordinary label was refused: %s", rec.Body.String())
+	}
+}
