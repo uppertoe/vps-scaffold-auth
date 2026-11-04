@@ -124,3 +124,48 @@ func TestReviewBreakGlassChargesTwice(t *testing.T) {
 		t.Errorf("one use spends two limiter tokens")
 	}
 }
+
+// P1: an administrator's app-level admin roles (a DB group an app reads as
+// its administrator) ride on the email code alone; no second step is asked.
+func TestReviewAppAdminRoleWithoutSecondStep(t *testing.T) {
+	srv, sender := appRoleServer(t, nil)
+	srv.cfg.TOTPEnabled = true
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	ctx := context.Background()
+	if err := srv.store.CreateGroup(ctx, "airdb_admin", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.AddGroupMember(ctx, "airdb_admin", "admin@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil) // inbox only
+	rec := c.get("/verify", map[string]string{"X-Auth-Policy": "groups=airdb_admin admin"})
+	t.Logf("route 'airdb_admin admin' with email code only: %d groups=%q loc=%q",
+		rec.Code, rec.Header().Get("Remote-Groups"), rec.Header().Get("Location"))
+	if rec.Code == http.StatusOK && strings.Contains(rec.Header().Get("Remote-Groups"), "airdb_admin") {
+		t.Errorf("inbox-only sign-in of an administrator reaches the app's admin role")
+	}
+	if !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
+		t.Errorf("admin role route sent the administrator to %q, want the admin door", rec.Header().Get("Location"))
+	}
+	// A route naming the app's admin role alone sends them to the door too.
+	if rec := c.get("/verify", map[string]string{"X-Auth-Policy": "groups=airdb_admin"}); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
+		t.Errorf("airdb_admin-only route: %d %q, want the admin door", rec.Code, rec.Header().Get("Location"))
+	}
+	// After the door, the role is held.
+	page := c.get("/totp", nil).Body.String()
+	c.postForm("/totp", url.Values{"code": {totpNow(t, secret, time.Now())}, "csrf": {extractCSRF(t, page)}})
+	if rec := c.get("/verify", map[string]string{"X-Auth-Policy": "groups=airdb_admin admin"}); rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Remote-Groups"), "airdb_admin") {
+		t.Errorf("after the door: %d groups=%q, want airdb_admin", rec.Code, rec.Header().Get("Remote-Groups"))
+	}
+	// Staff in the same group are unaffected: they have no second factor.
+	if err := srv.store.AddGroupMember(ctx, "airdb_admin", "staff@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	st := newClient(t, srv.Handler())
+	loginAs(t, st, sender, "staff@example.com", nil)
+	if rec := st.get("/verify", map[string]string{"X-Auth-Policy": "groups=airdb_admin admin"}); rec.Code != http.StatusOK {
+		t.Errorf("staff member of airdb_admin = %d, want 200", rec.Code)
+	}
+}

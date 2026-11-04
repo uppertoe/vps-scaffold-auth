@@ -85,6 +85,50 @@ func (s *Server) appRoleGroups() map[string]bool {
 	return out
 }
 
+// adminPairedGroups lists the groups a route names beside admin
+// ("groups=airdb_admin admin"): an application's own administrators. An
+// administrator holds them only with the admin tier, so an emailed code alone
+// opens no application's admin role.
+func (s *Server) adminPairedGroups() map[string]bool {
+	out := map[string]bool{}
+	for _, site := range s.routeAccess() {
+		for _, rule := range site.Rules {
+			if rule.Kind != "groups" || !containsFold(rule.Values, authz.RoleAdmin) {
+				continue
+			}
+			for _, g := range rule.Values {
+				if g = normalizeGroupName(g); g != "" && !authz.IsReservedGroup(g) {
+					out[g] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+// withoutAdminPairedGroups removes the admin-paired groups from the groups
+// of an administrator whose session is built as a user's (no recent second
+// step). Feed groups are kept, as for guests, and while a configured route
+// file cannot be read every hand-managed group is held back.
+func (s *Server) withoutAdminPairedGroups(email, role string, groups []string) []string {
+	if role != authz.RoleUser || len(groups) == 0 || s.policy.Role(email) != authz.RoleAdmin || !s.cfg.TOTPEnabled {
+		return groups
+	}
+	paired := s.adminPairedGroups()
+	complete := s.routeFilesReadable()
+	out := groups[:0:0]
+	for _, g := range groups {
+		n := normalizeGroupName(g)
+		if !authz.IsReservedGroup(n) && (paired[n] || !complete) {
+			if _, feed := s.feedFor(n); !feed {
+				continue
+			}
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
 // routeFilesReadable reports whether every configured route file can be
 // opened, so that appRoleGroups saw every application role.
 func (s *Server) routeFilesReadable() bool {

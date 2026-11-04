@@ -87,7 +87,8 @@ func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups st
 		log.Printf("refusal-path groups for %s: %v", id.Email, err)
 		return "", false
 	}
-	return authz.BuildGroups(s.tierRole(id, role), s.withoutAppRolesForOutsider(id.Email, dbGroups)), true
+	tier := s.tierRole(id, role)
+	return authz.BuildGroups(tier, s.withoutAdminPairedGroups(id.Email, tier, s.withoutAppRolesForOutsider(id.Email, dbGroups))), true
 }
 
 // handleVerify is the forward_auth target. Caddy calls it on every request to a
@@ -1269,7 +1270,17 @@ func (s *Server) wantsAdminStep(id *session.Identity, reqGroups string) bool {
 	if id.Kind != "" || s.adminStepFresh(id) || s.renewalRole(id) != authz.RoleAdmin {
 		return false
 	}
-	return authz.ListNames(reqGroups, authz.RoleAdmin)
+	if authz.ListNames(reqGroups, authz.RoleAdmin) {
+		return true
+	}
+	// A route naming an application's admin role alone: an administrator
+	// holds that role only with the admin tier (withoutAdminPairedGroups).
+	for g := range s.adminPairedGroups() {
+		if authz.ListNames(reqGroups, g) {
+			return true
+		}
+	}
+	return false
 }
 
 // redirectToStepUp sends an administrator without a recent second step to the
@@ -1351,7 +1362,7 @@ func (s *Server) computeGroups(ctx context.Context, emailAddr, role string) stri
 	if err != nil {
 		log.Printf("groups for %s: %v", emailAddr, err)
 	}
-	return authz.BuildGroups(role, s.withoutAppRolesForOutsider(emailAddr, dbGroups))
+	return authz.BuildGroups(role, s.withoutAdminPairedGroups(emailAddr, role, s.withoutAppRolesForOutsider(emailAddr, dbGroups)))
 }
 
 // getTOTPSecret reads and decrypts the stored TOTP secret. A legacy plaintext
