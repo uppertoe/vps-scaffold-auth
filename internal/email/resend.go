@@ -24,17 +24,23 @@ type resendRequest struct {
 	Subject string   `json:"subject"`
 	HTML    string   `json:"html"`
 	Text    string   `json:"text"`
+	// Headers carries custom headers (here only OTP-Token); omitted when empty.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // Send delivers a single message.
 func (s *ResendSender) Send(ctx context.Context, msg Message) error {
-	payload, err := json.Marshal(resendRequest{
+	req0 := resendRequest{
 		From:    s.From,
 		To:      []string{msg.To},
 		Subject: msg.Subject,
 		HTML:    msg.HTML,
 		Text:    msg.Text,
-	})
+	}
+	if v := OTPTokenHeader(msg); v != "" {
+		req0.Headers = map[string]string{"OTP-Token": v}
+	}
+	payload, err := json.Marshal(req0)
 	if err != nil {
 		return err
 	}

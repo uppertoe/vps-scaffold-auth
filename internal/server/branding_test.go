@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 	"net/http"
 	"strings"
 	"testing"
@@ -103,5 +104,22 @@ func TestOTPSubjectEmptyFallsBack(t *testing.T) {
 	msg := srv.buildCodeEmail(context.Background(), "user@example.com", "123456")
 	if msg.Subject != "123456 is your sign-in code" {
 		t.Errorf("subject = %q, want code-led fallback", msg.Subject)
+	}
+}
+
+// The code email's plain text leads with the code, and the message carries
+// the code and the sign-in origin for the OTP-Token header.
+func TestCodeEmailLeadsWithTheCode(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.cfg.BrandName = "RCH Anaesthesia"
+	msg := srv.buildCodeEmail(context.Background(), "user@example.com", "282397")
+	if !strings.HasPrefix(msg.Text, "282397 is your RCH Anaesthesia sign-in code.\n\n") {
+		t.Fatalf("text = %q", msg.Text)
+	}
+	if msg.OTPCode != "282397" || msg.OTPOrigin != "https://auth.example.com" {
+		t.Fatalf("OTP fields = %q %q", msg.OTPCode, msg.OTPOrigin)
+	}
+	if got := email.OTPTokenHeader(msg); got != `"282397"; origin="https://auth.example.com"` {
+		t.Fatalf("header = %q", got)
 	}
 }
