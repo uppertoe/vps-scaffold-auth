@@ -9,8 +9,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/uppertoe/vps-scaffold-auth/internal/netsplit"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
@@ -112,11 +115,43 @@ func run() error {
 	defer stop()
 	srv.StartFeeds(ctx)
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 8)
 	// The members endpoint has its own listener, on a port Caddy never
-	// proxies, so membership is never served through the public site.
+	// proxies, so membership is never served through the public site. It
+	// binds only to the gateway's addresses on the members networks, and the
+	// public listener refuses connections arriving on those addresses, so an
+	// app on its members network cannot reach the public listener past Caddy
+	// (see internal/netsplit).
+	publicLn, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", cfg.ListenAddr, err)
+	}
+	var membersLns []net.Listener
 	var membersServer *http.Server
 	if len(cfg.MemberReaders) > 0 {
+		host, port, _ := net.SplitHostPort(cfg.MembersListenAddr)
+		lookupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		resolve := func(ctx context.Context, h string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", h)
+		}
+		own, err := netsplit.OwnAddrs(lookupCtx, host, resolve, net.InterfaceAddrs)
+		cancel()
+		if err != nil {
+			publicLn.Close()
+			return fmt.Errorf("members endpoint: MEMBERS_LISTEN_ADDR: %w; give the gateway that name on each members network", err)
+		}
+		publicLn = netsplit.Refusing(publicLn, netsplit.NewSet(own))
+		for _, a := range own {
+			ln, err := net.Listen("tcp", net.JoinHostPort(a.String(), port))
+			if err != nil {
+				publicLn.Close()
+				for _, l := range membersLns {
+					l.Close()
+				}
+				return fmt.Errorf("members endpoint: %w", err)
+			}
+			membersLns = append(membersLns, ln)
+		}
 		membersServer = &http.Server{
 			Addr:              cfg.MembersListenAddr,
 			Handler:           srv.MembersHandler(),
@@ -126,16 +161,18 @@ func run() error {
 			IdleTimeout:       60 * time.Second,
 			MaxHeaderBytes:    16 << 10,
 		}
-		go func() {
-			log.Printf("members endpoint listening on %s for %d app(s)", cfg.MembersListenAddr, len(cfg.MemberReaders))
-			if err := membersServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				errCh <- fmt.Errorf("members endpoint: %w", err)
-			}
-		}()
+		for _, ln := range membersLns {
+			go func(ln net.Listener) {
+				log.Printf("members endpoint listening on %s for %d app(s)", ln.Addr(), len(cfg.MemberReaders))
+				if err := membersServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					errCh <- fmt.Errorf("members endpoint: %w", err)
+				}
+			}(ln)
+		}
 	}
 	go func() {
 		log.Printf("listening on %s (email backend: %s, totp: %v)", cfg.ListenAddr, cfg.EmailBackend, cfg.TOTPEnabled)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpServer.Serve(publicLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()

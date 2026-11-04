@@ -6,6 +6,7 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -344,10 +345,16 @@ func Load() (*Config, error) {
 	if len(c.MemberReaders) > 0 {
 		c.MembersListenAddr = strings.TrimSpace(getenv("MEMBERS_LISTEN_ADDR", DefaultMembersListenAddr))
 		if listenPort(c.MembersListenAddr) == 0 {
-			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR %q needs a port, such as :8081", c.MembersListenAddr)
+			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR %q needs a port, such as auth-members:8081", c.MembersListenAddr)
 		}
 		if sameListener(c.MembersListenAddr, c.ListenAddr) {
 			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR must use a different port from LISTEN_ADDR, which Caddy proxies")
+		}
+		// The host names the gateway's members networks (see
+		// internal/netsplit): without one the members listener would answer
+		// on every network, and the public listener on the members networks.
+		if h, _, err := net.SplitHostPort(c.MembersListenAddr); err != nil || strings.TrimSpace(h) == "" {
+			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR %q needs the name the gateway has on its members networks, such as auth-members:8081", c.MembersListenAddr)
 		}
 	}
 	for _, g := range strings.FieldsFunc(getenv("GROUP_FEED_ROTATING", ""), func(r rune) bool { return r == ',' || r == ' ' }) {

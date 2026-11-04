@@ -25,7 +25,7 @@ func MemberReaderTokenEnv(app string) string {
 // DefaultMembersListenAddr is where the members endpoint listens when
 // MEMBER_READERS is set and MEMBERS_LISTEN_ADDR is not. Caddy proxies only
 // LISTEN_ADDR, so this port is reachable only from the Docker network.
-const DefaultMembersListenAddr = ":8081"
+const DefaultMembersListenAddr = "auth-members:8081"
 
 // parseMemberReaders reads MEMBER_READERS: whitespace-separated
 // "app=group,group" entries. Each app needs its token in

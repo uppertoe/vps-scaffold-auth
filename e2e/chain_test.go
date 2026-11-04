@@ -269,6 +269,41 @@ func (b *browser) signIn(target, email string) reply {
 
 // --- the chain ---
 
+// fetchFrom runs busybox wget inside a stack container and returns its
+// combined output, which shows the HTTP status line for any answer and a
+// connection error for none.
+func fetchFrom(t *testing.T, service, target string, hdr ...string) string {
+	t.Helper()
+	args := append(composeArgs[1:], "exec", "-T", service, "wget", "-S", "-q", "-O", "/dev/null", "-T", "3")
+	for _, h := range hdr {
+		args = append(args, "--header", h)
+	}
+	out, _ := exec.Command(composeArgs[0], append(args, target)...).CombinedOutput()
+	return string(out)
+}
+
+// An app on its members network reaches the members endpoint and nothing
+// else of the gateway's: the public listener, by either name, closes the
+// connection unanswered. Caddy, on the gateway's other network, cannot reach
+// the members endpoint at all.
+func TestMembersNetworkReachesOnlyTheMembersEndpoint(t *testing.T) {
+	const token = "Authorization: Bearer e2e-reader-token-0123456789abcdefghij"
+	if out := fetchFrom(t, "reader", "http://auth-members:8081/v1/groups/staff/members", token); !strings.Contains(out, "HTTP/1.1 ") {
+		t.Fatalf("the reader could not reach the members endpoint:\n%s", out)
+	}
+	for _, target := range []string{"http://auth-members:8080/healthz", "http://auth:8080/healthz"} {
+		if out := fetchFrom(t, "reader", target); strings.Contains(out, "HTTP/1.1 ") {
+			t.Errorf("the reader reached the public listener at %s:\n%s", target, out)
+		}
+	}
+	if out := fetchFrom(t, "caddy", "http://auth:8081/v1/groups/staff/members", token); strings.Contains(out, "HTTP/1.1 ") {
+		t.Errorf("Caddy's network reached the members endpoint:\n%s", out)
+	}
+	if out := fetchFrom(t, "caddy", "http://auth:8080/healthz"); !strings.Contains(out, "HTTP/1.1 200") {
+		t.Errorf("Caddy could not reach the public listener:\n%s", out)
+	}
+}
+
 func TestChain(t *testing.T) {
 	// The order matters: later steps build on sessions made earlier, and the
 	// rate-limit step spends the client IP's allowance, so it runs last.

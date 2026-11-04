@@ -61,6 +61,16 @@ services:
       - SESSION_REMEMBER_TTL=1h
       # Code requests per client IP; the last test spends the rest of it.
       - RATELIMIT_PER_IP=40/15m
+      # One app reads group members over its own network, as on the servers.
+      - MEMBER_READERS=reader=staff
+      - MEMBER_READER_TOKEN_READER=e2e-reader-token-0123456789abcdefghij
+    networks:
+      default:
+      reader_members:
+        # The name the gateway has on each members network; the members
+        # listener binds only to the addresses it names, and the public
+        # listener refuses connections arriving on them.
+        aliases: [auth-members]
     healthcheck:
       test: ["CMD", "/app", "-healthcheck"]
       interval: 2s
@@ -70,6 +80,18 @@ services:
   whoami:
     # Echoes every request header back, so the test sees what the app sees.
     image: traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+
+  reader:
+    # An app that reads group members, on its members network only. It is
+    # the Caddy image only because that image is pinned already and has wget.
+    image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+    command: ["sleep", "3600"]
+    networks: [reader_members]
+
+networks:
+  default:
+  reader_members:
+    internal: true
 
 volumes:
   auth_data:
