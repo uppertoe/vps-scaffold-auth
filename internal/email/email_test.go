@@ -3,10 +3,12 @@ package email
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net"
+	"net/http"
 	"net/mail"
 	"strconv"
 	"strings"
@@ -225,3 +227,53 @@ func TestBuildMIMETextOnlyIsPlainText(t *testing.T) {
 		t.Fatalf("body lacks the text: %q", body)
 	}
 }
+
+// A sign-in code email carries the OTP-Token header, in the SMTP message and
+// in the Resend payload; any other email, and a code or origin that could
+// break out of the quoted strings, carries none.
+func TestOTPTokenHeader(t *testing.T) {
+	msg := Message{To: "a@example.com", Subject: "s", Text: "t", HTML: "<p>t</p>", OTPCode: "282397", OTPOrigin: "https://auth.example.com"}
+	want := `"282397"; origin="https://auth.example.com"`
+	if got := OTPTokenHeader(msg); got != want {
+		t.Fatalf("header = %q, want %q", got, want)
+	}
+	raw := string(buildMIME("auth@example.com", msg))
+	head, _, _ := strings.Cut(raw, "\r\n\r\n")
+	if !strings.Contains(head, "\r\nOTP-Token: "+want+"\r\n") {
+		t.Fatalf("SMTP headers lack OTP-Token:\n%s", head)
+	}
+	for _, bad := range []Message{
+		{OTPCode: "", OTPOrigin: "https://auth.example.com"},
+		{OTPCode: "28239x", OTPOrigin: "https://auth.example.com"},
+		{OTPCode: "282397", OTPOrigin: "https://auth.example.com\"; origin=\"https://evil.example"},
+		{OTPCode: "282397", OTPOrigin: "https://auth.example.com\r\nBcc: x@evil.example"},
+		{OTPCode: "282397", OTPOrigin: "javascript:alert(1)"},
+	} {
+		if got := OTPTokenHeader(bad); got != "" {
+			t.Errorf("OTPTokenHeader(%+v) = %q, want none", bad, got)
+		}
+	}
+	plain := string(buildMIME("auth@example.com", Message{To: "a@example.com", Subject: "s", Text: "t"}))
+	if strings.Contains(plain, "OTP-Token") {
+		t.Error("an email without a code carries OTP-Token")
+	}
+
+	var body []byte
+	s := &ResendSender{APIKey: "k", From: "auth@example.com", Client: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		body, _ = io.ReadAll(r.Body)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"x"}`)), Header: http.Header{}}, nil
+	})}}
+	if err := s.Send(context.Background(), msg); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Headers map[string]string `json:"headers"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil || got.Headers["OTP-Token"] != want {
+		t.Fatalf("Resend payload headers = %v (%v)", got.Headers, err)
+	}
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

@@ -128,6 +128,9 @@ func buildMIME(from string, msg Message) []byte {
 	fmt.Fprintf(&b, "From: %s\r\n", sanitizeHeader(from))
 	fmt.Fprintf(&b, "To: %s\r\n", sanitizeHeader(msg.To))
 	fmt.Fprintf(&b, "Subject: %s\r\n", sanitizeHeader(msg.Subject))
+	if v := OTPTokenHeader(msg); v != "" {
+		fmt.Fprintf(&b, "OTP-Token: %s\r\n", v)
+	}
 	b.WriteString("MIME-Version: 1.0\r\n")
 	if msg.HTML == "" {
 		b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")

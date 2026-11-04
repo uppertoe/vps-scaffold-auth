@@ -58,9 +58,15 @@ func (s *Server) buildCodeEmailAt(ctx context.Context, to, code string, now time
 	}, code, mins)
 
 	// Plaintext alternative (raw brand name; no escaping needed).
-	text := fmt.Sprintf("%s\n\nYour sign-in code is %s\n\nThis code expires in %d minute%s. "+
+	// The code leads, as in the subject, which helps a mail client recognise
+	// it as a sign-in code.
+	lead := fmt.Sprintf("%s is your sign-in code.", code)
+	if b := strings.TrimSpace(s.cfg.BrandName); b != "" {
+		lead = fmt.Sprintf("%s is your %s sign-in code.", code, b)
+	}
+	text := fmt.Sprintf("%s\n\nThis code expires in %d minute%s. "+
 		"If you didn't request it, you can safely ignore this email — no one can sign in without it.",
-		s.cfg.BrandName, code, mins, plural(mins))
+		lead, mins, plural(mins))
 
 	// Subject from the configured template (default "{code} is your sign-in
 	// code"). Leading with the code keeps it visible in the inbox list and
@@ -74,7 +80,7 @@ func (s *Server) buildCodeEmailAt(ctx context.Context, to, code string, now time
 	if strings.TrimSpace(subject) == "" {
 		subject = fmt.Sprintf("%s is your sign-in code", code)
 	}
-	return email.Message{To: to, Subject: subject, Text: text, HTML: htmlBody}
+	return email.Message{To: to, Subject: subject, Text: text, HTML: htmlBody, OTPCode: code, OTPOrigin: s.publicOrigin()}
 }
 
 // renderCodeEmailHTML executes the email template, falling back to a minimal
