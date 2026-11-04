@@ -736,12 +736,13 @@ func (s *Server) sendCode(r *http.Request, emailAddr string, now time.Time) erro
 	if err := s.store.SaveCode(r.Context(), emailAddr, s.hashCode(code), now.Add(s.cfg.OTPTTL)); err != nil {
 		return err
 	}
+	origin := s.publicOrigin()
 	s.sendMail("code to "+emailAddr, func(ctx context.Context) error {
 		// The message is built here, not before the response: building it
 		// reads branding from the store, and a read that only the permitted
 		// path performed would be a (small) timing difference from the decoy
 		// path.
-		return s.sender.Send(ctx, s.buildCodeEmailAt(ctx, emailAddr, code, now))
+		return s.sender.Send(ctx, s.buildCodeEmailAt(ctx, emailAddr, code, origin, now))
 	})
 	return nil
 }
