@@ -93,13 +93,17 @@ them.
 
 > **Trust model:** apps trust these headers because **only Caddy can reach
 > them** — they publish no host ports, and Caddy strips any client-supplied
-> `Remote-*` before injecting its own. Never expose a protected app directly.
+> `Remote-*` before injecting its own. Never expose a protected app directly,
+> and never put two apps on one Docker network: on the scaffold's servers each
+> app has its own `<app>_proxy` network shared only with Caddy, and the compose
+> audit refuses a shared one. The single `caddy` network in `deploy/` is a
+> shortened sample, not that layout.
 >
 > **The session cookie never reaches the app.** It's scoped to `.<domain>`, so
 > the browser sends it to every app subdomain, and `forward_auth` would otherwise
-> pass it through to the backend. Since the cookie is a stateless, estate-wide
-> bearer credential with no per-session revocation, an app that received it could
-> replay it against every other app. Each guard therefore strips
+> pass it through to the backend. Since the cookie is an estate-wide bearer
+> credential (ended only by signing out on every device), an app that received it
+> could replay it against every other app. Each guard therefore strips
 > `vps_auth_session` from the upstream request automatically (via the
 > `strip_auth_cookie` snippet folded into it), leaving the app's own cookies
 > intact. Apps take identity from the `Remote-*` headers, never the cookie. If you

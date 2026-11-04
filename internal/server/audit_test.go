@@ -157,3 +157,47 @@ func TestBreakGlassTTLCapped(t *testing.T) {
 		t.Errorf("effective break-glass TTL = %s, want clamped to %s", ttl, maxBreakGlassTTL)
 	}
 }
+
+// A break-glass session reaches only routes naming its card's group. It
+// cannot open the admin pages or make an admin change, manage passkeys, or
+// pass a plain sign-in, domain or admin rule.
+func TestBreakGlassSessionCannotActOutsideItsCard(t *testing.T) {
+	srv, _ := pkServer(t, nil)
+	ctx := context.Background()
+	srv.store.CreateGroup(ctx, "ward", "")
+	token := mintCode(t, srv, "Ward", "ward")
+	c := newClient(t, srv.Handler())
+	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusFound {
+		t.Fatalf("scan = %d", rec.Code)
+	}
+	if rec := c.get("/verify", requireGroups("ward")); rec.Code != http.StatusOK {
+		t.Fatalf("the card's own group = %d", rec.Code)
+	}
+	for _, policy := range []string{"any", "groups=other", "groups=admin", "domains=example.com"} {
+		if rec := c.get("/verify", map[string]string{"X-Auth-Policy": policy}); rec.Code == http.StatusOK {
+			t.Errorf("policy %q admitted a break-glass session", policy)
+		}
+	}
+	for _, page := range []string{"/admin/", "/admin/groups", "/admin/groups/ward", "/admin/access", "/admin/break", "/admin/totp", "/admin/settings", "/passkeys", "/passkeys/confirm"} {
+		if rec := c.get(page, phone); rec.Code == http.StatusOK {
+			t.Errorf("a break-glass session opened %s", page)
+		}
+	}
+	for path, form := range map[string]url.Values{
+		"/admin/groups/ward/members": {"emails": {"intruder@example.com"}},
+		"/admin/groups":              {"name": {"made-by-card"}},
+		"/admin/sessions/end":        {"email": {"admin@example.com"}},
+		"/passkeys/register":         {"id": {"x"}},
+	} {
+		c.postWith(path, form, phone)
+	}
+	if members, _ := srv.store.ListGroupMembers(ctx, "ward"); len(members) != 0 {
+		t.Errorf("a break-glass session changed membership: %v", members)
+	}
+	if groups, _ := srv.store.ListGroups(ctx); len(groups) != 1 {
+		t.Errorf("a break-glass session created a group: %+v", groups)
+	}
+	if keys, _ := srv.store.ListPasskeys(ctx, "breakglass:Ward"); len(keys) != 0 {
+		t.Error("a break-glass session added a passkey")
+	}
+}
