@@ -94,9 +94,15 @@ func TestBreakGlassCardRefusedOnceTargetIsAppRole(t *testing.T) {
 	srv.cfg.BreakGlassRefusedGroups = []string{"airdb_admin"}
 
 	c := newClient(t, srv.Handler())
-	rec := c.scan(token)
+	// The scan's page already shows the card as not available.
+	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "Continue with emergency access") {
+		t.Fatalf("scan page = %d, want the neutral page", rec.Code)
+	}
+	// A page opened before the change, or the token posted from a photo,
+	// is refused at the grant, recorded, and reported.
+	rec := c.postForm("/break", url.Values{"token": {token}})
 	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "Access code not available") {
-		t.Fatalf("scan = %d, want the neutral page", rec.Code)
+		t.Fatalf("grant = %d, want the neutral page", rec.Code)
 	}
 	if c.cookies[session.SessionCookie] != nil {
 		t.Fatal("a card for an application role granted a session")
@@ -122,6 +128,24 @@ func TestBreakGlassCardRefusedOnceTargetIsAppRole(t *testing.T) {
 			t.Fatal("the administrators were not told of the refused scan")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+
+	// A second refused post is recorded but not reported again within the hour.
+	c.postForm("/break", url.Values{"token": {token}})
+	time.Sleep(100 * time.Millisecond)
+	if events, _ := withoutViews(srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0)); len(events) != 2 {
+		t.Fatalf("events after a second post = %d, want 2", len(events))
+	}
+	sender.mu.Lock()
+	reported := 0
+	for _, m := range sender.notices {
+		if strings.Contains(m.Text, "refused_target") {
+			reported++
+		}
+	}
+	sender.mu.Unlock()
+	if reported != 1 {
+		t.Fatalf("refused posts reported %d times, want once", reported)
 	}
 
 	// Activation from the denial page goes through the same refusal.

@@ -23,19 +23,21 @@ import (
 
 // Server holds the dependencies shared by all handlers.
 type Server struct {
-	cfg          *config.Config
-	store        store.Store
-	sender       email.Sender
-	sessions     *session.Manager
-	policy       *authz.Policy
-	secrets      *secretbox.Box
-	emailLimiter *ratelimit.Limiter // codes sent, per (address, client IP)
-	emailCeiling *ratelimit.Limiter // codes sent, per address from all IPs
-	sendsPerIP   *ratelimit.Limiter // codes sent, per client IP across all addresses
-	ipLimiter    *ratelimit.Limiter // code requests, per client IP
-	wrongCodes   *ratelimit.Limiter // wrong email or TOTP codes, per client IP
-	breakLimiter *ratelimit.Limiter // per-IP limiter for break-glass scans
-	totpReplay   *totpReplay
+	cfg            *config.Config
+	store          store.Store
+	sender         email.Sender
+	sessions       *session.Manager
+	policy         *authz.Policy
+	secrets        *secretbox.Box
+	emailLimiter   *ratelimit.Limiter // codes sent, per (address, client IP)
+	emailCeiling   *ratelimit.Limiter // codes sent, per address from all IPs
+	sendsPerIP     *ratelimit.Limiter // codes sent, per client IP across all addresses
+	ipLimiter      *ratelimit.Limiter // code requests, per client IP
+	wrongCodes     *ratelimit.Limiter // wrong email or TOTP codes, per client IP
+	breakLimiter   *ratelimit.Limiter // per-IP limiter for break-glass grants
+	viewLimiter    *ratelimit.Limiter // per-IP limiter for the scan's page, so one use spends one grant token
+	refusedNotices hourlyOnce         // notifications of a refused (retargeted) card
+	totpReplay     *totpReplay
 	// passkeyChallenges makes each passkey challenge single-use (passkeys.go).
 	passkeyChallenges *challengeGuard
 	access            *accessAudit
@@ -94,6 +96,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
 		wrongCodes:   limiterOr(cfg.RateLimitWrongCodesPerIP, cfg.RateLimitPerIP),
 		breakLimiter: newBreakLimiter(cfg),
+		viewLimiter:  newBreakLimiter(cfg),
 		access:       newAccessAudit(st, cfg.AuditRetention),
 		members:      newMembersAPI(cfg.MemberReaders),
 		groupRecheck: newGroupRecheck(),

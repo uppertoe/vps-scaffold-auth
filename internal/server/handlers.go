@@ -139,6 +139,11 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			s.redirectToDenied(w, r)
 			return
 		}
+		// A guest's groups are filtered again on each request, so a group
+		// that has become an application role since sign-in is not honoured.
+		if id.Kind == session.KindGuest {
+			id.Groups = s.guestGroupsNow(id)
+		}
 		allowed := func(id *session.Identity) bool {
 			return authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass, id.Kind == session.KindGuest,
 				reqDomains, reqGroups, allowGuests)
@@ -1039,9 +1044,7 @@ func (s *Server) hasAdminPasskey(r *http.Request, email string) bool {
 
 // handleTOTP takes the authenticator code at the admin door and gives the
 // session the admin tier. The code is checked under the per-account cap and
-// the replay guard (checkAdminCode). A session started with a passkey has
-// that passkey upgraded, so that from then on it opens the admin pages by
-// itself: its holder has just proved the second factor in the same session.
+// the replay guard (checkAdminCode).
 func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	if !s.requireSameOrigin(w, r) {
 		return
@@ -1067,11 +1070,6 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		s.renderStepUp(w, r, id, rd, status, msg)
 		return
 	}
-	if id.PK != 0 {
-		if _, err := s.store.MarkPasskeyAdminGrade(r.Context(), id.Email, id.PK); err != nil {
-			log.Printf("upgrade passkey %d for %s: %v", id.PK, id.Email, err)
-		}
-	}
 	grant := session.Grant{TOTP: true, Step: now.Unix(), PK: id.PK, Auth: id.Auth}
 	if grant.Auth == 0 {
 		grant.Auth = 1 // unknown sign-in time: never read as recent
@@ -1084,8 +1082,12 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	dest := s.adminDest(rd)
 	// On a phone with no passkey that can open the admin pages, offer one now,
 	// while the authenticator code is fresh, so that the code is not needed
-	// again on this phone.
-	if s.cfg.PasskeysEnabled && isPhone(r) && id.PK == 0 && !s.hasAdminPasskey(r, id.Email) && s.offerAdminPasskey(w, r, id.Email, dest) {
+	// again on this phone. A passkey that started this session is never
+	// upgraded in place: the cookie naming it could have been planted by a
+	// sibling host, so the passkey offered is a new one, made on the phone in
+	// front of the person who has just entered the code. Made for the same
+	// account, it replaces the phone's older passkey there.
+	if s.cfg.PasskeysEnabled && isPhone(r) && !s.hasAdminPasskey(r, id.Email) && s.offerAdminPasskey(w, r, id.Email, dest) {
 		return
 	}
 	http.Redirect(w, r, dest, http.StatusFound)
@@ -1465,13 +1467,19 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBreakGlassScan(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	ua := clampUserAgent(r.UserAgent())
-	if !s.breakLimiter.Allow(ip) {
+	if !s.viewLimiter.Allow(ip) {
 		s.breakTooMany(w)
 		return
 	}
 	token := r.PathValue("token")
 	code, ok := s.activeCard(w, r, token, ip, ua)
 	if !ok {
+		return
+	}
+	// A card whose group has become an application role shows the same page
+	// as any card that is not active; the grant records and reports it.
+	if _, refused := s.targetRefusal(code.TargetGroup); refused {
+		s.cardNotAvailable(w)
 		return
 	}
 	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
@@ -1615,12 +1623,17 @@ func (s *Server) refuseRetargetedCard(w http.ResponseWriter, r *http.Request, co
 	}); err != nil {
 		log.Printf("break-glass record refused event for %q: %v", code.Label, err)
 	}
-	_, notifyEmails, webhookURL := s.effectiveSettings(r.Context())
-	breakglass.NewNotifier(s.sender, notifyEmails, webhookURL, s.cfg.BreakGlassWebhookTimeout).
-		Notify(breakglass.UseEvent{
-			Label: code.Label, TargetGroup: code.TargetGroup, Outcome: store.OutcomeRefusedTarget,
-			ClientIP: ip, UserAgent: ua, Time: now,
-		})
+	// Anyone holding a photo of the card can post it again and again, so the
+	// administrators are told about a refused card once an hour at most; each
+	// refusal is still recorded above.
+	if s.refusedNotices.due(code.ID, now) {
+		_, notifyEmails, webhookURL := s.effectiveSettings(r.Context())
+		breakglass.NewNotifier(s.sender, notifyEmails, webhookURL, s.cfg.BreakGlassWebhookTimeout).
+			Notify(breakglass.UseEvent{
+				Label: code.Label, TargetGroup: code.TargetGroup, Outcome: store.OutcomeRefusedTarget,
+				ClientIP: ip, UserAgent: ua, Time: now,
+			})
+	}
 	log.Printf("break-glass refused (target %q is now refused) for %q from %s", code.TargetGroup, code.Label, ip)
 	s.cardNotAvailable(w)
 	return true

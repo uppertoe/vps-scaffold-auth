@@ -654,6 +654,15 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 		// An administrator holds the admin pages only with a recent second step
 		// (adminTierHeld); without one they are sent to the admin door, which
 		// brings them back here.
+		// A session whose step is recent but whose groups predate a promotion
+		// (or, with TOTP off, any promoted administrator) is renewed here, so
+		// the admin group is added rather than the door asking for a step
+		// that has already been taken.
+		if !s.adminTierHeld(id) && s.adminStepFresh(id) {
+			if !s.renewSession(w, r, id, s.now()) {
+				return
+			}
+		}
 		if !s.adminTierHeld(id) {
 			http.Redirect(w, r, s.stepUpURL(rd), http.StatusFound)
 			return

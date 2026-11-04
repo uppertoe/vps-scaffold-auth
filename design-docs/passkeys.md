@@ -57,10 +57,11 @@ passkey only once the code has been accepted.
 
 A passkey added before its owner became an administrator, or while the second
 factor was switched off, gives an ordinary session, and the admin door asks
-for the code. Once the code is entered in a session that the passkey started,
-the passkey becomes an admin passkey, because its holder has just proved the
-second factor with it. A code entered in a session started by email upgrades
-no passkey.
+for the code. After the code, the door offers to add a new passkey on the
+phone. Made for the same account, it replaces the older one there, and it
+opens the admin pages by itself from then on. The gateway never upgrades the
+older passkey in place, because the session that names it could have been
+planted in the browser by another site on the domain.
 
 An administrator who loses every passkey still signs in with an emailed code
 and takes the second step with an authenticator code.

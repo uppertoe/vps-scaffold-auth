@@ -544,9 +544,6 @@ type Store interface {
 	ListPasskeys(ctx context.Context, email string) ([]Passkey, error)
 	// TouchPasskey records a sign-in: the new counter and the time.
 	TouchPasskey(ctx context.Context, id int64, signCount uint32, now time.Time) error
-	// MarkPasskeyAdminGrade lets one of email's passkeys stand in for the
-	// admin second step, reporting whether it was found.
-	MarkPasskeyAdminGrade(ctx context.Context, email string, id int64) (bool, error)
 	// DeletePasskey removes one of email's passkeys; false if it was not
 	// theirs or did not exist.
 	DeletePasskey(ctx context.Context, email string, id int64) (bool, error)

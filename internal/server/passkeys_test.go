@@ -407,9 +407,10 @@ func TestAdminPasskeys(t *testing.T) {
 
 // A passkey added before its owner became an administrator does not stand in
 // for the second step: its sign-in gives an ordinary session, and the admin
-// door asks for the code. Once the code is entered in a session started with
-// that passkey, the passkey is upgraded and opens the admin pages by itself.
-func TestPasskeyFromBeforePromotionIsUpgradedAtTheDoor(t *testing.T) {
+// door asks for the code. The code never upgrades that passkey in place (the
+// session's cookie could have been planted); instead the door offers a new
+// admin passkey, made on the phone in front of the person.
+func TestPasskeyFromBeforePromotionIsReplacedAtTheDoor(t *testing.T) {
 	srv, sender := pkServer(t, nil)
 	c := newClient(t, srv.Handler())
 	a := passkeytest.New()
@@ -431,37 +432,21 @@ func TestPasskeyFromBeforePromotionIsUpgradedAtTheDoor(t *testing.T) {
 		t.Fatal("the door offered a passkey that cannot open the admin pages")
 	}
 	code, _ := pqtotp.GenerateCode(secret, time.Now())
-	if rec := p.postWith("/totp", url.Values{"code": {code}, "csrf": {extractCSRF(t, door)}}, phone); rec.Code != http.StatusFound {
-		t.Fatalf("code at the door = %d, want 302 (no offer: the passkey is upgraded)", rec.Code)
-	}
-	list, _ := srv.store.ListPasskeys(context.Background(), "user@example.com")
-	if len(list) != 1 || !list[0].AdminGrade {
-		t.Fatalf("passkey not upgraded: %+v", list)
-	}
-	fresh := newClient(t, srv.Handler())
-	signInWith(t, fresh, a)
-	if rec := fresh.get("/admin/", nil); rec.Code != http.StatusOK {
-		t.Fatalf("upgraded passkey: /admin/ = %d, want 200", rec.Code)
-	}
-}
-
-// A passkey is upgraded only by a code entered in a session that it started:
-// a code in a session started by email upgrades nothing.
-func TestEmailSessionCodeUpgradesNoPasskey(t *testing.T) {
-	srv, sender := pkServer(t, nil)
-	c := newClient(t, srv.Handler())
-	register(t, c, passkeytest.New(), phoneSignIn(t, c, sender, "user@example.com").Body.String(), nil)
-	srv.cfg.TOTPEnabled = true
-	srv.cfg.AdminEmails = []string{"admin@example.com", "user@example.com"}
-	srv.policy = newPolicyFor(srv.cfg)
-	secret := provisionTOTP(t, srv, "user@example.com")
-	e := newClient(t, srv.Handler())
-	loginAs(t, e, sender, "user@example.com", nil)
-	if rec := stepUp(t, e, totpNow(t, secret, time.Now()), ""); rec.Code != http.StatusFound {
-		t.Fatalf("door = %d", rec.Code)
+	offer := p.postWith("/totp", url.Values{"code": {code}, "csrf": {extractCSRF(t, door)}}, phone)
+	if !strings.Contains(offer.Body.String(), "Your code has been accepted, and the admin pages are open.") {
+		t.Fatalf("no admin passkey offer after the code: %d", offer.Code)
 	}
 	if list, _ := srv.store.ListPasskeys(context.Background(), "user@example.com"); list[0].AdminGrade {
-		t.Fatal("an email session's code upgraded a passkey it did not use")
+		t.Fatal("the code upgraded the session's passkey in place")
+	}
+	b := passkeytest.New()
+	if rec := register(t, p, b, offer.Body.String(), nil); rec.Code != http.StatusOK {
+		t.Fatalf("register the offered passkey: %d", rec.Code)
+	}
+	fresh := newClient(t, srv.Handler())
+	signInWith(t, fresh, b)
+	if rec := fresh.get("/admin/", nil); rec.Code != http.StatusOK {
+		t.Fatalf("new admin passkey: /admin/ = %d, want 200", rec.Code)
 	}
 }
 

@@ -370,8 +370,8 @@ attestation, and need no new dependency: the verifier is `internal/passkey`.
   a passkey on a phone straight after the code.
 - An administrator's passkey, added that way with `TOTP_ENABLED=true`, is the
   second step at sign-in and at the admin door. One added before its owner
-  became an administrator, or while TOTP was off, is not, until its holder
-  enters the code at the admin door in a session it started.
+  became an administrator, or while TOTP was off, is not; after the code at
+  the admin door, the door offers a new one, which replaces it on the phone.
 - A session started with a passkey loses the admin pages and `/passkeys` at
   once when the passkey is removed, and the apps at its next renewal.
 - The account holder is emailed whenever a passkey is added.
