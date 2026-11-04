@@ -389,7 +389,7 @@ func TestGuestBreakGlassScanGrantsDirectly(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginGuest(t, c, sender, strangerAddr)
 	token := mintCode(t, srv, "Lab 1", "g1")
-	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusFound {
+	if rec := c.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan = %d, want 302", rec.Code)
 	}
 	if c.cookies[session.OfferCookie] != nil {

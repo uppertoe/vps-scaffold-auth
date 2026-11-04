@@ -125,7 +125,7 @@ func TestBreakGlassSessionRejectedFromAdminUI(t *testing.T) {
 	srv, _ := testServer(t)
 	token := mintCode(t, srv, "Sneaky", authz.RoleAdmin)
 	c := newClient(t, srv.Handler())
-	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusFound {
+	if rec := c.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan = %d, want 302", rec.Code)
 	}
 	if rec := c.get("/admin/break", nil); rec.Code == http.StatusOK {
@@ -167,7 +167,7 @@ func TestBreakGlassSessionCannotActOutsideItsCard(t *testing.T) {
 	srv.store.CreateGroup(ctx, "ward", "")
 	token := mintCode(t, srv, "Ward", "ward")
 	c := newClient(t, srv.Handler())
-	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusFound {
+	if rec := c.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan = %d", rec.Code)
 	}
 	if rec := c.get("/verify", requireGroups("ward")); rec.Code != http.StatusOK {

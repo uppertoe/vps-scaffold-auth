@@ -160,7 +160,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /denied", s.handleDenied)
 	mux.HandleFunc("GET /welcome", s.handleWelcome)
-	mux.HandleFunc("GET /break/{token}", s.handleBreakGlass)
+	mux.HandleFunc("GET /break/{token}", s.handleBreakGlassScan)
+	mux.HandleFunc("POST /break", s.handleBreakGlass)
 	mux.HandleFunc("POST /break/activate", s.handleBreakGlassActivate)
 	mux.HandleFunc("GET /logo.img", s.handleLogo)
 	// Passkeys (passkeys.go). Each handler answers 404 unless PASSKEYS_ENABLED.

@@ -87,7 +87,7 @@ func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups st
 		log.Printf("refusal-path groups for %s: %v", id.Email, err)
 		return "", false
 	}
-	return authz.BuildGroups(s.tierRole(id, role), dbGroups), true
+	return authz.BuildGroups(s.tierRole(id, role), s.withoutAppRolesForOutsider(id.Email, dbGroups)), true
 }
 
 // handleVerify is the forward_auth target. Caddy calls it on every request to a
@@ -1349,7 +1349,7 @@ func (s *Server) computeGroups(ctx context.Context, emailAddr, role string) stri
 	if err != nil {
 		log.Printf("groups for %s: %v", emailAddr, err)
 	}
-	return authz.BuildGroups(role, dbGroups)
+	return authz.BuildGroups(role, s.withoutAppRolesForOutsider(emailAddr, dbGroups))
 }
 
 // getTOTPSecret reads and decrypts the stored TOTP secret. A legacy plaintext
@@ -1456,11 +1456,45 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.loginURL(rd), http.StatusFound)
 }
 
-// handleBreakGlass grants emergency access from a scanned QR code. It is public
-// (the token in the URL is the only credential, by design), instant (no second
-// factor), rate-limited per IP, audited synchronously, and notifies admins
-// asynchronously. The granted session is short-lived and never renewed.
+// handleBreakGlassScan answers the address printed on a card. It grants
+// nothing: it shows a page whose one button posts the token to /break. Link
+// previews, chat apps and mail scanners (Safe Links among them) fetch a
+// shared card's address on their own, and before this page each fetch was a
+// grant, with its audit row and notification. The fetch is recorded as
+// "viewed", so a card whose address is being passed around still shows up.
+func (s *Server) handleBreakGlassScan(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	ua := clampUserAgent(r.UserAgent())
+	if !s.breakLimiter.Allow(ip) {
+		s.breakTooMany(w)
+		return
+	}
+	token := r.PathValue("token")
+	code, ok := s.activeCard(w, r, token, ip, ua)
+	if !ok {
+		return
+	}
+	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
+		CodeID: code.ID, Label: code.Label, ClientIP: ip,
+		UserAgent: ua, Outcome: store.OutcomeViewed,
+	}); err != nil {
+		// Nothing is granted here, so a failed write cannot hide a grant.
+		log.Printf("break-glass record viewed event for %q: %v", code.Label, err)
+	}
+	s.render(w, http.StatusOK, "break_confirm", pageData{BreakToken: token})
+}
+
+// handleBreakGlass grants emergency access from a card, once the person has
+// pressed the button on the scan's page. It is public (the token in the form
+// is the only credential, by design), instant (no second factor), rate-limited
+// per IP, audited synchronously, and notifies admins asynchronously. The
+// granted session is short-lived and never renewed. The same-origin check
+// keeps a sibling app on the domain, which might hold a card's token, from
+// posting it into a visitor's browser.
 func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSameOrigin(w, r) {
+		return
+	}
 	now := s.now()
 	ip := clientIP(r)
 	ua := clampUserAgent(r.UserAgent())
@@ -1469,36 +1503,17 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	// abuse and must not throttle many staff scanning from behind one shared IP
 	// during an emergency.
 	if !s.breakLimiter.Allow(ip) {
-		s.render(w, http.StatusTooManyRequests, "message", pageData{
-			Title:   "Too many requests",
-			Message: "Please wait a little while and try again.",
-		})
+		s.breakTooMany(w)
 		return
 	}
-
-	token := r.PathValue("token")
-	code, ok, err := s.store.LookupBreakGlassByTokenHash(r.Context(), otp.Hash(token))
-	if err != nil {
-		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+	code, ok := s.activeCard(w, r, r.PostFormValue("token"), ip, ua)
+	if !ok {
 		return
 	}
-
-	// Unknown or revoked codes look identical to the scanner: a neutral page.
-	if !ok || code.Status != store.BreakGlassActive {
-		outcome := store.OutcomeUnknown
-		if ok {
-			outcome = store.OutcomeRevoked
-			// Audit a stale-card scan against the known code.
-			_ = s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
-				CodeID: code.ID, Label: code.Label, ClientIP: ip,
-				UserAgent: ua, Outcome: outcome,
-			})
-		}
-		log.Printf("break-glass denied (%s) from %s", outcome, ip)
-		s.render(w, http.StatusNotFound, "message", pageData{
-			Title:   "Access code not available",
-			Message: "This emergency access code is not active. Please contact an administrator.",
-		})
+	// A card made before its group became an application role must not hand
+	// that role out. grantBreakGlass checks again for the one-tap activation;
+	// checking here as well keeps the denial page from offering such a card.
+	if s.refuseRetargetedCard(w, r, code, ip, ua, now) {
 		return
 	}
 
@@ -1539,6 +1554,78 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	s.grantBreakGlass(w, r, code, ip, ua, now)
 }
 
+func (s *Server) breakTooMany(w http.ResponseWriter) {
+	s.render(w, http.StatusTooManyRequests, "message", pageData{
+		Title:   "Too many requests",
+		Message: "Please wait a little while and try again.",
+	})
+}
+
+// activeCard looks up the card a token names. An unknown or revoked card
+// gets the same neutral page either way, and a revoked one is audited; ok is
+// false once a response has been written.
+func (s *Server) activeCard(w http.ResponseWriter, r *http.Request, token, ip, ua string) (store.BreakGlassCode, bool) {
+	if token == "" {
+		s.cardNotAvailable(w)
+		return store.BreakGlassCode{}, false
+	}
+	code, ok, err := s.store.LookupBreakGlassByTokenHash(r.Context(), otp.Hash(token))
+	if err != nil {
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+		return store.BreakGlassCode{}, false
+	}
+	if !ok || code.Status != store.BreakGlassActive {
+		outcome := store.OutcomeUnknown
+		if ok {
+			outcome = store.OutcomeRevoked
+			// Audit a stale-card scan against the known code.
+			_ = s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
+				CodeID: code.ID, Label: code.Label, ClientIP: ip,
+				UserAgent: ua, Outcome: outcome,
+			})
+		}
+		log.Printf("break-glass denied (%s) from %s", outcome, ip)
+		s.cardNotAvailable(w)
+		return store.BreakGlassCode{}, false
+	}
+	return code, true
+}
+
+func (s *Server) cardNotAvailable(w http.ResponseWriter) {
+	s.render(w, http.StatusNotFound, "message", pageData{
+		Title:   "Access code not available",
+		Message: "This emergency access code is not active. Please contact an administrator.",
+	})
+}
+
+// refuseRetargetedCard refuses a card whose group has become one an
+// application reads as its own role (or one filled from a feed) since the
+// card was made. A card is refused such a target when it is made, but the set
+// grows with every routes change, and a card is a credential that anyone who
+// photographs it can use. The scan is audited and the administrators are
+// told, so that they replace the card; the person scanning sees the same
+// neutral page as for a revoked card. It reports whether it refused.
+func (s *Server) refuseRetargetedCard(w http.ResponseWriter, r *http.Request, code store.BreakGlassCode, ip, ua string, now time.Time) bool {
+	if _, refused := s.targetRefusal(code.TargetGroup); !refused {
+		return false
+	}
+	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
+		CodeID: code.ID, Label: code.Label, ClientIP: ip,
+		UserAgent: ua, Outcome: store.OutcomeRefusedTarget,
+	}); err != nil {
+		log.Printf("break-glass record refused event for %q: %v", code.Label, err)
+	}
+	_, notifyEmails, webhookURL := s.effectiveSettings(r.Context())
+	breakglass.NewNotifier(s.sender, notifyEmails, webhookURL, s.cfg.BreakGlassWebhookTimeout).
+		Notify(breakglass.UseEvent{
+			Label: code.Label, TargetGroup: code.TargetGroup, Outcome: store.OutcomeRefusedTarget,
+			ClientIP: ip, UserAgent: ua, Time: now,
+		})
+	log.Printf("break-glass refused (target %q is now refused) for %q from %s", code.TargetGroup, code.Label, ip)
+	s.cardNotAvailable(w)
+	return true
+}
+
 // grantBreakGlass mints an emergency session for an active code: it writes the
 // source-of-truth audit row (before granting), notifies admins out of band, and
 // issues the short-lived, never-renewed break-glass session, then redirects to
@@ -1546,6 +1633,9 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 // no existing login) and the one-tap activation from the denial page
 // (handleBreakGlassActivate).
 func (s *Server) grantBreakGlass(w http.ResponseWriter, r *http.Request, code store.BreakGlassCode, ip, ua string, now time.Time) {
+	if s.refuseRetargetedCard(w, r, code, ip, ua, now) {
+		return
+	}
 	// Source-of-truth audit, written before granting.
 	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
 		CodeID: code.ID, Label: code.Label, ClientIP: ip,

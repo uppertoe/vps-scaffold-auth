@@ -40,6 +40,13 @@ const (
 	// session: no emergency session was minted; they were sent to the resource on
 	// their own identity (which may still be offered emergency access if denied).
 	OutcomeRedirected = "redirected"
+	// OutcomeViewed records that a card's address was opened: the page asks
+	// for a button press before granting, so a link preview or mail scanner
+	// that fetches the address grants nothing.
+	OutcomeViewed = "viewed"
+	// OutcomeRefusedTarget records a scan of a card whose group has since
+	// become an application role or a feed group: nothing was granted.
+	OutcomeRefusedTarget = "refused_target"
 )
 
 // Human-login audit event types, recorded in auth_events.

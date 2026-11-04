@@ -112,7 +112,7 @@ func TestBreakGlassScopedToItsGroup(t *testing.T) {
 	srv, _ := testServer(t)
 	token := mintCode(t, srv, "Angiography Lab 1", "bg_stroke")
 	c := newClient(t, srv.Handler())
-	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusFound {
+	if rec := c.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan = %d", rec.Code)
 	}
 
@@ -290,7 +290,7 @@ func TestGroupRecheckSkipsBreakGlass(t *testing.T) {
 	srv, _ := testServer(t)
 	token := mintCode(t, srv, "Ward 4", "bg_ward")
 	c := newClient(t, srv.Handler())
-	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusFound {
+	if rec := c.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan = %d", rec.Code)
 	}
 	rec := c.get("/verify", requireGroups("bg_other"))

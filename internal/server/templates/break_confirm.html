@@ -1,0 +1,12 @@
+{{define "title"}}Emergency access{{end}}
+{{define "content"}}
+{{/* A scan shows this page and grants nothing: the grant is the POST, so a
+     link preview or a mail scanner fetching the card's address has no effect.
+     The token travels in the form body, never in another URL. */}}
+<h1>Emergency access</h1>
+<p class="sub">This card gives emergency access without signing in. Each use is recorded, and the administrators are notified.</p>
+<form method="post" action="/break">
+  <input type="hidden" name="token" value="{{.BreakToken}}">
+  <button type="submit">Continue with emergency access</button>
+</form>
+{{end}}

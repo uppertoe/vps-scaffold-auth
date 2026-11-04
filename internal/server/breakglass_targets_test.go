@@ -306,3 +306,48 @@ func TestFeedGroupTakesNoHandAddedMember(t *testing.T) {
 		t.Errorf("hand-added member in a feed group: %v", m)
 	}
 }
+
+// A stranger cannot reach an application role through an include, nor keep
+// one after a group they belong to became a role: the role is dropped when
+// their groups are worked out, so the app's guard refuses them. A member of
+// staff in the same included group keeps the role.
+func TestGuestCannotReachAppRoleThroughInclude(t *testing.T) {
+	srv, sender := appRoleServer(t, func(c *config.Config) {
+		c.OpenRegistrationHosts = []string{"apply.example.com"}
+	})
+	ctx := context.Background()
+	for _, g := range []string{"airdb_admin", "collaborators"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := srv.store.AddGroupMembers(ctx, "collaborators", []string{strangerAddr, "staff@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	policy := map[string]string{"X-Auth-Policy": "groups=airdb_admin admin"}
+	// Signed in before the include exists: the refusal at the guard re-reads
+	// the groups, and the re-read must drop the role as well.
+	early := newClient(t, srv.Handler())
+	loginGuest(t, early, sender, strangerAddr)
+	if err := srv.store.AddGroupInclude(ctx, "airdb_admin", "collaborators"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := early.get("/verify", policy); rec.Code == http.StatusOK {
+		t.Error("a signed-in guest reached an application role once the include was added")
+	}
+
+	guest := newClient(t, srv.Handler())
+	loginGuest(t, guest, sender, strangerAddr)
+	if id := sessionOf(t, srv, guest); strings.Contains(","+id.Groups+",", ",airdb_admin,") {
+		t.Errorf("guest session groups = %q, want no airdb_admin", id.Groups)
+	}
+	if rec := guest.get("/verify", policy); rec.Code == http.StatusOK {
+		t.Error("a guest reached an application role through an include")
+	}
+
+	staff := newClient(t, srv.Handler())
+	loginAs(t, staff, sender, "staff@example.com", nil)
+	if rec := staff.get("/verify", policy); rec.Code != http.StatusOK {
+		t.Errorf("staff through the same include = %d, want 200", rec.Code)
+	}
+}

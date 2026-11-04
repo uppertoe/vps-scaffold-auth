@@ -41,14 +41,27 @@ const (
 // on the next request without a restart.
 func (s *Server) refusedTargets() map[string]string {
 	out := map[string]string{}
+	for g := range s.appRoleGroups() {
+		out[g] = refusedAppRole
+	}
+	for g := range s.feeds.feeds {
+		out[normalizeGroupName(g)] = refusedFeed
+	}
+	return out
+}
+
+// appRoleGroups returns the groups an application reads as one of its own
+// roles, from the three sources described above.
+func (s *Server) appRoleGroups() map[string]bool {
+	out := map[string]bool{}
 	for _, g := range s.cfg.BreakGlassRefusedGroups {
 		if g = normalizeGroupName(g); g != "" && !authz.IsReservedGroup(g) {
-			out[g] = refusedAppRole
+			out[g] = true
 		}
 	}
 	if m, ok := s.readRouteManifest(); ok {
 		for g := range m.Declared {
-			out[g] = refusedAppRole
+			out[g] = true
 		}
 	}
 	for _, site := range s.routeAccess() {
@@ -58,13 +71,35 @@ func (s *Server) refusedTargets() map[string]string {
 			}
 			for _, g := range rule.Values {
 				if g = normalizeGroupName(g); g != "" && !authz.IsReservedGroup(g) && authz.ValidGroupName(g) {
-					out[g] = refusedAppRole
+					out[g] = true
 				}
 			}
 		}
 	}
-	for g := range s.feeds.feeds {
-		out[normalizeGroupName(g)] = refusedFeed
+	return out
+}
+
+// withoutAppRolesForOutsider removes from an address's groups every
+// application role, when the allow-list does not admit the address. A
+// stranger is refused as a direct member of such a group, but could still
+// reach one through an include, or keep one after the group became a role;
+// filtering when the groups are worked out closes every such path at once.
+// A group filled from a feed is kept: the feed lists the address directly,
+// and nothing can be included into a feed group.
+func (s *Server) withoutAppRolesForOutsider(email string, groups []string) []string {
+	if len(groups) == 0 || s.policy.Allowed(email) {
+		return groups
+	}
+	roles := s.appRoleGroups()
+	out := groups[:0:0]
+	for _, g := range groups {
+		n := normalizeGroupName(g)
+		if roles[n] {
+			if _, feed := s.feedFor(n); !feed {
+				continue
+			}
+		}
+		out = append(out, g)
 	}
 	return out
 }

@@ -175,8 +175,8 @@ func TestRevokingACardEndsItsSessions(t *testing.T) {
 			ctx := context.Background()
 			tokA, tokB := mintCode(t, srv, "Ward A", "ward_a"), mintCode(t, srv, "Ward B", "ward_b")
 			a, b := newClient(t, srv.Handler()), newClient(t, srv.Handler())
-			a.get("/break/"+tokA, nil)
-			b.get("/break/"+tokB, nil)
+			a.scan(tokA)
+			b.scan(tokB)
 			if a.get("/verify", requireGroups("ward_a")).Code != http.StatusOK || b.get("/verify", requireGroups("ward_b")).Code != http.StatusOK {
 				t.Fatal("the cards did not grant sessions")
 			}

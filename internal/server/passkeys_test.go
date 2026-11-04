@@ -653,6 +653,65 @@ func TestAddingAPasskeySendsANotice(t *testing.T) {
 	}
 }
 
+// Removing a passkey emails the account holder, in the approved wording,
+// laid out like the notice for an addition.
+func TestRemovingAPasskeySendsANotice(t *testing.T) {
+	srv, sender := pkServer(t, nil)
+	srv.loc = time.UTC
+	at := time.Date(2026, 11, 4, 11, 52, 0, 0, time.UTC)
+	srv.now = func() time.Time { return at }
+	c := newClient(t, srv.Handler())
+	if rec := register(t, c, passkeytest.New(), phoneSignIn(t, c, sender, "user@example.com").Body.String(), nil); rec.Code != http.StatusOK {
+		t.Fatalf("register: %d", rec.Code)
+	}
+	list, _ := srv.store.ListPasskeys(context.Background(), "user@example.com")
+	page := c.get("/passkeys", phone).Body.String()
+	csrf := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(page)
+	if csrf == nil {
+		t.Fatal("no CSRF token on the passkeys page")
+	}
+	if rec := c.postWith("/passkeys/"+strconv.FormatInt(list[0].ID, 10)+"/remove", url.Values{"csrf": {csrf[1]}}, phone); rec.Code != http.StatusFound {
+		t.Fatalf("remove: %d", rec.Code)
+	}
+	var notice *email.Message
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline) && notice == nil; time.Sleep(10 * time.Millisecond) {
+		sender.mu.Lock()
+		for _, n := range sender.notices {
+			if n.Subject == "A passkey has been removed from your account" {
+				n := n
+				notice = &n
+			}
+		}
+		sender.mu.Unlock()
+	}
+	if notice == nil {
+		t.Fatal("no notice sent when a passkey was removed")
+	}
+	if notice.To != "user@example.com" {
+		t.Fatalf("notice to %q", notice.To)
+	}
+	for _, want := range []string{
+		"A passkey was removed from your account at auth.example.com on 4 November 2026 at 11:52 am, on an iPhone.",
+		"If you removed this passkey, there is nothing more to do.",
+		"If you did not remove it, sign in, check Your passkeys, then contact an administrator for assistance.",
+		"https://auth.example.com/passkeys",
+	} {
+		if !strings.Contains(notice.Text, want) {
+			t.Errorf("notice text lacks %q:\n%s", want, notice.Text)
+		}
+	}
+	for _, want := range []string{
+		"<title>A passkey has been removed from your account</title>",
+		">A passkey has been removed from your account</h1>",
+		"on 4 November 2026 at 11:52 am, on an iPhone.",
+		">Your passkeys</a>",
+	} {
+		if !strings.Contains(notice.HTML, want) {
+			t.Errorf("notice HTML lacks %q", want)
+		}
+	}
+}
+
 // The notice's HTML template does not escape, so the gateway must: a brand
 // name with markup in it is shown as text.
 func TestPasskeyNoticeEscapesTheBrandName(t *testing.T) {
