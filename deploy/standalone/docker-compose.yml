@@ -18,7 +18,7 @@
 
 services:
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
     restart: unless-stopped
     ports:
       - "80:80"
@@ -39,7 +39,7 @@ services:
   auth:
     # Latest build, for kicking the tyres. Pin to a :vX.Y.Z tag (ideally by
     # digest) in production. The image is distroless and runs as nonroot (65532).
-    image: ghcr.io/uppertoe/vps-scaffold-auth:latest
+    image: ghcr.io/uppertoe/vps-scaffold-auth:latest@sha256:0566817cc8cd3a3fb49e9e1c335464e46d4784bdb1a9b3a966ea4e78f4a155c6
     restart: unless-stopped
     env_file:
       - path: ./.env
@@ -70,7 +70,7 @@ services:
 
   # Demo protected app. Remove this once you've confirmed the flow.
   whoami:
-    image: traefik/whoami
+    image: traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
     restart: unless-stopped
     networks: [web]
     security_opt:
