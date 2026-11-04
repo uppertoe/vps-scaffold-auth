@@ -310,6 +310,12 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 		default:
 			data.Identity = id.Email
 			normalSession = true
+			// Group lists, and the feeds behind them, hold firstname.lastname
+			// addresses, so someone signed in with a username address at the
+			// same domain (upperteam@, 646332@) holds none of the groups.
+			if local, domain, ok := strings.Cut(id.Email, "@"); ok && !strings.Contains(local, ".") && domain != "" {
+				data.NameAddressExample = "joe.bloggs@" + domain
+			}
 		}
 	}
 	// Surface the one-tap emergency-access button only to someone who arrived with

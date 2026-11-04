@@ -53,6 +53,10 @@ type pageData struct {
 	// cookie is SameSite=Lax, which is site- not origin-scoped: a sibling app on
 	// the same registrable domain could otherwise forge the activation POST.
 	CSRF string
+	// NameAddressExample, on the denial page, is set when the signed-in
+	// address has no dot before the "@": an example firstname.lastname
+	// address at the same domain, shown with a hint to sign in with one.
+	NameAddressExample string
 	// IsAdmin surfaces an Admin link on the signed-in /welcome landing for a
 	// real (non-break-glass) admin session.
 	IsAdmin bool

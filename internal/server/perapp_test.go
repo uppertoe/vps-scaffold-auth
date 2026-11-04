@@ -351,3 +351,22 @@ func TestGroupRecheckRemembersUnchanged(t *testing.T) {
 		t.Errorf("group reads for 5 refusals = %d, want 1", n)
 	}
 }
+
+// Someone refused a group route while signed in with a username address
+// (no dot before the "@") is told the app needs their firstname.lastname
+// address; someone signed in with such an address sees the ordinary line.
+func TestDeniedPageHintsAtNameAddress(t *testing.T) {
+	srv, sender := testServer(t)
+	for _, tc := range []struct {
+		email string
+		hint  bool
+	}{{"upperteam@example.com", true}, {"646332@example.com", true}, {"joe.bloggs@example.com", false}} {
+		c := newClient(t, srv.Handler())
+		loginAs(t, c, sender, tc.email, nil)
+		body := c.get("/denied?rd=https://app.example.com/", nil).Body.String()
+		got := strings.Contains(body, "This app needs your email address in the form firstname.lastname, such as joe.bloggs@example.com.")
+		if got != tc.hint {
+			t.Errorf("%s: hint shown = %v, want %v", tc.email, got, tc.hint)
+		}
+	}
+}
