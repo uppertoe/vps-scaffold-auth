@@ -2,7 +2,6 @@
 // while its finding stood.
 package server
 
-
 import (
 	"context"
 	"net/http"
