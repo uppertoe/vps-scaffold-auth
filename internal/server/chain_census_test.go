@@ -148,8 +148,8 @@ func TestSecretsNeverReachTheLog(t *testing.T) {
 	}
 
 	bg := newClient(t, srv.Handler())
-	bg.get("/break/"+token, nil)
-	bg.get("/break/not-a-real-token-but-shaped-like-one", nil)
+	bg.scan(token)
+	bg.scan("not-a-real-token-but-shaped-like-one")
 	for _, ck := range bg.cookies {
 		secrets = append(secrets, ck.Value)
 	}

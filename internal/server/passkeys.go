@@ -687,6 +687,7 @@ func (s *Server) handlePasskeyRemove(w http.ResponseWriter, r *http.Request) {
 			log.Printf("end sessions of passkey %d: %v", pid, err)
 		}
 		s.recordAuth(r, id.Email, store.AuthEventPasskeyRemove, store.AuthOutcomeOK)
+		s.notifyPasskeyRemoved(r, id.Email, s.now())
 	}
 	http.Redirect(w, r, s.passkeysURL()+"?removed=1", http.StatusFound)
 }
@@ -809,19 +810,28 @@ func (s *Server) notifyPasskeyAdded(r *http.Request, to string, now time.Time) {
 	s.sendNotice("passkey notice to "+to, func(ctx context.Context) error { return s.sender.Send(ctx, msg) })
 }
 
-// passkeyAddedData is the view model for the passkey notice. The template
-// renders with text/template, which does not escape, so every string is
-// HTML-escaped by renderPasskeyAddedHTML; the colours are validated "#rrggbb".
-type passkeyAddedData struct {
-	BrandName, Added, OK, NotYou, Link string
-	HeaderColor, HeaderText            string
-	AccentColor, AccentText            string
+// notifyPasskeyRemoved emails the account holder when they remove one of
+// their passkeys. A session started with one passkey can remove the others,
+// so a stolen, unlocked phone could strip the owner's other passkeys; this
+// email is how the owner learns of it.
+func (s *Server) notifyPasskeyRemoved(r *http.Request, to string, now time.Time) {
+	msg := s.passkeyRemovedEmail(to, passkeyDevice(r.UserAgent()), now)
+	s.sendNotice("passkey notice to "+to, func(ctx context.Context) error { return s.sender.Send(ctx, msg) })
 }
 
-// renderPasskeyAddedHTML lays the notice out like the sign-in code email, in
+// passkeyNoticeData is the view model for a passkey notice. The template
+// renders with text/template, which does not escape, so every string is
+// HTML-escaped by renderPasskeyNoticeHTML; the colours are validated "#rrggbb".
+type passkeyNoticeData struct {
+	BrandName, Heading, First, OK, NotYou, Link string
+	HeaderColor, HeaderText                     string
+	AccentColor, AccentText                     string
+}
+
+// renderPasskeyNoticeHTML lays a notice out like the sign-in code email, in
 // the admin branding's colours, falling back to plain paragraphs if the
 // template ever fails so that the notice is still sent.
-func (s *Server) renderPasskeyAddedHTML(added, ok, notYou, link string, now time.Time) string {
+func (s *Server) renderPasskeyNoticeHTML(heading, first, ok, notYou, link string, now time.Time) string {
 	header := breakglass.DefaultPalette.Header
 	accent := breakglass.DefaultPalette.Accent
 	if b, err := s.publicBrandingAt(context.Background(), now); err == nil {
@@ -830,8 +840,8 @@ func (s *Server) renderPasskeyAddedHTML(added, ok, notYou, link string, now time
 	}
 	esc := html.EscapeString
 	var buf bytes.Buffer
-	err := s.emailTmpl.ExecuteTemplate(&buf, "email_passkey_added", passkeyAddedData{
-		BrandName: esc(s.cfg.BrandName), Added: esc(added), OK: esc(ok), NotYou: esc(notYou), Link: esc(link),
+	err := s.emailTmpl.ExecuteTemplate(&buf, "email_passkey_notice", passkeyNoticeData{
+		BrandName: esc(s.cfg.BrandName), Heading: esc(heading), First: esc(first), OK: esc(ok), NotYou: esc(notYou), Link: esc(link),
 		HeaderColor: header, HeaderText: emailTextOn(header),
 		AccentColor: accent, AccentText: emailTextOn(accent),
 	})
@@ -839,7 +849,7 @@ func (s *Server) renderPasskeyAddedHTML(added, ok, notYou, link string, now time
 		return buf.String()
 	}
 	log.Printf("render passkey notice: %v", err)
-	return `<p>` + esc(added) + `</p><p>` + esc(ok) + `</p><p>` + esc(notYou) + `</p><p><a href="` + esc(link) + `">Your passkeys</a></p>`
+	return `<p>` + esc(first) + `</p><p>` + esc(ok) + `</p><p>` + esc(notYou) + `</p><p><a href="` + esc(link) + `">Your passkeys</a></p>`
 }
 
 // passkeyDevice names the kind of phone for the notice, or "" if unknown.
@@ -853,18 +863,30 @@ func passkeyDevice(ua string) string {
 	return ""
 }
 
-func (s *Server) passkeyAddedEmail(to, device string, now time.Time) email.Message {
+// passkeyNotice builds a notice whose first line reads "A passkey was <done>
+// your account at <host> on <date> at <time>[, on <device>]."
+func (s *Server) passkeyNotice(to, subject, done, device, ok, notYou string, now time.Time) email.Message {
 	when := now.In(s.loc)
 	stamp := when.Format("2 January 2006") + " at " + strings.ToLower(when.Format("3:04 pm"))
-	first := fmt.Sprintf("A passkey was added to your account at %s on %s", s.relyingParty().ID, stamp)
+	first := fmt.Sprintf("A passkey was %s your account at %s on %s", done, s.relyingParty().ID, stamp)
 	if device != "" {
 		first += ", on " + device
 	}
 	first += "."
-	const ok = "If you added this passkey, there is nothing more to do."
-	const notYou = "If you did not add it, open Your passkeys, remove it, then contact an administrator for assistance."
 	link := s.passkeysURL()
 	text := first + "\n\n" + ok + "\n\n" + notYou + "\n\nYour passkeys: " + link + "\n"
-	htmlBody := s.renderPasskeyAddedHTML(first, ok, notYou, link, now)
-	return email.Message{To: to, Subject: "A passkey has been added to your account", Text: text, HTML: htmlBody}
+	htmlBody := s.renderPasskeyNoticeHTML(subject, first, ok, notYou, link, now)
+	return email.Message{To: to, Subject: subject, Text: text, HTML: htmlBody}
+}
+
+func (s *Server) passkeyAddedEmail(to, device string, now time.Time) email.Message {
+	return s.passkeyNotice(to, "A passkey has been added to your account", "added to", device,
+		"If you added this passkey, there is nothing more to do.",
+		"If you did not add it, open Your passkeys, remove it, then contact an administrator for assistance.", now)
+}
+
+func (s *Server) passkeyRemovedEmail(to, device string, now time.Time) email.Message {
+	return s.passkeyNotice(to, "A passkey has been removed from your account", "removed from", device,
+		"If you removed this passkey, there is nothing more to do.",
+		"If you did not remove it, sign in, check Your passkeys, then contact an administrator for assistance.", now)
 }

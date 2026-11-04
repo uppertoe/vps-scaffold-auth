@@ -126,6 +126,28 @@ func (c *client) postForm(target string, form url.Values) *httptest.ResponseReco
 	return c.do(req)
 }
 
+// scan does what a person does with a card: opens its address, then, if the
+// page offers the button, presses it. It returns the last response.
+func (c *client) scan(token string) *httptest.ResponseRecorder {
+	rec := c.get("/break/"+token, nil)
+	if rec.Code != http.StatusOK {
+		return rec
+	}
+	return c.postForm("/break", url.Values{"token": {token}})
+}
+
+// withoutViews drops the "viewed" rows a scan's first step records, for tests
+// about what the button then did.
+func withoutViews(events []store.BreakGlassEvent, err error) ([]store.BreakGlassEvent, error) {
+	var out []store.BreakGlassEvent
+	for _, e := range events {
+		if e.Outcome != store.OutcomeViewed {
+			out = append(out, e)
+		}
+	}
+	return out, err
+}
+
 func testServer(t *testing.T) (*Server, *captureSender) {
 	t.Helper()
 	return testServerWith(t, nil)

@@ -2,7 +2,7 @@
 title: Break-glass cards
 summary: Emergency access by QR code, how each card is limited to the tools it names, how its use is recorded and announced, and the risk accepted with it.
 weight: 5
-lastmod: 2026-11-02
+lastmod: 2026-11-04
 ---
 
 ## What a card is for
@@ -10,7 +10,8 @@ lastmod: 2026-11-02
 A break-glass card is a laminated QR code left in a known place, such as an
 angiography lab or a resuscitation bay. It lets someone who cannot otherwise
 sign in reach a particular tool during a time-critical event. Scanning the
-card grants access at once, with no email and no second factor.
+card opens a page with one button, and pressing it grants access at once,
+with no email and no second factor.
 
 ## The accepted risk
 
@@ -39,7 +40,9 @@ reads itself. An administrator can name more in the gateway's settings. A
 group whose members come from a feed cannot be a card's group either. On the
 codes page such groups are shown but cannot be chosen, with the reason beside
 them, and a card made before its group became a role is marked so that an
-administrator can replace it.
+administrator can replace it. Until it is replaced, such a card grants
+nothing: the person scanning it sees the same page as for a withdrawn card,
+the scan is recorded as refused, and the chosen administrators are notified.
 
 A card can never grant the admin tier, because the three role names cannot be
 used as a card's group and the admin pages refuse break-glass sessions
@@ -56,6 +59,7 @@ allow more than twelve. It never renews, so it always ends at that time.
 
 | Step | What the gateway does |
 |---|---|
+| On opening the card's address | Shows a page with one button and grants nothing. Chat apps, link previews and mail scanners such as Safe Links fetch an address on their own, so a shared card's address starts no session and sends no notification. The visit is recorded as viewed. |
 | Before granting | Writes the scan to the record: the card, the network address, the browser and the time. If the record cannot be written, no access is granted. |
 | While granting | Notifies the chosen administrators by email, by a web notification, or both. The notification never delays access. |
 | After granting | Sends the person to the card's tool. |
@@ -66,6 +70,8 @@ protects a card. Each card's code is 128 random bits, so it cannot be guessed.
 
 The card's code travels in the scanned address, so the server leaves those
 requests out of its access log, and the code is never written to disk there.
+The button sends the code in the body of a form, which the gateway accepts
+only from its own pages, so another site cannot press it on someone's behalf.
 The browser's history still holds the code, which is inherent to a card that
 can be scanned.
 

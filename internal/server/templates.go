@@ -45,6 +45,9 @@ type pageData struct {
 	// button POSTs to /break/activate, which mints the emergency session.
 	EmergencyOffer bool
 	EmergencyLabel string
+	// BreakToken is the scanned card's token, carried in the confirmation
+	// page's form so that the grant is a POST (break_confirm.html).
+	BreakToken string
 	// CSRF is the double-submit token embedded in the emergency-access form on
 	// the denial page; /break/activate verifies it. Necessary because the offer
 	// cookie is SameSite=Lax, which is site- not origin-scoped: a sibling app on
@@ -93,7 +96,7 @@ func loadTemplates() (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"login", "code", "totp", "message", "denied", "welcome", "logout", "passkey_offer", "passkey_added", "passkeys", "passkey_confirm"} {
+	for _, name := range []string{"login", "code", "totp", "message", "denied", "welcome", "logout", "passkey_offer", "passkey_added", "passkeys", "passkey_confirm", "break_confirm"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err
@@ -113,7 +116,7 @@ func loadTemplates() (pages, error) {
 // is HTML-escaped by the caller before rendering; every other field is numeric
 // or a validated hex colour, so emitting them verbatim is safe.
 func loadEmailTemplate() (*texttemplate.Template, error) {
-	return texttemplate.ParseFS(templatesFS, "templates/email_code.html", "templates/email_passkey_added.html")
+	return texttemplate.ParseFS(templatesFS, "templates/email_code.html", "templates/email_passkey_notice.html")
 }
 
 // render writes a page using the base layout. On error it falls back to a plain

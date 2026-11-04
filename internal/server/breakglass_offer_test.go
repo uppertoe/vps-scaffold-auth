@@ -23,7 +23,7 @@ func TestBreakGlassScanWithSessionRedirectsNotGrants(t *testing.T) {
 	normal := c.cookies[session.SessionCookie].Value
 
 	token := mintCode(t, srv, "Lab 1", "g")
-	rec := c.get("/break/"+token, nil)
+	rec := c.scan(token)
 	if rec.Code != http.StatusFound {
 		t.Fatalf("scan status = %d, want 302", rec.Code)
 	}
@@ -41,7 +41,7 @@ func TestBreakGlassScanWithSessionRedirectsNotGrants(t *testing.T) {
 		t.Error("no break-glass offer cookie set")
 	}
 	// Audited as redirected, not granted.
-	events, err := srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0)
+	events, err := withoutViews(srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0))
 	if err != nil || len(events) != 1 || events[0].Outcome != store.OutcomeRedirected {
 		t.Fatalf("events = %+v, err=%v; want one 'redirected'", events, err)
 	}
@@ -84,7 +84,7 @@ func TestBreakGlassActivateGrants(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "g" {
 		t.Fatalf("/verify after activate = %d groups=%q, want 200 g", rec.Code, rec.Header().Get("Remote-Groups"))
 	}
-	events, _ := srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0)
+	events, _ := withoutViews(srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0))
 	if len(events) != 2 || events[0].Outcome != store.OutcomeGranted {
 		t.Fatalf("events = %+v, want a 'granted' after the 'redirected'", events)
 	}
@@ -187,11 +187,11 @@ func TestBreakGlassScanOverBreakGlassGrantsFresh(t *testing.T) {
 	srv, _ := testServer(t)
 	c := newClient(t, srv.Handler())
 	t1 := mintCode(t, srv, "Lab 1", "g1")
-	if rec := c.get("/break/"+t1, nil); rec.Code != http.StatusFound {
+	if rec := c.scan(t1); rec.Code != http.StatusFound {
 		t.Fatalf("first scan = %d", rec.Code)
 	}
 	t2 := mintCode(t, srv, "Lab 2", "g2")
-	if rec := c.get("/break/"+t2, nil); rec.Code != http.StatusFound {
+	if rec := c.scan(t2); rec.Code != http.StatusFound {
 		t.Fatalf("second scan = %d", rec.Code)
 	}
 	if c.cookies[session.OfferCookie] != nil {
@@ -201,7 +201,7 @@ func TestBreakGlassScanOverBreakGlassGrantsFresh(t *testing.T) {
 	if rec := c.get("/verify", requireGroups("g2")); rec.Code != http.StatusOK {
 		t.Fatalf("/verify g2 after re-scan = %d, want 200", rec.Code)
 	}
-	events, _ := srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0)
+	events, _ := withoutViews(srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0))
 	if len(events) != 2 {
 		t.Fatalf("events = %d, want 2 grants", len(events))
 	}
@@ -217,7 +217,7 @@ func TestBreakGlassScanOverBreakGlassGrantsFresh(t *testing.T) {
 func mintScanToken(t *testing.T, srv *Server, c *client, label, group string) string {
 	t.Helper()
 	token := mintCode(t, srv, label, group)
-	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusFound {
+	if rec := c.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan status = %d, want 302", rec.Code)
 	}
 	if c.cookies[session.OfferCookie] == nil {

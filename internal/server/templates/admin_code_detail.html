@@ -108,7 +108,7 @@
     {{range .Events}}
       <tr>
         <td class="muted">{{fmtTime .CreatedAt}}</td>
-        <td>{{if eq .Outcome "granted"}}<span class="pill ok">granted</span>{{else}}<span class="pill off">{{.Outcome}}</span>{{end}}</td>
+        <td>{{if eq .Outcome "granted"}}<span class="pill ok">granted</span>{{else if eq .Outcome "refused_target"}}<span class="pill off">refused</span>{{else}}<span class="pill off">{{.Outcome}}</span>{{end}}</td>
         <td><code class="mono">{{.ClientIP}}</code></td>
         <td class="muted">{{.UserAgent}}</td>
       </tr>
