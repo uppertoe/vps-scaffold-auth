@@ -1,16 +1,28 @@
-{{define "title"}}Two-factor authentication{{end}}
+{{define "title"}}Open the admin pages{{end}}
 {{define "content"}}
-<div class="ok">Email confirmed &check; &mdash; one more step to finish signing in.</div>
-<h1>Enter your authenticator code</h1>
-<p class="sub">Admin sign-in needs a second step. Open your <strong>authenticator app</strong>
-   (the one set up for your admin account) and enter the 6-digit code it shows.
-   This is <strong>not</strong> the code we emailed you.</p>
+<h1>Open the admin pages</h1>
+<p class="sub">{{if .Passkey}}To open the admin pages, use your passkey or enter the 6-digit code from your authenticator app.{{else}}To open the admin pages, enter the 6-digit code from your authenticator app.{{end}}</p>
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+{{with .Passkey}}
+<div class="err" id="passkey-error" hidden>Your passkey could not be used. Please try again, or enter the code from your authenticator app.</div>
+<form id="passkey-login" method="post" action="/passkey/login" hidden data-challenge="{{.Challenge}}" data-rpid="{{.RPID}}">
+  <input type="hidden" name="rd" value="{{$.Redirect}}">
+  <input type="hidden" name="remember">
+  <input type="hidden" name="id">
+  <input type="hidden" name="clientDataJSON">
+  <input type="hidden" name="authenticatorData">
+  <input type="hidden" name="signature">
+  <input type="hidden" name="userHandle">
+</form>
+<div id="passkey-button-wrap" hidden><button type="button" id="passkey-button">{{template "pk-key-icon" 18}} Use your passkey</button></div>
+{{end}}
 <form method="post" action="/totp" autocomplete="off">
   <input type="hidden" name="rd" value="{{.Redirect}}">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label for="code">Authenticator code</label>
   <input id="code" name="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*"
-         autocomplete="off" autofocus required placeholder="000000">
-  <button type="submit">Verify</button>
+         autocomplete="one-time-code" {{if not .Passkey}}autofocus {{end}}required placeholder="000000">
+  <button type="submit"{{if .Passkey}} class="secondary"{{end}}>Continue</button>
 </form>
+<div class="links"><a href="/welcome">Cancel</a></div>
 {{end}}

@@ -31,9 +31,9 @@ func TestPasskeyAddedWhileTOTPOffIsNotAdminGrade(t *testing.T) {
 	srv.cfg.TOTPEnabled = true
 	provisionTOTP(t, srv, "admin@example.com")
 	c2 := newClient(t, srv.Handler())
-	rec := signInWith(t, c2, a)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "authenticator") {
-		t.Fatalf("a passkey added before TOTP was enabled skipped the authenticator step: %d", rec.Code)
+	signInWith(t, c2, a)
+	if rec := c2.get("/admin/", nil); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
+		t.Fatalf("a passkey added before TOTP was enabled opened the admin pages: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 }
 

@@ -1,17 +1,17 @@
-{{define "email_passkey_added"}}<!DOCTYPE html>
+{{define "email_passkey_notice"}}<!DOCTYPE html>
 <html lang="en" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light only">
 <meta name="x-apple-disable-message-reformatting">
-<title>A passkey has been added to your account</title>
+<title>{{.Heading}}</title>
 <!--[if mso]>
 <style>table,td,div,p,span,h1,a{font-family:Arial,Helvetica,sans-serif !important;}</style>
 <![endif]-->
 </head>
 <body style="margin:0;padding:0;width:100%;background:#f4f5f7;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
-<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;opacity:0;">{{.Added}}&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;</div>
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;opacity:0;">{{.First}}&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f5f7;">
   <tr>
     <td align="center" style="padding:32px 16px;">
@@ -25,8 +25,8 @@
         <tr><td style="height:4px;line-height:4px;font-size:0;background:{{.AccentColor}};">&nbsp;</td></tr>
         <tr>
           <td style="padding:36px 32px 8px;font-family:Helvetica,Arial,sans-serif;color:#1e2328;">
-            <h1 style="margin:0 0 14px;font-size:20px;line-height:26px;font-weight:700;color:#1e2328;">A passkey has been added to your account</h1>
-            <p style="margin:0 0 14px;font-size:15px;line-height:22px;color:#1e2328;">{{.Added}}</p>
+            <h1 style="margin:0 0 14px;font-size:20px;line-height:26px;font-weight:700;color:#1e2328;">{{.Heading}}</h1>
+            <p style="margin:0 0 14px;font-size:15px;line-height:22px;color:#1e2328;">{{.First}}</p>
             <p style="margin:0 0 14px;font-size:15px;line-height:22px;color:#1e2328;">{{.OK}}</p>
             <p style="margin:0 0 26px;font-size:15px;line-height:22px;color:#1e2328;">{{.NotYou}}</p>
             <table role="presentation" cellpadding="0" cellspacing="0" border="0">

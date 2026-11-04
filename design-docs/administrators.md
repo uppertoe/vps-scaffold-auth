@@ -2,7 +2,7 @@
 title: Administrators
 summary: How the admin tier is granted, how its second factor is issued and checked, and what the admin pages can change and record.
 weight: 4
-lastmod: 2026-10-31
+lastmod: 2026-11-04
 ---
 
 ## Who is an administrator
@@ -20,17 +20,30 @@ carries.
 ## The second factor
 
 An emailed code is only as safe as the inbox it is sent to, so the gateway
-can require administrators to enter a six-digit code from an authenticator
-app as well. The second factor is on for the department's server. Ordinary
-staff sign in with the emailed code alone.
+can require administrators to take a second step as well: a six-digit code
+from an authenticator app, or a passkey that stands in for one. The second
+factor is on for the department's server.
+
+Administrators sign in exactly as staff do, with an emailed code or a
+passkey, and every site that admits staff opens for them at once. The second
+step is asked for only at the admin door, which an administrator reaches by
+opening the admin pages or a site restricted to administrators. Until then,
+the sites see an administrator as an ordinary member of staff: the `admin`
+group reaches a site only after the second step.
+
+The second step lasts twelve hours, however long the session lasts. After
+twelve hours, the `admin` group leaves the sites at the next request and the
+admin door asks again; with a passkey, that is a single check of the face,
+fingerprint or PIN. Removing an address from the administrators' list also
+takes the `admin` group away at the next request.
 
 Administrators do not set up their own second factor. If a sign-in could set
 one up, whoever controlled the inbox could set it up, which would defeat its
 purpose. The first administrator's secret is created with a command run on
 the server. After that, a signed-in administrator creates or resets a
 colleague's secret on the admin pages, where it is shown once to be passed on
-in person. An administrator with no secret is refused at sign-in and asked to
-contact an administrator.
+in person. An administrator with no secret still signs in as staff, and the
+admin door asks another administrator to set one up.
 
 The person who creates a secret sees it once, and so could in principle act
 as that administrator. Administrators are therefore trusted equally, as they
@@ -48,9 +61,9 @@ The gateway checks the authenticator code with these limits:
   so that a code seen over someone's shoulder cannot be reused.
 
 When the second factor is first turned on, administrators who are already
-signed in are asked for it at their next request. A session from before the
-change, or from before a person became an administrator, does not carry the
-second factor and is not honoured for admin access.
+signed in lose the `admin` group at their next request and keep their access
+as staff. A session from before the change, or from before a person became an
+administrator, does not carry the second step, so the admin door asks for it.
 
 ## The admin pages
 

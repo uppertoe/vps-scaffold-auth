@@ -306,3 +306,114 @@ func TestFeedGroupTakesNoHandAddedMember(t *testing.T) {
 		t.Errorf("hand-added member in a feed group: %v", m)
 	}
 }
+
+// A stranger cannot reach an application role through an include, nor keep
+// one after a group they belong to became a role: the role is dropped when
+// their groups are worked out, so the app's guard refuses them. A member of
+// staff in the same included group keeps the role.
+func TestGuestCannotReachAppRoleThroughInclude(t *testing.T) {
+	srv, sender := appRoleServer(t, func(c *config.Config) {
+		c.OpenRegistrationHosts = []string{"apply.example.com"}
+	})
+	ctx := context.Background()
+	for _, g := range []string{"airdb_admin", "collaborators"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := srv.store.AddGroupMembers(ctx, "collaborators", []string{strangerAddr, "staff@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	policy := map[string]string{"X-Auth-Policy": "groups=airdb_admin admin"}
+	// Signed in before the include exists: the refusal at the guard re-reads
+	// the groups, and the re-read must drop the role as well.
+	early := newClient(t, srv.Handler())
+	loginGuest(t, early, sender, strangerAddr)
+	if err := srv.store.AddGroupInclude(ctx, "airdb_admin", "collaborators"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := early.get("/verify", policy); rec.Code == http.StatusOK {
+		t.Error("a signed-in guest reached an application role once the include was added")
+	}
+
+	guest := newClient(t, srv.Handler())
+	loginGuest(t, guest, sender, strangerAddr)
+	if id := sessionOf(t, srv, guest); strings.Contains(","+id.Groups+",", ",airdb_admin,") {
+		t.Errorf("guest session groups = %q, want no airdb_admin", id.Groups)
+	}
+	if rec := guest.get("/verify", policy); rec.Code == http.StatusOK {
+		t.Error("a guest reached an application role through an include")
+	}
+
+	staff := newClient(t, srv.Handler())
+	loginAs(t, staff, sender, "staff@example.com", nil)
+	if rec := staff.get("/verify", policy); rec.Code != http.StatusOK {
+		t.Errorf("staff through the same include = %d, want 200", rec.Code)
+	}
+}
+
+// Including a group with outside members in an application-role group,
+// directly or through a group that the role includes, is refused and undone;
+// an include of staff only goes ahead.
+func TestIncludeBringingOutsidersIntoAppRoleRefused(t *testing.T) {
+	srv, sender := appRoleServer(t, nil)
+	ctx := context.Background()
+	for _, g := range []string{"airdb_admin", "middle", "collaborators", "staff"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := srv.store.AddGroupMembers(ctx, "collaborators", []string{strangerAddr}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.AddGroupMembers(ctx, "staff", []string{"staff@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.AddGroupInclude(ctx, "airdb_admin", "middle"); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	include := func(group, included string) string {
+		c.postForm("/admin/groups/"+group+"/includes", url.Values{"csrf": {tok}, "included": {included}})
+		ck := c.cookies[srv.noticeCookieName()]
+		if ck == nil {
+			return ""
+		}
+		return ck.Value
+	}
+	for _, g := range []string{"airdb_admin", "middle"} {
+		if loc := include(g, "collaborators"); !strings.Contains(loc, "include-refused") {
+			t.Fatalf("include of outsiders into %s: %q, want include-refused", g, loc)
+		}
+		members, _, _ := srv.store.GroupMembersResolved(ctx, "airdb_admin")
+		for _, m := range members {
+			if m == strangerAddr {
+				t.Fatalf("the refused include into %s was kept", g)
+			}
+		}
+	}
+	if loc := include("airdb_admin", "staff"); !strings.Contains(loc, "include-added") {
+		t.Fatalf("include of staff: %q, want include-added", loc)
+	}
+}
+
+// A card label that could pass for an address or split a header list is
+// refused; an ordinary label with punctuation is accepted.
+func TestCardLabelRefusesAtCommaAndLineBreak(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	for _, label := range []string{"ops@example.com", "ED, Resus", "Ward\nB"} {
+		rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {label}, "group_new": {"ward-b"}})
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Invalid label") {
+			t.Errorf("label %q: %d, want 400 Invalid label", label, rec.Code)
+		}
+	}
+	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Children's ED/Resus (CCU)"}, "group_new": {"ward-b"}})
+	if rec.Code == http.StatusBadRequest {
+		t.Fatalf("an ordinary label was refused: %s", rec.Body.String())
+	}
+}

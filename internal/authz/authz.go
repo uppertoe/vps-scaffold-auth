@@ -232,6 +232,17 @@ func ValidGroupName(name string) bool {
 	return true
 }
 
+// ListNames reports whether a policy list (such as a route's groups=) names
+// want, split exactly as CanAccessApp splits it.
+func ListNames(list, want string) bool {
+	for _, g := range splitList(list) {
+		if g == want {
+			return true
+		}
+	}
+	return false
+}
+
 // HasGroup reports whether the comma-separated groups string contains target.
 func HasGroup(groups, target string) bool {
 	for _, g := range strings.Split(groups, ",") {

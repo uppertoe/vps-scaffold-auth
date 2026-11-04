@@ -55,8 +55,14 @@ services:
     # "# scaffold-members:" marker in the app's Caddy snippet:
     #
     #   networks:
-    #     - caddy
-    #     - teaching-cases_members
+    #     caddy:
+    #     teaching-cases_members:
+    #       aliases: [auth-members]
+    #
+    # The alias is the host in MEMBERS_LISTEN_ADDR (default auth-members:8081).
+    # The gateway binds the members listener to its addresses under that name
+    # alone and refuses connections to LISTEN_ADDR that arrive on them, so an
+    # app on its members network cannot reach the public listener past Caddy.
     #
     #   networks:
     #     teaching-cases_members:

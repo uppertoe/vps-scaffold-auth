@@ -2,7 +2,7 @@
 title: Who can reach what
 summary: The three roles, the groups administrators manage, the rule each tool declares, and how guests from the public are kept to the one tool meant for them.
 weight: 3
-lastmod: 2026-10-31
+lastmod: 2026-11-04
 ---
 
 ## Roles
@@ -74,7 +74,10 @@ the allowed domains do not cover, is signed in as a guest.
 
 A guest is admitted only where a tool's rule opts in. The open-to-the-public
 guard admits guests, and a group guard admits a guest whom an administrator
-has placed in one of its groups. Every other guard refuses them, including the
+has placed in one of its groups. A group that a tool reads as one of its own
+roles is never given to a guest, whether directly, through an included group,
+or because the group became a role after the guest joined it. Every other
+guard refuses them, including the
 plain "any signed-in person" guard and a domain guard that names the guest's
 own domain. A tool that forgets to set a rule therefore stays closed to the
 public.

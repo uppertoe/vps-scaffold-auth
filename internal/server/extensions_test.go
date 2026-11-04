@@ -108,7 +108,7 @@ func TestBreakGlassGrantsAndLogs(t *testing.T) {
 	token := mintCode(t, srv, "Angiography Lab 1", "code_stroke_break_glass")
 	c := newClient(t, srv.Handler())
 
-	rec := c.get("/break/"+token, nil)
+	rec := c.scan(token)
 	if rec.Code != http.StatusFound {
 		t.Fatalf("scan status = %d, want 302", rec.Code)
 	}
@@ -122,7 +122,7 @@ func TestBreakGlassGrantsAndLogs(t *testing.T) {
 		t.Errorf("Remote-Groups = %q", g)
 	}
 	// Audited.
-	events, err := srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0)
+	events, err := withoutViews(srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0))
 	if err != nil || len(events) != 1 || events[0].Outcome != store.OutcomeGranted {
 		t.Fatalf("events = %+v, err=%v", events, err)
 	}
@@ -136,7 +136,7 @@ func TestBreakGlassRevokedDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := newClient(t, srv.Handler())
-	rec := c.get("/break/"+token, nil)
+	rec := c.scan(token)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("revoked scan status = %d, want 404", rec.Code)
 	}
@@ -151,7 +151,7 @@ func TestBreakGlassSessionNotRenewed(t *testing.T) {
 	srv.cfg.BreakGlassSessionTTL = time.Hour
 	token := mintCode(t, srv, "Lab", "g")
 	c := newClient(t, srv.Handler())
-	c.get("/break/"+token, nil)
+	c.scan(token)
 
 	before := c.cookies[session.SessionCookie].Value
 	// Advance time beyond the renew window; a normal session would re-issue.
@@ -228,7 +228,7 @@ func TestAppSettingsOverrideBreakGlassTTL(t *testing.T) {
 	}
 	token := mintCode(t, srv, "Lab", "g")
 	c := newClient(t, srv.Handler())
-	c.get("/break/"+token, nil)
+	c.scan(token)
 	ck := c.cookies[session.SessionCookie]
 	if ck == nil {
 		t.Fatal("no break-glass session issued")

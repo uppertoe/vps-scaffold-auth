@@ -23,19 +23,21 @@ import (
 
 // Server holds the dependencies shared by all handlers.
 type Server struct {
-	cfg          *config.Config
-	store        store.Store
-	sender       email.Sender
-	sessions     *session.Manager
-	policy       *authz.Policy
-	secrets      *secretbox.Box
-	emailLimiter *ratelimit.Limiter // codes sent, per (address, client IP)
-	emailCeiling *ratelimit.Limiter // codes sent, per address from all IPs
-	sendsPerIP   *ratelimit.Limiter // codes sent, per client IP across all addresses
-	ipLimiter    *ratelimit.Limiter // code requests, per client IP
-	wrongCodes   *ratelimit.Limiter // wrong email or TOTP codes, per client IP
-	breakLimiter *ratelimit.Limiter // per-IP limiter for break-glass scans
-	totpReplay   *totpReplay
+	cfg            *config.Config
+	store          store.Store
+	sender         email.Sender
+	sessions       *session.Manager
+	policy         *authz.Policy
+	secrets        *secretbox.Box
+	emailLimiter   *ratelimit.Limiter // codes sent, per (address, client IP)
+	emailCeiling   *ratelimit.Limiter // codes sent, per address from all IPs
+	sendsPerIP     *ratelimit.Limiter // codes sent, per client IP across all addresses
+	ipLimiter      *ratelimit.Limiter // code requests, per client IP
+	wrongCodes     *ratelimit.Limiter // wrong email or TOTP codes, per client IP
+	breakLimiter   *ratelimit.Limiter // per-IP limiter for break-glass grants
+	viewLimiter    *ratelimit.Limiter // per-IP limiter for the scan's page, so one use spends one grant token
+	refusedNotices hourlyOnce         // notifications of a refused (retargeted) card
+	totpReplay     *totpReplay
 	// passkeyChallenges makes each passkey challenge single-use (passkeys.go).
 	passkeyChallenges *challengeGuard
 	access            *accessAudit
@@ -94,6 +96,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
 		wrongCodes:   limiterOr(cfg.RateLimitWrongCodesPerIP, cfg.RateLimitPerIP),
 		breakLimiter: newBreakLimiter(cfg),
+		viewLimiter:  newBreakLimiter(cfg),
 		access:       newAccessAudit(st, cfg.AuditRetention),
 		members:      newMembersAPI(cfg.MemberReaders),
 		groupRecheck: newGroupRecheck(),
@@ -153,13 +156,15 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /login", s.handleLogin)
 	mux.HandleFunc("POST /request", s.handleRequest)
 	mux.HandleFunc("POST /verify-code", s.handleVerifyCode)
+	mux.HandleFunc("GET /totp", s.handleStepUp)
 	mux.HandleFunc("POST /totp", s.handleTOTP)
 	mux.HandleFunc("GET /logout", s.handleLogoutConfirm)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /denied", s.handleDenied)
 	mux.HandleFunc("GET /welcome", s.handleWelcome)
-	mux.HandleFunc("GET /break/{token}", s.handleBreakGlass)
+	mux.HandleFunc("GET /break/{token}", s.handleBreakGlassScan)
+	mux.HandleFunc("POST /break", s.handleBreakGlass)
 	mux.HandleFunc("POST /break/activate", s.handleBreakGlassActivate)
 	mux.HandleFunc("GET /logo.img", s.handleLogo)
 	// Passkeys (passkeys.go). Each handler answers 404 unless PASSKEYS_ENABLED.

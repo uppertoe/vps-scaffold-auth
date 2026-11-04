@@ -2,7 +2,7 @@
 title: Passkeys
 summary: How a person signs in on their phone with a passkey instead of an emailed code, and the rules that keep a passkey as safe as the sign-in it replaces.
 weight: 4
-lastmod: 2026-11-03
+lastmod: 2026-11-04
 ---
 
 ## What a passkey changes
@@ -45,26 +45,34 @@ permits cannot add a passkey.
 ## Administrators
 
 A passkey counts as two factors on its own: the phone, and the face,
-fingerprint or PIN check that unlocks it. An administrator who signs in with a
-passkey therefore needs neither an emailed code nor an authenticator code.
+fingerprint or PIN check that unlocks it. An administrator who signs in with
+an admin passkey therefore has the second step already, and the admin door
+offers that passkey first on a phone.
 
-An administrator can add a passkey only after passing the second factor. The
-offer that follows an administrator's sign-in comes after the authenticator
-step. An administrator whose sign-in is no longer recent enters an
-authenticator code first, and the phone makes the passkey only once the code
-has been accepted. A passkey added before its owner became an administrator,
-or while the second factor was switched off, does not count as the second
-factor, and a sign-in with it continues to the authenticator step.
+An administrator can add an admin passkey only after an authenticator code.
+The offer comes at the admin door, straight after the code, rather than after
+signing in. An administrator whose second step is not recent enters an
+authenticator code on the passkeys page first, and the phone makes the
+passkey only once the code has been accepted.
+
+A passkey added before its owner became an administrator, or while the second
+factor was switched off, gives an ordinary session, and the admin door asks
+for the code. After the code, the door offers to add a new passkey on the
+phone. Made for the same account, it replaces the older one there, and it
+opens the admin pages by itself from then on. The gateway never upgrades the
+older passkey in place, because the session that names it could have been
+planted in the browser by another site on the domain.
 
 An administrator who loses every passkey still signs in with an emailed code
-and an authenticator code, as before.
+and takes the second step with an authenticator code.
 
 ## Ending access
 
 A session started with a passkey names that passkey. When the passkey is
 removed, the session ends at its next request, on the tools as well as the
 admin pages. A person removes their own passkeys on their passkeys
-page. An administrator removes all of one person's passkeys on that person's
+page, and the gateway emails them each time, as it does when a passkey is
+added. An administrator removes all of one person's passkeys on that person's
 access page, and the removal is recorded in the admin audit.
 
 Sessions started with an emailed code can be ended too: the person, or an

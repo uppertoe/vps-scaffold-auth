@@ -51,6 +51,7 @@ func TestMemberReadersRefused(t *testing.T) {
 		"the port by name": {"app=staff", map[string]string{"MEMBER_READER_TOKEN_APP": readerToken, "LISTEN_ADDR": ":80", "MEMBERS_LISTEN_ADDR": ":http"}, "different port"},
 		"a padded port":    {"app=staff", map[string]string{"MEMBER_READER_TOKEN_APP": readerToken, "LISTEN_ADDR": ":8080", "MEMBERS_LISTEN_ADDR": ":08080"}, "different port"},
 		"no port":          {"app=staff", map[string]string{"MEMBER_READER_TOKEN_APP": readerToken, "MEMBERS_LISTEN_ADDR": "auth"}, "needs a port"},
+		"no network name":  {"app=staff", map[string]string{"MEMBER_READER_TOKEN_APP": readerToken, "MEMBERS_LISTEN_ADDR": ":8081"}, "needs the name"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			setValid(t)

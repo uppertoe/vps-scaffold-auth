@@ -316,13 +316,21 @@ func TestAdminPasskeys(t *testing.T) {
 	start := time.Now()
 	srv.now = func() time.Time { return start }
 	c := newClient(t, srv.Handler())
-	if rec := phoneSignIn(t, c, sender, "admin@example.com"); !strings.Contains(rec.Body.String(), "authenticator") {
-		t.Fatal("no TOTP step for the admin")
+	// Signing in asks for no authenticator code and offers no passkey: an
+	// administrator is offered one at the admin door, where the code makes it
+	// one that opens the admin pages.
+	if rec := phoneSignIn(t, c, sender, "admin@example.com"); rec.Code != http.StatusFound {
+		t.Fatalf("admin sign-in on a phone = %d, want 302 straight on", rec.Code)
+	}
+	door := c.get("/totp", phone).Body.String()
+	if strings.Contains(door, "Use your passkey") {
+		t.Fatal("the door offered a passkey to an administrator who has none")
 	}
 	code, _ := pqtotp.GenerateCode(secret, start)
-	offer := c.postWith("/totp", url.Values{"code": {code}}, phone)
-	if !strings.Contains(offer.Body.String(), "Sign in faster on this phone") {
-		t.Fatalf("no offer after the admin's second factor: %d", offer.Code)
+	offer := c.postWith("/totp", url.Values{"code": {code}, "csrf": {extractCSRF(t, door)}}, phone)
+	if !strings.Contains(offer.Body.String(), "Sign in faster on this phone") ||
+		!strings.Contains(offer.Body.String(), "Your code has been accepted, and the admin pages are open.") {
+		t.Fatalf("no admin offer after the code at the door: %d", offer.Code)
 	}
 	a := passkeytest.New()
 	if rec := register(t, c, a, offer.Body.String(), nil); rec.Code != http.StatusOK {
@@ -341,6 +349,16 @@ func TestAdminPasskeys(t *testing.T) {
 	}
 	if c2.get("/admin/", nil).Code != http.StatusOK {
 		t.Fatal("admin passkey session refused by the admin pages")
+	}
+	// With that passkey held, the door offers it first on a phone, and only
+	// the code on a computer.
+	e := newClient(t, srv.Handler())
+	loginAs(t, e, sender, "admin@example.com", nil)
+	if door := e.get("/totp", phone).Body.String(); !strings.Contains(door, "Use your passkey") || !strings.Contains(door, `action="/passkey/login"`) {
+		t.Fatalf("the door did not offer the admin passkey:\n%s", door)
+	}
+	if door := e.get("/totp", nil).Body.String(); strings.Contains(door, "Use your passkey") {
+		t.Fatal("the door offered a passkey on a computer")
 	}
 
 	// Later, the sign-in is no longer recent: the passkeys page sends the
@@ -387,9 +405,12 @@ func TestAdminPasskeys(t *testing.T) {
 	}
 }
 
-// A passkey added before its owner became an administrator does not satisfy
-// the second factor: its sign-in continues to the authenticator step.
-func TestPasskeyFromBeforePromotionStillNeedsTOTP(t *testing.T) {
+// A passkey added before its owner became an administrator does not stand in
+// for the second step: its sign-in gives an ordinary session, and the admin
+// door asks for the code. The code never upgrades that passkey in place (the
+// session's cookie could have been planted); instead the door offers a new
+// admin passkey, made on the phone in front of the person.
+func TestPasskeyFromBeforePromotionIsReplacedAtTheDoor(t *testing.T) {
 	srv, sender := pkServer(t, nil)
 	c := newClient(t, srv.Handler())
 	a := passkeytest.New()
@@ -397,10 +418,35 @@ func TestPasskeyFromBeforePromotionStillNeedsTOTP(t *testing.T) {
 	srv.cfg.TOTPEnabled = true
 	srv.cfg.AdminEmails = []string{"admin@example.com", "user@example.com"}
 	srv.policy = newPolicyFor(srv.cfg)
-	provisionTOTP(t, srv, "user@example.com")
-	rec := signInWith(t, newClient(t, srv.Handler()), a)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "authenticator") {
-		t.Fatalf("a pre-promotion passkey skipped the second factor: %d", rec.Code)
+	secret := provisionTOTP(t, srv, "user@example.com")
+
+	p := newClient(t, srv.Handler())
+	if rec := signInWith(t, p, a); rec.Code != http.StatusFound {
+		t.Fatalf("passkey sign-in = %d, want 302", rec.Code)
+	}
+	if rec := p.get("/admin/", nil); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
+		t.Fatalf("a pre-promotion passkey opened the admin pages: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	door := p.get("/totp", phone).Body.String()
+	if strings.Contains(door, "Use your passkey") {
+		t.Fatal("the door offered a passkey that cannot open the admin pages")
+	}
+	code, _ := pqtotp.GenerateCode(secret, time.Now())
+	offer := p.postWith("/totp", url.Values{"code": {code}, "csrf": {extractCSRF(t, door)}}, phone)
+	if !strings.Contains(offer.Body.String(), "Your code has been accepted, and the admin pages are open.") {
+		t.Fatalf("no admin passkey offer after the code: %d", offer.Code)
+	}
+	if list, _ := srv.store.ListPasskeys(context.Background(), "user@example.com"); list[0].AdminGrade {
+		t.Fatal("the code upgraded the session's passkey in place")
+	}
+	b := passkeytest.New()
+	if rec := register(t, p, b, offer.Body.String(), nil); rec.Code != http.StatusOK {
+		t.Fatalf("register the offered passkey: %d", rec.Code)
+	}
+	fresh := newClient(t, srv.Handler())
+	signInWith(t, fresh, b)
+	if rec := fresh.get("/admin/", nil); rec.Code != http.StatusOK {
+		t.Fatalf("new admin passkey: /admin/ = %d, want 200", rec.Code)
 	}
 }
 
@@ -592,6 +638,65 @@ func TestAddingAPasskeySendsANotice(t *testing.T) {
 	}
 }
 
+// Removing a passkey emails the account holder, in the approved wording,
+// laid out like the notice for an addition.
+func TestRemovingAPasskeySendsANotice(t *testing.T) {
+	srv, sender := pkServer(t, nil)
+	srv.loc = time.UTC
+	at := time.Date(2026, 11, 4, 11, 52, 0, 0, time.UTC)
+	srv.now = func() time.Time { return at }
+	c := newClient(t, srv.Handler())
+	if rec := register(t, c, passkeytest.New(), phoneSignIn(t, c, sender, "user@example.com").Body.String(), nil); rec.Code != http.StatusOK {
+		t.Fatalf("register: %d", rec.Code)
+	}
+	list, _ := srv.store.ListPasskeys(context.Background(), "user@example.com")
+	page := c.get("/passkeys", phone).Body.String()
+	csrf := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(page)
+	if csrf == nil {
+		t.Fatal("no CSRF token on the passkeys page")
+	}
+	if rec := c.postWith("/passkeys/"+strconv.FormatInt(list[0].ID, 10)+"/remove", url.Values{"csrf": {csrf[1]}}, phone); rec.Code != http.StatusFound {
+		t.Fatalf("remove: %d", rec.Code)
+	}
+	var notice *email.Message
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline) && notice == nil; time.Sleep(10 * time.Millisecond) {
+		sender.mu.Lock()
+		for _, n := range sender.notices {
+			if n.Subject == "A passkey has been removed from your account" {
+				n := n
+				notice = &n
+			}
+		}
+		sender.mu.Unlock()
+	}
+	if notice == nil {
+		t.Fatal("no notice sent when a passkey was removed")
+	}
+	if notice.To != "user@example.com" {
+		t.Fatalf("notice to %q", notice.To)
+	}
+	for _, want := range []string{
+		"A passkey was removed from your account at auth.example.com on 4 November 2026 at 11:52 am, on an iPhone.",
+		"If you removed this passkey, there is nothing more to do.",
+		"If you did not remove it, sign in, check Your passkeys, then contact an administrator for assistance.",
+		"https://auth.example.com/passkeys",
+	} {
+		if !strings.Contains(notice.Text, want) {
+			t.Errorf("notice text lacks %q:\n%s", want, notice.Text)
+		}
+	}
+	for _, want := range []string{
+		"<title>A passkey has been removed from your account</title>",
+		">A passkey has been removed from your account</h1>",
+		"on 4 November 2026 at 11:52 am, on an iPhone.",
+		">Your passkeys</a>",
+	} {
+		if !strings.Contains(notice.HTML, want) {
+			t.Errorf("notice HTML lacks %q", want)
+		}
+	}
+}
+
 // The notice's HTML template does not escape, so the gateway must: a brand
 // name with markup in it is shown as text.
 func TestPasskeyNoticeEscapesTheBrandName(t *testing.T) {
@@ -600,5 +705,20 @@ func TestPasskeyNoticeEscapesTheBrandName(t *testing.T) {
 	msg := srv.passkeyAddedEmail("user@example.com", "an iPhone", time.Unix(1_700_000_000, 0))
 	if strings.Contains(msg.HTML, "<b>RCH</b>") || !strings.Contains(msg.HTML, "&lt;b&gt;RCH&lt;/b&gt; &amp; co") {
 		t.Fatalf("brand name not escaped in the notice:\n%s", msg.HTML)
+	}
+}
+
+// An administrator who has signed in with an emailed code but not taken the
+// second step cannot add a passkey straight away: the passkeys page asks for
+// the authenticator code first, so that every administrator's passkey is one
+// added under the second factor.
+func TestAdminWithoutSecondStepCannotAddPasskeyDirectly(t *testing.T) {
+	srv, sender := pkServer(t, func(c *config.Config) { c.TOTPEnabled = true })
+	provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+	phoneSignIn(t, c, sender, "admin@example.com")
+	page := c.get("/passkeys", phone).Body.String()
+	if strings.Contains(page, "data-challenge") || !strings.Contains(page, `href="/passkeys/confirm"`) {
+		t.Fatalf("an administrator without the second step was offered a passkey ceremony:\n%s", page)
 	}
 }
