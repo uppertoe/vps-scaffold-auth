@@ -365,11 +365,13 @@ page. Passkeys are bound to the auth host (the relying-party ID is the host of
 attestation, and need no new dependency: the verifier is `internal/passkey`.
 
 - Adding a passkey needs an emailed-code sign-in within the last 15 minutes
-  (a passkey sign-in never counts); an administrator also needs the second
-  factor, from that sign-in or from an authenticator code entered first.
-- An administrator's passkey, added that way with `TOTP_ENABLED=true`,
-  satisfies the admin second factor at sign-in. One added before its owner
-  became an administrator, or while TOTP was off, does not.
+  (a passkey sign-in never counts); an administrator also needs a recent
+  second step, or an authenticator code entered first. The admin door offers
+  a passkey on a phone straight after the code.
+- An administrator's passkey, added that way with `TOTP_ENABLED=true`, is the
+  second step at sign-in and at the admin door. One added before its owner
+  became an administrator, or while TOTP was off, is not, until its holder
+  enters the code at the admin door in a session it started.
 - A session started with a passkey loses the admin pages and `/passkeys` at
   once when the passkey is removed, and the apps at its next renewal.
 - The account holder is emailed whenever a passkey is added.
@@ -380,15 +382,20 @@ attestation, and need no new dependency: the verifier is `internal/passkey`.
 ### Admin two-factor (optional)
 
 Magic codes inherit the security of the user's inbox. For the higher-trust
-admin tier you can require TOTP: set `TOTP_ENABLED=true`. Once enabled, an admin
-must enter a 6-digit authenticator code after the email step; regular users stay
-code-only.
+admin tier you can require TOTP: set `TOTP_ENABLED=true`. Signing in never asks
+for it: an admin signs in like anyone else and holds ordinary `user` groups. The
+admin door (`/totp`) asks for a 6-digit authenticator code, or an admin passkey,
+when an admin opens `/admin` or a route whose `groups=` names `admin`; only then
+does the session carry the `admin` group. The second step lasts 12 hours
+(`adminStepMaxAge`), after which `admin` leaves the apps' headers at the next
+request and the door asks again. Removing an address from `ADMIN_EMAILS` also
+drops `admin` at the next request.
 
 **Enabling TOTP re-challenges existing admin sessions.** Admin sessions minted
-before TOTP was turned on carry no second-factor assurance, so the gateway stops
-honouring them for admin access (at `/verify` and the `/admin` UI) and bounces
-them to a fresh login that runs the TOTP step — the switch can't be bypassed by
-riding a pre-existing cookie. **Provision admins' secrets before you flip
+before TOTP was turned on carry no second step, so at their next request they
+lose the `admin` group (at `/verify` and the `/admin` UI) and keep their `user`
+access; the admin door restores it. The switch can't be bypassed by riding a
+pre-existing cookie. **Provision admins' secrets before you flip
 `TOTP_ENABLED`** (bootstrap the first one with the `-totp-enroll` CLI below):
 once it's on, an admin with no secret is locked out until one is issued.
 

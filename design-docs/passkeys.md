@@ -45,19 +45,25 @@ permits cannot add a passkey.
 ## Administrators
 
 A passkey counts as two factors on its own: the phone, and the face,
-fingerprint or PIN check that unlocks it. An administrator who signs in with a
-passkey therefore needs neither an emailed code nor an authenticator code.
+fingerprint or PIN check that unlocks it. An administrator who signs in with
+an admin passkey therefore has the second step already, and the admin door
+offers that passkey first on a phone.
 
-An administrator can add a passkey only after passing the second factor. The
-offer that follows an administrator's sign-in comes after the authenticator
-step. An administrator whose sign-in is no longer recent enters an
-authenticator code first, and the phone makes the passkey only once the code
-has been accepted. A passkey added before its owner became an administrator,
-or while the second factor was switched off, does not count as the second
-factor, and a sign-in with it continues to the authenticator step.
+An administrator can add an admin passkey only after an authenticator code.
+The offer comes at the admin door, straight after the code, rather than after
+signing in. An administrator whose second step is not recent enters an
+authenticator code on the passkeys page first, and the phone makes the
+passkey only once the code has been accepted.
+
+A passkey added before its owner became an administrator, or while the second
+factor was switched off, gives an ordinary session, and the admin door asks
+for the code. Once the code is entered in a session that the passkey started,
+the passkey becomes an admin passkey, because its holder has just proved the
+second factor with it. A code entered in a session started by email upgrades
+no passkey.
 
 An administrator who loses every passkey still signs in with an emailed code
-and an authenticator code, as before.
+and takes the second step with an authenticator code.
 
 ## Ending access
 

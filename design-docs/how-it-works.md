@@ -2,7 +2,7 @@
 title: How it works
 summary: The path of a request through the reverse proxy and the gateway, what the session cookie carries, and what a tool is told about the person.
 weight: 1
-lastmod: 2026-10-31
+lastmod: 2026-11-04
 ---
 
 ## The path of a request
@@ -43,9 +43,8 @@ person's session cannot be ended on its own. The
 [front page](_index.md) lists this among the open decisions.
 
 The gateway issues four other short-lived cookies, each limited to the
-gateway's own host: one carries a sign-in in progress, one marks an
-administrator who still owes a second factor, one holds a break-glass offer,
-and one protects the admin forms. Each cookie records the purpose it was made
+gateway's own host: one carries a sign-in in progress, one carries
+a passkey ceremony, one holds a break-glass offer, and one protects the forms. Each cookie records the purpose it was made
 for, and the gateway refuses a cookie presented for any other purpose.
 
 ## What a tool is told
