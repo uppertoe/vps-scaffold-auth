@@ -21,7 +21,7 @@
 <p class="sub">If you have an approved email address, sign out, then sign in again with it.</p>
 {{else if .Identity}}
 <p class="sub">You're signed in as <strong>{{.Identity}}</strong>, but this account isn't allowed to open this page.</p>
-<p class="sub">If you have another account that should have access, sign in with it below.</p>
+{{if .NameAddressExample}}<p class="sub">This app needs your email address in the form firstname.lastname, such as {{.NameAddressExample}}. If you have an address in that form, sign in again with that address.</p>{{else}}<p class="sub">If you have another account that should have access, sign in with it below.</p>{{end}}
 {{else}}
 <p class="sub">This account isn't allowed to open this page. You can sign in with a different account below.</p>
 {{end}}
