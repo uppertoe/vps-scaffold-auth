@@ -153,6 +153,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /login", s.handleLogin)
 	mux.HandleFunc("POST /request", s.handleRequest)
 	mux.HandleFunc("POST /verify-code", s.handleVerifyCode)
+	mux.HandleFunc("GET /totp", s.handleStepUp)
 	mux.HandleFunc("POST /totp", s.handleTOTP)
 	mux.HandleFunc("GET /logout", s.handleLogoutConfirm)
 	mux.HandleFunc("POST /logout", s.handleLogout)

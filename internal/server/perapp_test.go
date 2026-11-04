@@ -238,7 +238,10 @@ func TestGroupRecheckClearsRevokedPrincipal(t *testing.T) {
 	}
 }
 
-func TestGroupRecheckRequiresTOTPForNewAdmin(t *testing.T) {
+// Someone promoted to administrator since signing in keeps their session and
+// reaches a group just given to them, but without the admin tier: that needs
+// the second step at the admin door.
+func TestGroupRecheckGivesNewAdminNoAdminTier(t *testing.T) {
 	srv, sender := testServerWith(t, func(c *config.Config) { c.TOTPEnabled = true })
 	ctx := context.Background()
 	if err := srv.store.CreateGroup(ctx, "team", ""); err != nil {
@@ -246,17 +249,16 @@ func TestGroupRecheckRequiresTOTPForNewAdmin(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
-	// Promoted to admin since signing in, without a second factor.
 	srv.policy = authz.NewPolicy([]string{"example.com"}, []string{"admin@example.com", "user@example.com"})
 	if err := srv.store.AddGroupMember(ctx, "team", "user@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	rec := c.get("/verify", requireGroups("team"))
-	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
-		t.Fatalf("new admin without TOTP = %d %q, want a redirect to sign in", rec.Code, rec.Header().Get("Location"))
+	if rec.Code != http.StatusOK || authz.HasGroup(rec.Header().Get("Remote-Groups"), "admin") {
+		t.Fatalf("new admin on a group route = %d groups=%q, want 200 without admin", rec.Code, rec.Header().Get("Remote-Groups"))
 	}
-	if !strings.Contains(rec.Header().Get("Set-Cookie"), "Max-Age=0") {
-		t.Error("new admin's first-factor session not cleared")
+	if rec := c.get("/verify", requireGroups("admin")); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
+		t.Fatalf("new admin on an admin route: loc=%q, want the admin door", rec.Header().Get("Location"))
 	}
 }
 

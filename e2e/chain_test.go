@@ -505,7 +505,7 @@ func TestChain(t *testing.T) {
 
 	boss := newBrowser(t) // an administrator at a domain no rule names
 
-	t.Run("an administrator must pass the second factor", func(t *testing.T) {
+	t.Run("an administrator signs in like staff and takes the second step at the admin door", func(t *testing.T) {
 		out := compose(t, "exec", "-T", "auth", "/app", "-totp-enroll", "boss@admins.example")
 		m := regexp.MustCompile(`Setup key:\s+([A-Z2-7]+)`).FindStringSubmatch(out)
 		if m == nil {
@@ -518,12 +518,17 @@ func TestChain(t *testing.T) {
 		code, _ := codeFor(t, "boss@admins.example", before)
 		form := hidden(codePage.body)
 		form.Set("code", code)
-		step := boss.submit("/verify-code", form)
-		if step.status != http.StatusOK || !strings.Contains(step.body, `action="/totp"`) {
-			t.Fatalf("after the email code an admin got %d, want the authenticator step", step.status)
+		if r := boss.submit("/verify-code", form); r.status != http.StatusFound {
+			t.Fatalf("after the email code an admin got %d, want 302 straight on", r.status)
 		}
-		if boss.cookie("admin."+domain, cookieKey) != "" {
-			t.Fatal("a session was issued before the second factor")
+		// The admin-only site sends the administrator to the admin door.
+		r := boss.get("https://admin."+domain+"/", nil)
+		if !strings.HasPrefix(r.location(), authHost+"/totp?rd=") {
+			t.Fatalf("admin site before the second step: %d to %q, want the admin door", r.status, r.location())
+		}
+		step := boss.get(r.location(), nil)
+		if step.status != http.StatusOK || !strings.Contains(step.body, `action="/totp"`) {
+			t.Fatalf("the admin door: %d", step.status)
 		}
 		wrong := hidden(step.body)
 		wrong.Set("code", "000000")
@@ -536,8 +541,8 @@ func TestChain(t *testing.T) {
 		}
 		right := hidden(step.body)
 		right.Set("code", otpCode)
-		if r := boss.submit("/totp", right); r.status != http.StatusFound {
-			t.Fatalf("the right authenticator code: %d: %.200s", r.status, r.body)
+		if r := boss.submit("/totp", right); r.status != http.StatusFound || r.location() != "https://admin."+domain+"/" {
+			t.Fatalf("the right authenticator code: %d to %q: %.200s", r.status, r.location(), r.body)
 		}
 		h := appSees(t, boss.get("https://admin."+domain+"/", nil))
 		if h.Get("Remote-Groups") != "admin" {

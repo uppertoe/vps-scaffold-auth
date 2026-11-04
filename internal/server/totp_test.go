@@ -13,9 +13,6 @@ import (
 	"testing"
 	"time"
 
-	pqtotp "github.com/pquerna/otp/totp"
-
-	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/totp"
 )
 
@@ -37,250 +34,240 @@ func provisionTOTP(t *testing.T, srv *Server, email string) string {
 	return en.Secret
 }
 
-// An admin with no provisioned secret must be DENIED at login, not self-enrolled.
-// This is the core of the admin-provisioned model: a login (which only proves
-// inbox control) must not be able to bootstrap the second factor.
+// stepUp takes an administrator through the admin door with the given TOTP
+// code, returning the POST's response.
+func stepUp(t *testing.T, c *client, code, rd string) *httptest.ResponseRecorder {
+	t.Helper()
+	page := c.get("/totp?rd="+url.QueryEscape(rd), nil)
+	if page.Code != http.StatusOK {
+		t.Fatalf("GET /totp = %d, want 200 (the admin door); loc=%q", page.Code, page.Header().Get("Location"))
+	}
+	return c.postForm("/totp", url.Values{"code": {code}, "rd": {rd}, "csrf": {extractCSRF(t, page.Body.String())}})
+}
+
+// Signing in never asks an administrator for the authenticator code: the
+// email code alone opens every site that admits staff, and the session is an
+// ordinary user's until the admin door. Admin-only routes and the admin pages
+// send the administrator to the door, which returns them where they were.
+func TestAdminSignsInWithoutTOTP(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", url.Values{"rd": {"https://app.example.com/ward"}})
+
+	rec := c.get("/verify", protectedAny())
+	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
+		t.Fatalf("staff route = %d groups=%q, want 200 user", rec.Code, rec.Header().Get("Remote-Groups"))
+	}
+	rec = c.get("/verify", requireGroups("admin"))
+	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "https://auth.example.com/totp?rd=") {
+		t.Fatalf("admin-only route = %d loc=%q, want the admin door", rec.Code, rec.Header().Get("Location"))
+	}
+	rec = c.get("/admin/break", nil)
+	want := "https://auth.example.com/totp?rd=" + url.QueryEscape("https://auth.example.com/admin/break")
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != want {
+		t.Fatalf("/admin = %d loc=%q, want %q", rec.Code, rec.Header().Get("Location"), want)
+	}
+	// A route that admits staff by domain is not the admin door's business.
+	if rec := c.get("/verify", requireDomains("example.com")); rec.Code != http.StatusOK {
+		t.Fatalf("domain route = %d, want 200", rec.Code)
+	}
+	// Someone who is not an administrator is denied an admin-only route, not
+	// sent to the door.
+	u := newClient(t, srv.Handler())
+	loginAs(t, u, sender, "user@example.com", nil)
+	if rec := u.get("/verify", requireGroups("admin")); !strings.Contains(rec.Header().Get("Location"), "/denied") {
+		t.Fatalf("staff on admin route: loc=%q, want /denied", rec.Header().Get("Location"))
+	}
+	if rec := u.get("/totp", nil); !strings.Contains(rec.Header().Get("Location"), "/denied") {
+		t.Fatalf("staff at the admin door: %d loc=%q, want /denied", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// The admin door with a provisioned secret: a valid code gives the session the
+// admin tier and returns to the page asked for.
+func TestAdminDoorGivesAdminTier(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+
+	page := c.get("/totp?rd="+url.QueryEscape("https://db.example.com/x"), nil)
+	if !strings.Contains(page.Body.String(), "Open the admin pages") ||
+		!strings.Contains(page.Body.String(), `name="rd" value="https://db.example.com/x"`) {
+		t.Fatalf("admin door page:\n%s", page.Body.String())
+	}
+	rec := stepUp(t, c, totpNow(t, secret, time.Now()), "https://db.example.com/x")
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://db.example.com/x" {
+		t.Fatalf("/totp = %d loc=%q, want 302 to the page asked for", rec.Code, rec.Header().Get("Location"))
+	}
+	rec = c.get("/verify", requireGroups("admin"))
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Remote-Groups"), "admin") {
+		t.Fatalf("admin route after the door = %d groups=%q", rec.Code, rec.Header().Get("Remote-Groups"))
+	}
+	if rec := c.get("/admin/break", nil); rec.Code != http.StatusOK {
+		t.Fatalf("/admin after the door = %d, want 200", rec.Code)
+	}
+	// The door, visited again, goes straight on.
+	if rec := c.get("/totp", nil); rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://auth.example.com/admin/" {
+		t.Fatalf("door with the tier held = %d loc=%q", rec.Code, rec.Header().Get("Location"))
+	}
+	// A second tap of the same submission goes on too, although the code is spent.
+	rec = c.postForm("/totp", url.Values{"code": {totpNow(t, secret, time.Now())}, "rd": {"https://db.example.com/x"}})
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://db.example.com/x" {
+		t.Fatalf("second tap = %d loc=%q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// The admin tier lasts adminStepMaxAge from the second step, however long the
+// session lasts; then the admin group leaves the apps' headers at once and
+// the admin pages ask again. The session itself carries on.
+func TestAdminTierLapsesAfterTwelveHours(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	srv.cfg.SessionRememberTTL = 30 * 24 * time.Hour
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", url.Values{"remember": {"1"}})
+	if rec := stepUp(t, c, totpNow(t, secret, time.Now()), ""); rec.Code != http.StatusFound {
+		t.Fatalf("/totp = %d", rec.Code)
+	}
+	srv.now = func() time.Time { return time.Now().Add(adminStepMaxAge - time.Minute) }
+	if rec := c.get("/admin/break", nil); rec.Code != http.StatusOK {
+		t.Fatalf("/admin just inside the limit = %d, want 200", rec.Code)
+	}
+	srv.now = func() time.Time { return time.Now().Add(adminStepMaxAge + time.Minute) }
+	rec := c.get("/verify", protectedAny())
+	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
+		t.Fatalf("staff route after the limit = %d groups=%q, want 200 user", rec.Code, rec.Header().Get("Remote-Groups"))
+	}
+	if rec := c.get("/verify", requireGroups("admin")); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
+		t.Fatalf("admin route after the limit: loc=%q, want the admin door", rec.Header().Get("Location"))
+	}
+	if rec := c.get("/admin/break", nil); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
+		t.Fatalf("/admin after the limit: %d loc=%q, want the admin door", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// Removing an address from ADMIN_EMAILS takes the admin group out of the apps'
+// headers at the next request, not at the next scheduled renewal.
+func TestDemotedAdminLosesAdminGroupAtNextRequest(t *testing.T) {
+	srv, sender := testServer(t)
+	srv.cfg.TOTPEnabled = true
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	stepUp(t, c, totpNow(t, secret, time.Now()), "")
+	if rec := c.get("/verify", requireGroups("admin")); rec.Code != http.StatusOK {
+		t.Fatalf("admin route = %d", rec.Code)
+	}
+	srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
+	rec := c.get("/verify", protectedAny())
+	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
+		t.Fatalf("after demotion = %d groups=%q, want 200 user", rec.Code, rec.Header().Get("Remote-Groups"))
+	}
+	if rec := c.get("/verify", requireGroups("admin")); !strings.Contains(rec.Header().Get("Location"), "/denied") {
+		t.Fatalf("admin route after demotion: loc=%q, want /denied", rec.Header().Get("Location"))
+	}
+}
+
+// An administrator with no provisioned secret signs in as staff, and the admin
+// door refuses them with the setup message: nothing is self-enrolled.
 func TestTOTPNoSelfEnrolment(t *testing.T) {
 	srv, sender := testServer(t)
 	srv.cfg.TOTPEnabled = true
 	c := newClient(t, srv.Handler())
-
-	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
-	code := sender.code()
-	if code == "" {
-		t.Fatal("no OTP code captured")
-	}
-	rec := c.postForm("/verify-code", url.Values{"code": {code}})
-
-	// Denied with a setup-required page, NOT a redirect (login is incomplete).
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("/verify-code = %d, want 403 (setup required)", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "Two-factor setup required") {
-		t.Errorf("missing setup-required message; body=%q", rec.Body.String())
-	}
-	// No session was issued, and no secret was silently created.
-	if ck := c.cookies[session.SessionCookie]; ck != nil {
-		t.Error("a session cookie was issued without TOTP")
+	loginAs(t, c, sender, "admin@example.com", nil)
+	rec := c.get("/totp", nil)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "Two-factor setup required") {
+		t.Fatalf("door without a secret = %d:\n%s", rec.Code, rec.Body.String())
 	}
 	if _, ok, _ := srv.store.GetTOTPSecret(context.Background(), "admin@example.com"); ok {
-		t.Error("a TOTP secret was self-enrolled at login (must be admin-provisioned)")
+		t.Error("a TOTP secret was self-enrolled")
 	}
-	if rec := c.get("/verify", nil); rec.Code != http.StatusFound {
-		t.Errorf("/verify after failed login = %d, want 302 to login", rec.Code)
-	}
-}
-
-// With a provisioned secret, an admin is challenged and a valid code logs them in.
-func TestTOTPLoginWithProvisionedSecret(t *testing.T) {
-	srv, sender := testServer(t)
-	srv.cfg.TOTPEnabled = true
-	secret := provisionTOTP(t, srv, "admin@example.com")
-	c := newClient(t, srv.Handler())
-
-	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
-	code := sender.code()
-	rec := c.postForm("/verify-code", url.Values{"code": {code}})
-
-	// The email step yields the TOTP challenge, not a session.
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/verify-code = %d, want 200 (TOTP challenge)", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "authenticator") {
-		t.Errorf("expected TOTP challenge page; body=%q", rec.Body.String())
-	}
-	if ck := c.cookies[session.SessionCookie]; ck != nil {
-		t.Fatal("session issued before TOTP was satisfied")
-	}
-
-	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec = c.postForm("/totp", url.Values{"code": {totpCode}})
-	if rec.Code != http.StatusFound {
-		t.Fatalf("/totp = %d, want 302 after valid code", rec.Code)
-	}
-
-	rec = c.get("/verify", protectedAny())
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/verify after TOTP = %d, want 200", rec.Code)
-	}
-	if g := rec.Header().Get("Remote-Groups"); g != "admin" {
-		t.Errorf("groups = %q, want admin", g)
+	if rec := c.get("/admin/break", nil); rec.Code == http.StatusOK {
+		t.Error("the admin pages opened without a second factor")
 	}
 }
 
-// A TOTP code stays valid for its whole ~30s step. A second use of the SAME code
-// (e.g. replayed by an attacker who sniffed it) must be rejected, even though the
-// raw code still validates against the secret. The clock is pinned so both login
-// attempts generate the identical code, making the second a genuine replay.
+// A TOTP code stays valid for its whole step; a second use of the same code is
+// refused, even in another session.
 func TestTOTPCodeCannotBeReplayed(t *testing.T) {
 	srv, sender := testServer(t)
 	srv.cfg.TOTPEnabled = true
 	secret := provisionTOTP(t, srv, "admin@example.com")
-
-	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Submit the SAME code through two independent login flows.
-	login := func() int {
-		// Sends are async (detached goroutine in sendCode): without a reset,
-		// sender.code() can return the PREVIOUS login's cached email, whose OTP
-		// was overwritten by this login's /request — a stale code that derails
-		// the flow before the replay check this test is about.
-		sender.reset()
+	code := totpNow(t, secret, time.Now())
+	try := func() int {
 		c := newClient(t, srv.Handler())
-		c.postForm("/request", url.Values{"email": {"admin@example.com"}})
-		c.postForm("/verify-code", url.Values{"code": {sender.code()}})
-		return c.postForm("/totp", url.Values{"code": {totpCode}}).Code
+		loginAs(t, c, sender, "admin@example.com", nil)
+		return stepUp(t, c, code, "").Code
 	}
-
-	if got := login(); got != http.StatusFound {
-		t.Fatalf("first TOTP use = %d, want 302", got)
+	if got := try(); got != http.StatusFound {
+		t.Fatalf("first use = %d, want 302", got)
 	}
-	if got := login(); got != http.StatusUnauthorized {
-		t.Fatalf("replayed TOTP code = %d, want 401 (rejected)", got)
+	if got := try(); got != http.StatusUnauthorized {
+		t.Fatalf("replayed code = %d, want 401", got)
 	}
 }
 
-// The TOTP flow has the same dual-carrier redirect scheme as the code flow:
-// the challenge form re-carries rd as a hidden field, and a missing/expired
-// pending cookie bounces to /login with the posted rd preserved.
-func TestTOTPRedirectSurvivesLostPending(t *testing.T) {
+// The door's form needs its CSRF token and the same-origin check, and a POST
+// with no session goes to sign in with the door as the destination.
+func TestAdminDoorNeedsTokenAndSession(t *testing.T) {
 	srv, sender := testServer(t)
 	srv.cfg.TOTPEnabled = true
 	secret := provisionTOTP(t, srv, "admin@example.com")
-	c := newClient(t, srv.Handler())
-
-	c.postForm("/request", url.Values{
-		"email": {"admin@example.com"},
-		"rd":    {"https://app.example.com/secret"},
-	})
-	rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}})
-	if !strings.Contains(rec.Body.String(), `name="rd" value="https://app.example.com/secret"`) {
-		t.Errorf("TOTP form missing hidden rd field; body:\n%s", rec.Body.String())
-	}
-
-	// Pending cookie gone (expired / other browser context): the bounce must
-	// keep the destination.
-	delete(c.cookies, session.PendingCookie)
-	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec = c.postForm("/totp", url.Values{
-		"code": {totpCode},
-		"rd":   {"https://app.example.com/secret"},
-	})
-	if rec.Code != http.StatusFound {
-		t.Fatalf("/totp without pending = %d, want 302", rec.Code)
-	}
-	want := "/login?rd=" + url.QueryEscape("https://app.example.com/secret")
-	if loc := rec.Header().Get("Location"); loc != want {
-		t.Fatalf("lost-pending bounce = %q, want %q (rd dropped)", loc, want)
-	}
-}
-
-// The TOTP step has the same double-submit hazard as the code step: the first
-// /totp consumes the pending state and issues the session, so a re-tap finds no
-// pending but a valid session. It must forward to the app, not bounce to /login.
-// The TOTP code itself is single-use (replay guard), so the second submit can't
-// re-validate — making the session-forward path the only way the re-tap lands
-// safely rather than stranding an already-signed-in admin.
-func TestTOTPDoubleSubmitForwardsToApp(t *testing.T) {
-	srv, sender := testServer(t)
-	srv.cfg.TOTPEnabled = true
-	secret := provisionTOTP(t, srv, "admin@example.com")
-	c := newClient(t, srv.Handler())
-
-	c.postForm("/request", url.Values{
-		"email": {"admin@example.com"},
-		"rd":    {"https://app.example.com/secret"},
-	})
-	c.postForm("/verify-code", url.Values{
-		"code": {sender.code()},
-		"rd":   {"https://app.example.com/secret"},
-	})
-
-	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := c.postForm("/totp", url.Values{
-		"code": {totpCode},
-		"rd":   {"https://app.example.com/secret"},
-	})
-	if rec.Code != http.StatusFound {
-		t.Fatalf("first /totp = %d, want 302", rec.Code)
-	}
-	if c.cookies[session.SessionCookie] == nil {
-		t.Fatal("first /totp issued no session cookie")
-	}
-
-	// Re-tap: pending gone, session present. Must land on the app.
-	rec = c.postForm("/totp", url.Values{
-		"code": {totpCode},
-		"rd":   {"https://app.example.com/secret"},
-	})
-	if rec.Code != http.StatusFound {
-		t.Fatalf("double-submit /totp = %d, want 302", rec.Code)
-	}
-	if loc := rec.Header().Get("Location"); loc != "https://app.example.com/secret" {
-		t.Fatalf("double-submit redirect = %q, want the app (not a /login bounce)", loc)
-	}
-}
-
-// Enabling TOTP after an admin already holds a first-factor-only session must
-// force that session to re-authenticate through the TOTP step, rather than
-// letting a pre-TOTP cookie keep admin access until it expires. Covers both the
-// /verify path (downstream group=admin apps) and the auth-host /admin UI.
-func TestEnablingTOTPReChallengesExistingAdminSession(t *testing.T) {
-	srv, sender := testServer(t) // TOTP disabled: admin logs in with the email code only
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
+	c.get("/totp", nil) // sets the CSRF cookie
+	rec := c.postForm("/totp", url.Values{"code": {totpNow(t, secret, time.Now())}, "csrf": {"forged"}})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("forged token = %d, want 403", rec.Code)
+	}
+	if rec := c.get("/admin/break", nil); rec.Code == http.StatusOK {
+		t.Fatal("a forged token gave the admin tier")
+	}
+	rec = c.postWith("/totp", url.Values{"code": {totpNow(t, secret, time.Now())}}, map[string]string{"Origin": "https://evil.example.org"})
+	if rec.Code == http.StatusFound {
+		t.Fatalf("cross-origin POST = %d, want refused", rec.Code)
+	}
+	anon := newClient(t, srv.Handler())
+	rec = anon.postForm("/totp", url.Values{"code": {"123456"}, "rd": {"https://db.example.com/"}})
+	want := "https://auth.example.com/login?rd=" + url.QueryEscape("https://auth.example.com/totp?rd="+url.QueryEscape("https://db.example.com/"))
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != want {
+		t.Fatalf("no session = %d loc=%q, want %q", rec.Code, rec.Header().Get("Location"), want)
+	}
+}
 
-	// Baseline: the first-factor-only admin session is honoured while TOTP is off.
+// Turning TOTP on takes the admin tier from every session that lacks the
+// second step, at its next request, and the admin door restores it.
+func TestEnablingTOTPReChallengesExistingAdminSession(t *testing.T) {
+	srv, sender := testServer(t) // TOTP off: the email code alone gives the admin tier
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
 	if rec := c.get("/verify", requireGroups("admin")); rec.Code != http.StatusOK {
 		t.Fatalf("/verify before enabling TOTP = %d, want 200", rec.Code)
 	}
 	if rec := c.get("/admin/break", nil); rec.Code != http.StatusOK {
 		t.Fatalf("/admin before enabling TOTP = %d, want 200", rec.Code)
 	}
-
-	// Operator turns TOTP on. The already-issued cookie carries totp=false.
 	srv.cfg.TOTPEnabled = true
-
-	// /verify for an admin-gated app now clears the session and bounces to login.
-	if rec := c.get("/verify", requireGroups("admin")); rec.Code != http.StatusFound {
-		t.Fatalf("/verify after enabling TOTP = %d, want 302 (re-challenge)", rec.Code)
-	}
-	// The auth-host admin UI likewise refuses the stale first-factor session.
-	rec := c.get("/admin/break", nil)
-	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
-		t.Fatalf("/admin after enabling TOTP = %d loc=%q, want 302 to /login",
-			rec.Code, rec.Header().Get("Location"))
-	}
-
-	// Re-authenticating with the second factor restores admin access. Drop the
-	// first login's captured message first, so code() waits for this login's
-	// mail rather than reusing the earlier (already consumed) code.
 	secret := provisionTOTP(t, srv, "admin@example.com")
-	sender.reset()
-	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
-	if rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}}); rec.Code != http.StatusOK {
-		t.Fatalf("/verify-code on re-auth = %d, want 200 (TOTP challenge)", rec.Code)
+	if rec := c.get("/verify", protectedAny()); rec.Header().Get("Remote-Groups") != "user" {
+		t.Fatalf("staff route after enabling TOTP: groups=%q, want user", rec.Header().Get("Remote-Groups"))
 	}
-	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
-	if err != nil {
-		t.Fatal(err)
+	if rec := c.get("/verify", requireGroups("admin")); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
+		t.Fatalf("admin route after enabling TOTP: loc=%q, want the admin door", rec.Header().Get("Location"))
 	}
-	if rec := c.postForm("/totp", url.Values{"code": {totpCode}}); rec.Code != http.StatusFound {
-		t.Fatalf("/totp re-auth = %d, want 302", rec.Code)
+	if rec := c.get("/admin/break", nil); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
+		t.Fatalf("/admin after enabling TOTP: loc=%q, want the admin door", rec.Header().Get("Location"))
+	}
+	if rec := stepUp(t, c, totpNow(t, secret, time.Now()), ""); rec.Code != http.StatusFound {
+		t.Fatalf("/totp = %d", rec.Code)
 	}
 	if rec := c.get("/verify", requireGroups("admin")); rec.Code != http.StatusOK {
-		t.Fatalf("/verify after TOTP re-auth = %d, want 200", rec.Code)
+		t.Fatalf("/verify after the door = %d, want 200", rec.Code)
 	}
 }
 
@@ -356,12 +343,9 @@ func TestTOTPAttemptCapHoldsUnderConcurrency(t *testing.T) {
 	srv.cfg.TOTPEnabled = true
 	provisionTOTP(t, srv, "admin@example.com")
 	c := newClient(t, srv.Handler())
-	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
-	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
-	pending := c.cookies[session.PendingCookie]
-	if pending == nil {
-		t.Fatal("no pending cookie after the email step")
-	}
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/totp", nil).Body.String())
+	form := url.Values{"code": {"000000"}, "csrf": {tok}}.Encode()
 
 	const n = 60
 	start := make(chan struct{})
@@ -372,10 +356,12 @@ func TestTOTPAttemptCapHoldsUnderConcurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			req := httptest.NewRequest(http.MethodPost, "/totp", strings.NewReader("code=000000"))
+			req := httptest.NewRequest(http.MethodPost, "/totp", strings.NewReader(form))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			req.RemoteAddr = "192.0.2.1:1234"
-			req.AddCookie(pending)
+			for _, ck := range c.cookies {
+				req.AddCookie(ck)
+			}
 			rr := httptest.NewRecorder()
 			srv.Handler().ServeHTTP(rr, req)
 			codes <- rr.Code
@@ -411,79 +397,24 @@ func (reserveFails) ReserveTOTPAttempt(context.Context, string, time.Duration, t
 
 // When an attempt cannot be recorded the code is not checked at all: the cap
 // must not switch off during a store outage. The admin gets a temporary
-// refusal and no session, even with the correct code.
+// refusal and no admin tier, even with the correct code.
 func TestTOTPRefusesWhenAttemptCannotBeRecorded(t *testing.T) {
 	srv, sender := testServer(t)
 	srv.cfg.TOTPEnabled = true
 	secret := provisionTOTP(t, srv, "admin@example.com")
 	c := newClient(t, srv.Handler())
-	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
-	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/totp", nil).Body.String())
 
 	srv.store = reserveFails{srv.store}
-	totpCode, err := pqtotp.GenerateCode(secret, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := c.postForm("/totp", url.Values{"code": {totpCode}})
+	rec := c.postForm("/totp", url.Values{"code": {totpNow(t, secret, time.Now())}, "csrf": {tok}})
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/totp with a failing store = %d, want 503", rec.Code)
 	}
-	if c.cookies[session.SessionCookie] != nil {
-		t.Fatal("a session was issued although the attempt could not be recorded")
+	if got := c.get("/verify", protectedAny()).Header().Get("Remote-Groups"); got != "user" {
+		t.Fatalf("groups = %q: the admin tier was given although the attempt could not be recorded", got)
 	}
 	if !strings.Contains(rec.Body.String(), "try again in a moment") {
 		t.Errorf("refusal page lacks the retry message:\n%s", rec.Body.String())
 	}
-}
-
-// An admin demoted or removed between the email step and the second factor
-// does not come out of the TOTP step with the permissions saved at the first
-// step: the role is recomputed from the current policy when the session is
-// issued.
-func TestTOTPCompletionUsesCurrentPolicy(t *testing.T) {
-	t.Run("demoted to user", func(t *testing.T) {
-		srv, sender := testServer(t)
-		srv.cfg.TOTPEnabled = true
-		secret := provisionTOTP(t, srv, "admin@example.com")
-		c := newClient(t, srv.Handler())
-		c.postForm("/request", url.Values{"email": {"admin@example.com"}})
-		if rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}}); rec.Code != http.StatusOK {
-			t.Fatalf("/verify-code = %d, want 200 (TOTP challenge)", rec.Code)
-		}
-		srv.policy = authz.NewPolicy([]string{"example.com"}, nil) // no admins any more
-		totpCode, err := pqtotp.GenerateCode(secret, time.Now())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if rec := c.postForm("/totp", url.Values{"code": {totpCode}}); rec.Code != http.StatusFound {
-			t.Fatalf("/totp = %d, want 302 (signed in as a user)", rec.Code)
-		}
-		if rec := c.get("/verify", requireGroups("admin")); rec.Code != http.StatusFound {
-			t.Errorf("admin-only route after demotion = %d, want 302 (denied)", rec.Code)
-		}
-		if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
-			t.Errorf("plain route after demotion = %d groups=%q, want 200 user", rec.Code, rec.Header().Get("Remote-Groups"))
-		}
-	})
-	t.Run("removed entirely", func(t *testing.T) {
-		srv, sender := testServer(t)
-		srv.cfg.TOTPEnabled = true
-		secret := provisionTOTP(t, srv, "admin@example.com")
-		c := newClient(t, srv.Handler())
-		c.postForm("/request", url.Values{"email": {"admin@example.com"}})
-		c.postForm("/verify-code", url.Values{"code": {sender.code()}})
-		srv.policy = authz.NewPolicy([]string{"other.org"}, nil) // address no longer permitted
-		totpCode, err := pqtotp.GenerateCode(secret, time.Now())
-		if err != nil {
-			t.Fatal(err)
-		}
-		rec := c.postForm("/totp", url.Values{"code": {totpCode}})
-		if c.cookies[session.SessionCookie] != nil {
-			t.Fatalf("a session was issued to a removed principal (status %d)", rec.Code)
-		}
-		if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusFound {
-			t.Errorf("removed principal reached /verify with %d", rec.Code)
-		}
-	})
 }

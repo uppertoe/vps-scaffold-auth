@@ -84,6 +84,9 @@ type passkeyPage struct {
 	NeedEmail bool // the sign-in is not recent: sign in again first
 	ReauthURL string
 	Removed   bool
+	// AdminDoor marks the offer made at the admin door, straight after an
+	// authenticator code, which adds a passkey that can open the admin pages.
+	AdminDoor bool
 	// Unknown is a credential ID the gateway does not hold, posted by the
 	// phone in a failed sign-in; passkey.js asks the phone to forget it.
 	Unknown string
@@ -282,8 +285,25 @@ func (s *Server) offerPasskey(w http.ResponseWriter, r *http.Request, email, rd 
 	return true
 }
 
+// offerAdminPasskey offers a passkey straight after an authenticator code at
+// the admin door. The challenge is marked confirmed, so the passkey added is
+// one that stands in for the second step.
+func (s *Server) offerAdminPasskey(w http.ResponseWriter, r *http.Request, email, next string) bool {
+	pp, err := s.passkeyRegisterOptionsFor(w, r, email, true)
+	if err != nil {
+		log.Printf("admin passkey offer for %s: %v", email, err)
+		return false
+	}
+	pp.Next = next
+	pp.AdminDoor = true
+	s.render(w, http.StatusOK, "passkey_offer", pageData{Redirect: next, Passkey: pp})
+	return true
+}
+
 // passkeySession reads the session of a person who may manage passkeys: a
-// normal sign-in, staff or administrator, with no second factor owed.
+// normal sign-in, staff or administrator. An administrator need not hold the
+// admin tier to see or remove their passkeys; adding one asks for the
+// authenticator code first (mayAddPasskeyNow).
 func (s *Server) passkeySession(r *http.Request) (*session.Identity, string, bool) {
 	id, ok := s.readSession(r, s.now())
 	if !ok || id.Kind != "" {
@@ -291,9 +311,6 @@ func (s *Server) passkeySession(r *http.Request) (*session.Identity, string, boo
 	}
 	role := s.policy.Role(id.Email)
 	if role != authz.RoleUser && role != authz.RoleAdmin {
-		return nil, "", false
-	}
-	if s.needsAdminStepUp(role == authz.RoleAdmin, id.TOTP) {
 		return nil, "", false
 	}
 	// A session started with a removed passkey manages nothing, whether or not
@@ -321,7 +338,7 @@ func (s *Server) mayAddPasskeyNow(id *session.Identity, role string) bool {
 	if !s.freshSignIn(id) {
 		return false
 	}
-	return role != authz.RoleAdmin || !s.cfg.TOTPEnabled || id.TOTP
+	return role != authz.RoleAdmin || !s.cfg.TOTPEnabled || s.adminStepFresh(id)
 }
 
 func (s *Server) passkeysURL() string { return s.cfg.PublicURL + "/passkeys" }
@@ -435,8 +452,8 @@ func (s *Server) handlePasskeyConfirmCode(w http.ResponseWriter, r *http.Request
 		s.renderPasskeyConfirm(w, r, http.StatusForbidden, "This page had expired. Please enter the code again.")
 		return
 	}
-	if msg, ok := s.checkAdminCode(r, id.Email, strings.TrimSpace(r.PostFormValue("code")), s.now()); !ok {
-		s.renderPasskeyConfirm(w, r, http.StatusUnauthorized, msg)
+	if msg, status, ok := s.checkAdminCode(r, id.Email, strings.TrimSpace(r.PostFormValue("code")), s.now()); !ok {
+		s.renderPasskeyConfirm(w, r, status, msg)
 		return
 	}
 	s.renderPasskeys(w, r, id, role, true)
@@ -477,7 +494,7 @@ func (s *Server) handlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
 	// Admin grade means the administrator passed the second factor to add
 	// this passkey. With TOTP off there was no second factor to pass, so a
 	// passkey added then must not stand in for one once TOTP is turned on.
-	adminGrade := role == authz.RoleAdmin && s.cfg.TOTPEnabled && (ch.Confirmed || id.TOTP)
+	adminGrade := role == authz.RoleAdmin && s.cfg.TOTPEnabled && (ch.Confirmed || s.adminStepFresh(id))
 
 	reg, ok := parseRegistration(r)
 	if !ok {
@@ -526,35 +543,35 @@ func (s *Server) passkeyNotAdded(w http.ResponseWriter, r *http.Request, email, 
 // checkAdminCode verifies an administrator's authenticator code with the same
 // limits as the sign-in step (handleTOTP): the per-IP limiter, the per-account
 // reservation, and the replay guard.
-func (s *Server) checkAdminCode(r *http.Request, email, code string, now time.Time) (string, bool) {
+func (s *Server) checkAdminCode(r *http.Request, email, code string, now time.Time) (string, int, bool) {
 	ip := clientIP(r)
 	if !s.wrongCodes.Allow(ip) {
-		return "Too many attempts. Please wait and try again.", false
+		return "Too many attempts. Please wait and try again.", http.StatusTooManyRequests, false
 	}
 	n, err := s.store.ReserveTOTPAttempt(r.Context(), email, totpLockoutWindow, now)
 	if err != nil {
 		log.Printf("reserve totp attempt for %s: %v", email, err)
-		return "The code could not be checked just now. Please try again in a moment.", false
+		return "The code could not be checked just now. Please try again in a moment.", http.StatusServiceUnavailable, false
 	}
 	if n > s.cfg.OTPMaxAttempts {
 		s.recordAuth(r, email, store.AuthEventTOTP, store.AuthOutcomeLockedOut)
-		return "Too many incorrect codes. This account is temporarily locked; try again shortly.", false
+		return "Too many incorrect codes. This account is temporarily locked; try again shortly.", http.StatusTooManyRequests, false
 	}
 	secret, ok, err := s.getTOTPSecret(r.Context(), email)
 	if err != nil || !ok || !totp.Validate(code, secret) {
 		s.recordAuth(r, email, store.AuthEventTOTP, store.AuthOutcomeWrongCode)
-		return "Incorrect code. Please try again.", false
+		return "Incorrect code. Please try again.", http.StatusUnauthorized, false
 	}
 	if !s.totpReplay.use(email, code) {
 		s.recordAuth(r, email, store.AuthEventTOTP, store.AuthOutcomeReplayed)
-		return "That code has already been used. Wait for your authenticator to show a new one.", false
+		return "That code has already been used. Wait for your authenticator to show a new one.", http.StatusUnauthorized, false
 	}
 	s.wrongCodes.Refund(ip)
 	if err := s.store.ClearTOTPFailures(r.Context(), email); err != nil {
 		log.Printf("clear totp failures for %s: %v", email, err)
 	}
 	s.recordAuth(r, email, store.AuthEventTOTP, store.AuthOutcomeOK)
-	return "", true
+	return "", http.StatusOK, true
 }
 
 func parseRegistration(r *http.Request) (passkey.Registration, bool) {
@@ -648,10 +665,15 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.wrongCodes.Refund(ip)
 	s.recordAuth(r, pk.Email, store.AuthEventPasskey, store.AuthOutcomeOK)
-	if role == authz.RoleAdmin && s.cfg.TOTPEnabled && !pk.AdminGrade {
-		s.startTOTP(w, r, pk.Email, role, rd, remember, pk.ID, now)
-		return
+	// A passkey used at the admin door signs the person in afresh. If the
+	// session it replaces was a remembered one of the same person, the new one
+	// is remembered too, so that opening the admin pages does not shorten it.
+	if cur, ok := s.readSession(r, now); ok && cur.Kind == "" && cur.Email == pk.Email && s.sessions.SessionTTL(cur) > s.cfg.SessionTTL {
+		remember = true
 	}
+	// A passkey that stands in for the second step gives the admin tier at
+	// once. Any other gives an ordinary session, and the admin door asks for
+	// the authenticator code when it is needed.
 	s.completeLogin(w, r, pk.Email, role, rd, remember, role == authz.RoleAdmin && s.cfg.TOTPEnabled && pk.AdminGrade, pk.ID, now)
 }
 

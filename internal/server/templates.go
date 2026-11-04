@@ -82,7 +82,7 @@ type pageData struct {
 }
 
 // passkeyPages are the pages that use /passkey.js when passkeys are on.
-var passkeyPages = map[string]bool{"login": true, "passkey_offer": true, "passkeys": true}
+var passkeyPages = map[string]bool{"login": true, "passkey_offer": true, "passkeys": true, "totp": true}
 
 // pages holds each page template composed with the shared base layout.
 type pages map[string]*template.Template

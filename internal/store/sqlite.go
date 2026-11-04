@@ -579,6 +579,18 @@ func (s *SQLite) TouchPasskey(ctx context.Context, id int64, signCount uint32, n
 	return err
 }
 
+// MarkPasskeyAdminGrade records that email's passkey id may stand in for the
+// admin second step, once its holder has entered an authenticator code in a
+// session started with it. It reports whether the passkey was found.
+func (s *SQLite) MarkPasskeyAdminGrade(ctx context.Context, email string, id int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE passkeys SET admin_grade = 1 WHERE id = ? AND email = ?`, id, email)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // DeletePasskey removes one of email's passkeys.
 func (s *SQLite) DeletePasskey(ctx context.Context, email string, id int64) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM passkeys WHERE id = ? AND email = ?`, id, email)

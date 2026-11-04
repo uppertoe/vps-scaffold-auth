@@ -626,9 +626,10 @@ func (s *Server) handleAdminBrandingImage(w http.ResponseWriter, r *http.Request
 	writeImage(w, mime, data)
 }
 
-// requireAdmin gates the admin subtree: a valid session whose groups include
-// "admin". When TOTP is enabled, an admin session already implies TOTP was
-// satisfied at login. Non-admins are sent to the login flow.
+// requireAdmin gates the admin subtree: a normal session of a current
+// administrator that holds the admin tier, which with TOTP enabled means a
+// second step within adminStepMaxAge. Non-admins are sent to the login flow;
+// an administrator without a recent second step is sent to the admin door.
 func (s *Server) requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := s.readSession(r, s.now())
@@ -643,14 +644,17 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 		// A session started with a passkey that has since been removed is
 		// refused here at once, since the admin pages never pass through the
 		// renewal in /verify that would otherwise end it.
-		admin := ok && isAdminSession(id) && s.policy.Role(id.Email) == authz.RoleAdmin && s.passkeyStillValid(r, id)
-		// A first-factor-only admin session (minted before TOTP was enabled) is
-		// bounced to a fresh login so the TOTP step runs, rather than being
-		// honoured here. needsAdminStepUp is only evaluated once admin is true, so
-		// id is non-nil. See handleVerify for the same enforcement on /verify.
-		if !admin || s.needsAdminStepUp(admin, id.TOTP) {
-			rd := s.cfg.PublicURL + r.URL.RequestURI()
+		admin := ok && id.Kind == "" && s.policy.Role(id.Email) == authz.RoleAdmin && s.passkeyStillValid(r, id)
+		rd := s.cfg.PublicURL + r.URL.RequestURI()
+		if !admin {
 			http.Redirect(w, r, s.cfg.PublicURL+"/login?rd="+url.QueryEscape(rd), http.StatusFound)
+			return
+		}
+		// An administrator holds the admin pages only with a recent second step
+		// (adminTierHeld); without one they are sent to the admin door, which
+		// brings them back here.
+		if !s.adminTierHeld(id) {
+			http.Redirect(w, r, s.stepUpURL(rd), http.StatusFound)
 			return
 		}
 		next.ServeHTTP(w, r)

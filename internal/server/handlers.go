@@ -19,7 +19,6 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/secretbox"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
-	"github.com/uppertoe/vps-scaffold-auth/internal/totp"
 )
 
 // renewSession re-checks policy and reissues the session cookie with freshly
@@ -42,15 +41,6 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 		s.redirectToLogin(w, r)
 		return false
 	}
-	// Re-challenge for the admin second factor before extending the session:
-	// an admin whose cookie predates TOTP being enabled, or a principal only
-	// just promoted to admin, carries totp=false and must complete the TOTP
-	// step rather than sliding forward on the email code alone.
-	if s.needsAdminStepUp(role == authz.RoleAdmin, id.TOTP) {
-		s.sessions.ClearSession(w)
-		s.redirectToLogin(w, r)
-		return false
-	}
 	// A session started with a passkey lasts only while the passkey does:
 	// removing it, by its owner or an administrator, ends the session here.
 	if !s.passkeyStillValid(r, id) {
@@ -59,13 +49,13 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 		return false
 	}
 	if groups == nil {
-		g := s.computeGroups(r.Context(), id.Email, role)
+		g := s.computeGroups(r.Context(), id.Email, s.tierRole(id, role))
 		groups = &g
 	}
 	// id.Kind is passed through, so a guest stays a guest across renewals (and
 	// so stays confined to guests=allow routes). The passkey and the time of
 	// sign-in pass through too.
-	grant := session.Grant{Kind: id.Kind, TOTP: id.TOTP, PK: id.PK, Auth: id.Auth, Card: id.Card}
+	grant := session.Grant{Kind: id.Kind, TOTP: id.TOTP, PK: id.PK, Auth: id.Auth, Card: id.Card, Step: id.Step}
 	if grant.Auth == 0 {
 		// A session from before the sign-in time was recorded. Its sign-in
 		// time is unknown, so it is recorded as long ago, never as now: a
@@ -97,7 +87,7 @@ func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups st
 		log.Printf("refusal-path groups for %s: %v", id.Email, err)
 		return "", false
 	}
-	return authz.BuildGroups(role, dbGroups), true
+	return authz.BuildGroups(s.tierRole(id, role), dbGroups), true
 }
 
 // handleVerify is the forward_auth target. Caddy calls it on every request to a
@@ -118,23 +108,15 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		renewed := false
-		// A session is renewed when it is due, or at once when membership has
-		// changed since its groups were worked out, so a person removed from
-		// a group loses it at their next request.
-		if s.sessions.NeedsRenew(id, now) || s.groupsStale(id) {
+		// A session is renewed when it is due, at once when membership has
+		// changed since its groups were worked out (so a person removed from a
+		// group loses it at their next request), and at once when its admin
+		// tier has lapsed or been withdrawn (see tierStale).
+		if s.sessions.NeedsRenew(id, now) || s.groupsStale(id) || s.tierStale(id) {
 			if !s.renewSession(w, r, id, now) {
 				return
 			}
 			renewed = true
-		} else if s.needsAdminStepUp(isAdminSession(id), id.TOTP) {
-			// Not yet due for renewal, but an existing admin session that lacks the
-			// second factor (TOTP was enabled after it was minted) must step up now
-			// rather than riding a first-factor-only cookie for up to
-			// SESSION_RENEW_AFTER. Break-glass and guest sessions are excluded
-			// (never admin).
-			s.sessions.ClearSession(w)
-			s.redirectToLogin(w, r)
-			return
 		}
 		// Per-app authorization. The app's Caddy snippet declares who may reach it
 		// in a single X-Auth-Policy header set with header_up (replace semantics),
@@ -160,6 +142,12 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		allowed := func(id *session.Identity) bool {
 			return authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass, id.Kind == session.KindGuest,
 				reqDomains, reqGroups, allowGuests)
+		}
+		if !allowed(id) && s.wantsAdminStep(id, reqGroups) {
+			// An administrator without a recent second step, on a route that
+			// would admit the admin tier: the admin door, not the denial page.
+			s.redirectToStepUp(w, r)
+			return
 		}
 		if !allowed(id) {
 			// A group rule refused the session. Its groups are a snapshot taken
@@ -926,17 +914,9 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 			s.render(w, http.StatusForbidden, "login", pageData{Error: "This account is not permitted.", Redirect: rd})
 			return
 		}
-		if role == authz.RoleAdmin && s.cfg.TOTPEnabled {
-			// First factor passed; the login itself is recorded once TOTP completes
-			// (in completeLogin). Record the email step so a never-finished second
-			// factor still shows the first one succeeded.
-			s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeOK)
-			s.startTOTP(w, r, st.Email, role, rd, st.Remember, 0, now)
-			return
-		}
-		// Code-only completion: either a non-admin, or TOTP is disabled. No second
-		// factor was presented, so the session records totp=false. A guest always
-		// lands here (RoleGuest is never RoleAdmin), so it is never sent to TOTP.
+		// An emailed code is the first factor only, so the session records
+		// totp=false. An administrator signs in like anyone else and is an
+		// ordinary user until the admin door (/totp) takes the second step.
 		s.completeLogin(w, r, st.Email, role, rd, st.Remember, false, 0, now)
 	case store.ConsumeMismatch:
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeWrongCode)
@@ -958,138 +938,157 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// startTOTP challenges an admin for their authenticator code. Secrets are
-// provisioned out-of-band by an administrator (the admin UI or the -totp-enroll
-// CLI), never self-enrolled here: letting a login bootstrap its own second
-// factor would let someone who controls only the email inbox set up the factor
-// that is supposed to backstop a compromised inbox. An admin with no provisioned
-// secret is therefore denied, not enrolled.
-func (s *Server) startTOTP(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember bool, pk int64, now time.Time) {
-	_, ok, err := s.getTOTPSecret(r.Context(), emailAddr)
+// stepUpSession reads the session of an administrator at the admin door: a
+// normal sign-in of an address that is an administrator now, whose passkey,
+// if it started with one, has not been removed.
+func (s *Server) stepUpSession(r *http.Request) (*session.Identity, bool) {
+	id, ok := s.readSession(r, s.now())
+	if !ok || id.Kind != "" || s.policy.Role(id.Email) != authz.RoleAdmin || !s.passkeyStillValid(r, id) {
+		return nil, false
+	}
+	return id, true
+}
+
+// adminTierHeld reports whether a session holds the admin tier now: the admin
+// group in its groups and a recent second step.
+func (s *Server) adminTierHeld(id *session.Identity) bool {
+	return isAdminSession(id) && s.adminStepFresh(id)
+}
+
+// adminDest is where the admin door sends a person on: the page they asked
+// for, else the admin pages.
+func (s *Server) adminDest(rd string) string {
+	if rd == "" {
+		return s.cfg.PublicURL + "/admin/"
+	}
+	return s.loginRedirect(rd)
+}
+
+// handleStepUp is the admin door: the second step an administrator takes
+// before the admin pages or an admin-only route, with a passkey that can
+// stand in for it or with the authenticator code. Signing in never asks for
+// it, so the clinical sites open on the first factor alone.
+//
+// Secrets are provisioned by an administrator (the admin UI or the
+// -totp-enroll CLI), never self-enrolled here: letting a session bootstrap
+// its own second factor would let someone who controls only the email inbox
+// set up the factor that is meant to backstop a compromised inbox.
+func (s *Server) handleStepUp(w http.ResponseWriter, r *http.Request) {
+	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, "")
+	id, ok := s.readSession(r, s.now())
+	if !ok {
+		http.Redirect(w, r, s.loginURL(s.stepUpURL(rd)), http.StatusFound)
+		return
+	}
+	if _, admin := s.stepUpSession(r); !admin {
+		http.Redirect(w, r, s.cfg.PublicURL+"/denied?rd="+url.QueryEscape(s.adminDest(rd)), http.StatusFound)
+		return
+	}
+	if s.adminTierHeld(id) {
+		http.Redirect(w, r, s.adminDest(rd), http.StatusFound)
+		return
+	}
+	s.renderStepUp(w, r, id, rd, http.StatusOK, "")
+}
+
+// renderStepUp draws the admin door. The passkey is offered on a phone that
+// can use one, and only when the person holds a passkey that stands in for
+// the second step; any other passkey would sign them in again as an ordinary
+// user and bring them straight back here.
+func (s *Server) renderStepUp(w http.ResponseWriter, r *http.Request, id *session.Identity, rd string, status int, msg string) {
+	_, hasTOTP, err := s.getTOTPSecret(r.Context(), id.Email)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
-	if !ok {
-		s.sessions.ClearState(w)
+	if !hasTOTP {
 		s.render(w, http.StatusForbidden, "message", pageData{
 			Title:    "Two-factor setup required",
-			Message:  "Admin accounts require two-factor authentication, which has not been set up for this account yet. Please ask an administrator to enrol your account, then sign in again.",
+			Message:  "The admin pages need an authenticator app, which has not been set up for your account yet. Please ask another administrator to set it up for you.",
 			Redirect: rd,
 		})
 		return
 	}
-	if err := s.sessions.SetPending(w, session.Pending{Email: emailAddr, Role: role, Redirect: rd, Remember: remember, PK: pk}, s.cfg.OTPTTL, now); err != nil {
+	csrf, err := s.sessions.EnsureCSRF(w, r, csrfTTL, s.now())
+	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
-	s.sessions.ClearState(w)
-	s.render(w, http.StatusOK, "totp", pageData{Redirect: rd})
+	data := pageData{Redirect: rd, CSRF: csrf, Error: msg, Identity: id.Email}
+	if s.cfg.PasskeysEnabled && isPhone(r) && s.hasAdminPasskey(r, id.Email) {
+		data.Passkey = s.passkeyLoginOptions(w)
+	}
+	s.render(w, status, "totp", data)
 }
 
-// handleTOTP verifies an admin's authenticator code and completes login.
+// hasAdminPasskey reports whether email holds a passkey that stands in for
+// the admin second step.
+func (s *Server) hasAdminPasskey(r *http.Request, email string) bool {
+	list, err := s.store.ListPasskeys(r.Context(), email)
+	if err != nil {
+		log.Printf("passkeys for %s: %v", email, err)
+		return false
+	}
+	for _, p := range list {
+		if p.AdminGrade {
+			return true
+		}
+	}
+	return false
+}
+
+// handleTOTP takes the authenticator code at the admin door and gives the
+// session the admin tier. The code is checked under the per-account cap and
+// the replay guard (checkAdminCode). A session started with a passkey has
+// that passkey upgraded, so that from then on it opens the admin pages by
+// itself: its holder has just proved the second factor in the same session.
 func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	if !s.requireSameOrigin(w, r) {
 		return
 	}
 	now := s.now()
-	// Same dual-carrier scheme as handleVerifyCode: prefer the validated rd
-	// posted by the TOTP form over the (clobberable, OTP_TTL-lived) pending
-	// cookie, and keep the destination alive when the cookie is gone.
-	postedRD := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
-	p, ok := s.sessions.ReadPending(r, now)
+	rd := authz.SafeRedirect(r.PostFormValue("rd"), s.cfg.Domain, "")
+	id, ok := s.stepUpSession(r)
 	if !ok {
-		// Same double-submit race as handleVerifyCode: the first /totp already
-		// consumed the pending state and issued the session, so a re-tap (or
-		// autofill retry) finds no pending but a valid session. Forward the
-		// already-authenticated user on instead of bouncing them to /login.
-		if _, ok := s.readSession(r, now); ok {
-			http.Redirect(w, r, s.loginRedirect(postedRD), http.StatusFound)
-			return
+		http.Redirect(w, r, s.loginURL(s.stepUpURL(rd)), http.StatusFound)
+		return
+	}
+	// A second tap after the first succeeded (the code is single-use, so it
+	// could not pass again) finds the tier already held and goes on.
+	if s.adminTierHeld(id) {
+		http.Redirect(w, r, s.adminDest(rd), http.StatusFound)
+		return
+	}
+	if !s.sessions.VerifyCSRF(r, r.PostFormValue("csrf"), now) {
+		s.renderStepUp(w, r, id, rd, http.StatusForbidden, "This page had expired. Please enter the code again.")
+		return
+	}
+	if msg, status, ok := s.checkAdminCode(r, id.Email, strings.TrimSpace(r.PostFormValue("code")), now); !ok {
+		s.renderStepUp(w, r, id, rd, status, msg)
+		return
+	}
+	if id.PK != 0 {
+		if _, err := s.store.MarkPasskeyAdminGrade(r.Context(), id.Email, id.PK); err != nil {
+			log.Printf("upgrade passkey %d for %s: %v", id.PK, id.Email, err)
 		}
-		s.restartLogin(w, r, postedRD)
+	}
+	grant := session.Grant{TOTP: true, Step: now.Unix(), PK: id.PK, Auth: id.Auth}
+	if grant.Auth == 0 {
+		grant.Auth = 1 // unknown sign-in time: never read as recent
+	}
+	groups := s.computeGroups(r.Context(), id.Email, authz.RoleAdmin)
+	if err := s.sessions.IssueSessionGrant(w, id.Email, groups, grant, s.sessions.SessionTTL(id), now); err != nil {
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
-	rd := postedRD
-	if rd == "" {
-		rd = p.Redirect
-	}
-	// Charged up front and refunded on a correct code, as in handleVerifyCode.
-	if !s.wrongCodes.Allow(clientIP(r)) {
-		s.render(w, http.StatusTooManyRequests, "totp", pageData{
-			Error: "Too many attempts. Please wait and try again.", Redirect: rd,
-		})
+	dest := s.adminDest(rd)
+	// On a phone with no passkey that can open the admin pages, offer one now,
+	// while the authenticator code is fresh, so that the code is not needed
+	// again on this phone.
+	if s.cfg.PasskeysEnabled && isPhone(r) && id.PK == 0 && !s.hasAdminPasskey(r, id.Email) && s.offerAdminPasskey(w, r, id.Email, dest) {
 		return
 	}
-	// Per-account cap: the shared per-IP limiter alone lets a distributed
-	// attacker (who already controls the admin's inbox) grind the 10^6 TOTP
-	// space. The attempt is reserved BEFORE the code is checked, so the cap
-	// bounds how many codes are ever checked within the window no matter how
-	// many submissions arrive together; a successful login clears it. If the
-	// attempt cannot be recorded, the code is NOT checked: an unrecorded check
-	// would be an uncounted guess, so a store outage would otherwise switch
-	// the cap off exactly when guesses cannot be bounded. The admin is asked
-	// to try again shortly instead.
-	n, err := s.store.ReserveTOTPAttempt(r.Context(), p.Email, totpLockoutWindow, now)
-	if err != nil {
-		log.Printf("reserve totp attempt for %s: %v", p.Email, err)
-		s.render(w, http.StatusServiceUnavailable, "totp", pageData{
-			Error: "The code could not be checked just now. Please try again in a moment.", Redirect: rd,
-		})
-		return
-	}
-	if n > s.cfg.OTPMaxAttempts {
-		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeLockedOut)
-		s.render(w, http.StatusTooManyRequests, "totp", pageData{
-			Error: "Too many incorrect codes. This account is temporarily locked; try again shortly.", Redirect: rd,
-		})
-		return
-	}
-	secret, ok, err := s.getTOTPSecret(r.Context(), p.Email)
-	if err != nil || !ok {
-		if err == nil {
-			s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeNoSecret)
-		}
-		s.restartLogin(w, r, rd)
-		return
-	}
-	code := strings.TrimSpace(r.PostFormValue("code"))
-	if !totp.Validate(code, secret) {
-		// The attempt was already counted by the reservation above.
-		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeWrongCode)
-		s.render(w, http.StatusUnauthorized, "totp", pageData{
-			Error: "Incorrect code. Please try again.", Redirect: rd,
-		})
-		return
-	}
-	// A TOTP code stays valid for its whole ~30s step; reject a second use of the
-	// same code so a sniffed/phished code can't be replayed within that window.
-	if !s.totpReplay.use(p.Email, code) {
-		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeReplayed)
-		s.render(w, http.StatusUnauthorized, "totp", pageData{
-			Error: "That code has already been used. Wait for your authenticator to show a new one.", Redirect: rd,
-		})
-		return
-	}
-	// TOTP satisfied: refund the attempt, clear the failure counter and issue
-	// the session.
-	s.wrongCodes.Refund(clientIP(r))
-	if err := s.store.ClearTOTPFailures(r.Context(), p.Email); err != nil {
-		log.Printf("clear totp failures for %s: %v", p.Email, err)
-	}
-	// The role is re-derived from the CURRENT policy, not the one saved in the
-	// pending cookie at the email step: an admin removed or demoted between
-	// the two factors must not be issued an admin session that downstream
-	// admin-only routes would then honour until renewal. A principal the
-	// policy no longer permits at all is refused and sent to sign in again.
-	role := s.policy.LoginRole(p.Email, s.isOpenHost(rd))
-	if role == authz.RoleDeny {
-		s.recordAuth(r, p.Email, store.AuthEventTOTP, store.AuthOutcomeDenied)
-		s.sessions.ClearPending(w)
-		s.restartLogin(w, r, rd)
-		return
-	}
-	s.completeLogin(w, r, p.Email, role, rd, p.Remember, true, p.PK, now)
+	http.Redirect(w, r, dest, http.StatusFound)
 }
 
 // totpLockoutWindow is the rolling window over which TOTP verification attempts
@@ -1152,7 +1151,7 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 		data.Identity = id.Email
 		// A real admin session gets an Admin link here; a break-glass or guest
 		// session never does (neither can reach the admin UI — see requireAdmin).
-		data.IsAdmin = isAdminSession(id) && s.policy.Role(id.Email) == authz.RoleAdmin
+		data.IsAdmin = id.Kind == "" && s.policy.Role(id.Email) == authz.RoleAdmin
 		if _, _, ok := s.passkeySession(r); ok && s.cfg.PasskeysEnabled {
 			data.Passkey = &passkeyPage{Next: s.passkeysURL()}
 		}
@@ -1171,7 +1170,13 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 // signed in with, zero for an email code; the session names it so that
 // removing the passkey ends the session at its next renewal.
 func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember, totpVerified bool, pk int64, now time.Time) {
-	groups := s.computeGroups(r.Context(), emailAddr, role)
+	// The admin tier needs the second step; without it an administrator's
+	// session is built as an ordinary user's (see tierRole).
+	grant := session.Grant{PK: pk}
+	if totpVerified {
+		grant.TOTP, grant.Step = true, now.Unix()
+	}
+	groups := s.computeGroups(r.Context(), emailAddr, s.tierRole(&session.Identity{TOTP: grant.TOTP, Step: grant.Step}, role))
 	// The kind follows the role: a guest login is marked so /verify confines it
 	// to routes that opt in, and renewal keeps it a guest.
 	kind := ""
@@ -1187,7 +1192,8 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	if remember && kind != session.KindGuest {
 		ttl = s.cfg.SessionRememberTTL
 	}
-	if err := s.sessions.IssueSessionGrant(w, emailAddr, groups, session.Grant{Kind: kind, TOTP: totpVerified, PK: pk}, ttl, now); err != nil {
+	grant.Kind = kind
+	if err := s.sessions.IssueSessionGrant(w, emailAddr, groups, grant, ttl, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
@@ -1198,21 +1204,82 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	s.sessions.ClearState(w)
 	s.sessions.ClearPending(w)
 	// On a phone, after an email code, offer to add a passkey before going on.
-	if s.shouldOfferPasskey(r, role, pk) && s.offerPasskey(w, r, emailAddr, rd) {
+	// An administrator is offered one at the admin door instead, where the
+	// authenticator code makes it a passkey that can open the admin pages.
+	if !(role == authz.RoleAdmin && s.cfg.TOTPEnabled) && s.shouldOfferPasskey(r, role, pk) && s.offerPasskey(w, r, emailAddr, rd) {
 		return
 	}
 	http.Redirect(w, r, s.loginRedirect(rd), http.StatusFound)
 }
 
-// needsAdminStepUp reports whether an admin session must re-authenticate through
-// the TOTP step before it is honoured for admin access. It fires only when TOTP
-// is enabled and the session carries no second-factor assurance (totp=false) —
-// i.e. the session was minted before TOTP was turned on, or the principal has
-// since become an admin. This closes the gap where enabling TOTP would otherwise
-// leave already-issued first-factor-only admin sessions valid until they expire.
-// Break-glass sessions are never admin, so callers pass isAdmin=false for them.
-func (s *Server) needsAdminStepUp(isAdmin, totpVerified bool) bool {
-	return s.cfg.TOTPEnabled && isAdmin && !totpVerified
+// adminStepMaxAge is how long the admin second step lasts. An administrator's
+// session may last much longer (a remembered one, 30 days on RCH); the admin
+// tier inside it lasts this long from the last authenticator code or admin
+// passkey, then the admin door asks again.
+const adminStepMaxAge = 12 * time.Hour
+
+// adminStepFresh reports whether a session has passed the admin second step
+// recently enough to hold the admin tier. With TOTP off there is no second
+// step, so every administrator's session holds it, as before. A session from
+// before the step time was recorded counts from its sign-in.
+func (s *Server) adminStepFresh(id *session.Identity) bool {
+	if !s.cfg.TOTPEnabled {
+		return true
+	}
+	if id == nil || id.Kind != "" || !id.TOTP {
+		return false
+	}
+	at := id.Step
+	if at == 0 {
+		at = id.Auth
+	}
+	return at > 1 && s.now().Unix()-at <= int64(adminStepMaxAge.Seconds())
+}
+
+// tierRole is the role a session's groups are built from. An administrator
+// who has not passed the second step recently is an ordinary user: every
+// site that admits staff admits them at once, and only the admin pages and
+// admin-only routes send them to the admin door.
+func (s *Server) tierRole(id *session.Identity, role string) string {
+	if role == authz.RoleAdmin && !s.adminStepFresh(id) {
+		return authz.RoleUser
+	}
+	return role
+}
+
+// tierStale reports whether a normal session's admin tier no longer matches
+// what it should be now: an administrator's second step has aged out, or the
+// address has been removed from ADMIN_EMAILS (or, the other way, a session
+// with a recent second step lacks the admin group it should carry). Each
+// renews the session at once, so the admin group leaves or reaches the apps'
+// headers at the next request rather than at the next scheduled renewal.
+func (s *Server) tierStale(id *session.Identity) bool {
+	if id.Kind != "" {
+		return false
+	}
+	return authz.HasGroup(id.Groups, authz.RoleAdmin) != (s.tierRole(id, s.renewalRole(id)) == authz.RoleAdmin)
+}
+
+// wantsAdminStep reports whether a refused session would be admitted with the
+// admin tier: a normal session of a current administrator whose second step
+// is not recent, on a route whose group list names admin.
+func (s *Server) wantsAdminStep(id *session.Identity, reqGroups string) bool {
+	if id.Kind != "" || s.adminStepFresh(id) || s.renewalRole(id) != authz.RoleAdmin {
+		return false
+	}
+	return authz.ListNames(reqGroups, authz.RoleAdmin)
+}
+
+// redirectToStepUp sends an administrator without a recent second step to the
+// admin door, which returns them to the page they asked for.
+func (s *Server) redirectToStepUp(w http.ResponseWriter, r *http.Request) {
+	orig := s.reconstructOriginalURL(r)
+	rd := authz.SafeRedirect(orig, s.cfg.Domain, s.cfg.DefaultRedirect)
+	http.Redirect(w, r, s.stepUpURL(rd), http.StatusFound)
+}
+
+func (s *Server) stepUpURL(rd string) string {
+	return s.cfg.PublicURL + "/totp?rd=" + url.QueryEscape(rd)
 }
 
 // knownSessionKind reports whether kind is one this build understands: a
