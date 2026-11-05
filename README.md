@@ -455,8 +455,10 @@ database, as the SQLite store already does.
 The login page has a **"Keep me signed in"** checkbox. Unchecked, a session
 lasts `SESSION_TTL` (default 2h); checked, it lasts `SESSION_REMEMBER_TTL`
 (default 24h). Both slide on activity (renewing every `SESSION_RENEW_AFTER`,
-default 1h, which is also where policy revocation takes effect), up to
-`SESSION_MAX_AGE` from sign-in. The renewal is issued by `/verify`
+default 1h), up to `SESSION_MAX_AGE` from sign-in. Removing a domain from the
+allow-list, a person from the admin listing, or every host from
+`OPEN_REGISTRATION_HOSTS` takes effect at each person's next request once the
+gateway has restarted with the new setting, as a group change does. The renewal is issued by `/verify`
 and carried to the browser by the guard's auth gate; a hand-rolled
 `forward_auth` would drop it (see the note under "Protecting an app").
 
@@ -646,10 +648,11 @@ as a second address.
 - The session cookie is signed, not stored, so a single device's session can't be
   ended on its own; **"Sign out on every device"** ends all of a person's
   sessions at their next request (see "Signing out"), and no session outlives
-  `SESSION_MAX_AGE`. **Policy revocation is enforced at renewal**: a principal
-  removed from the admin list or a de-listed domain is denied (and their cookie
-  cleared) at the next `/verify` past `SESSION_RENEW_AFTER`; group changes take
-  effect at the next request. Break-glass sessions use a short, non-renewable
+  `SESSION_MAX_AGE`. **Policy revocation takes effect at the next request**:
+  once the gateway restarts with the new settings, a person removed from the
+  admin list loses the admin tier, and a person whose domain is de-listed is
+  refused and their cookie cleared, at their next `/verify`, as group changes
+  are. Break-glass sessions use a short, non-renewable
   TTL, end when their card is revoked or re-minted, and are never accepted by the
   admin UI.
 - Break-glass target groups and DB group names cannot be the reserved roles
