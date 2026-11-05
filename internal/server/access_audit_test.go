@@ -41,6 +41,9 @@ func TestLoginEventsRecorded(t *testing.T) {
 	if !sawLogin {
 		t.Error("successful login was not recorded")
 	}
+	if rows := srv.foldSignIns(events); len(rows) == 0 || rows[0].Result != "Signed in" || rows[0].How != "Email code" {
+		t.Errorf("access log rows = %+v, want the sign-in shown as by email code", rows)
+	}
 }
 
 // /verify records app access, deduplicated within the hour: many hits to the same
