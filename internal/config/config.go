@@ -151,6 +151,10 @@ type Config struct {
 	// RateLimitPerEmailCeiling caps the codes sent to one address from all IPs
 	// together, bounding how hard a distributed party can flood an inbox.
 	RateLimitPerEmailCeiling RateLimit
+	// RateLimitPerEmailDaily caps the same over a day, so that the hourly
+	// ceiling cannot be spent again every hour by a guesser who is in no
+	// hurry. An address signing in from its usual network passes both.
+	RateLimitPerEmailDaily RateLimit
 	// RateLimitPerIP caps code requests (/request) per client IP.
 	RateLimitPerIP RateLimit
 	// RateLimitSendsPerIP caps the code emails one client IP can cause, across
@@ -291,6 +295,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.RateLimitPerEmailCeiling, err = getrate("RATELIMIT_PER_EMAIL_CEILING", RateLimit{12, time.Hour}); err != nil {
+		return nil, err
+	}
+	if c.RateLimitPerEmailDaily, err = getrate("RATELIMIT_PER_EMAIL_DAILY", RateLimit{20, 24 * time.Hour}); err != nil {
 		return nil, err
 	}
 	if c.RateLimitWrongCodesPerIP, err = getrate("RATELIMIT_WRONG_CODES_PER_IP", RateLimit{60, 15 * time.Minute}); err != nil {

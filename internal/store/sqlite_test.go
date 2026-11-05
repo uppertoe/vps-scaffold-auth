@@ -186,8 +186,8 @@ func TestConsumeCodeAggregateCapAcrossIPs(t *testing.T) {
 			t.Fatalf("guess %d from %s = %v, want ConsumeMismatch", i, ip, res)
 		}
 	}
-	if res, _ := s.ConsumeCode(ctx, "a@example.com", "10.0.0.5", "wrong", 3, 5, now); res != ConsumeTooManyAttempts {
-		t.Fatalf("fifth wrong guess = %v, want ConsumeTooManyAttempts", res)
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", "10.0.0.5", "wrong", 3, 5, now); res != ConsumeBurned {
+		t.Fatalf("fifth wrong guess = %v, want ConsumeBurned", res)
 	}
 	// The code is gone: even the right value from a fresh address finds nothing.
 	if res, _ := s.ConsumeCode(ctx, "a@example.com", "10.0.0.6", "right", 3, 5, now); res != ConsumeNoCode {
@@ -197,5 +197,52 @@ func TestConsumeCodeAggregateCapAcrossIPs(t *testing.T) {
 	_ = s.SaveCode(ctx, "a@example.com", "right2", now.Add(10*time.Minute))
 	if res, _ := s.ConsumeCode(ctx, "a@example.com", "10.0.0.7", "right2", 3, 5, now); res != ConsumeOK {
 		t.Errorf("fresh code = %v, want ConsumeOK", res)
+	}
+}
+
+// A code's attempt budget is stored with the code, so a gateway restart
+// neither refunds one network's spent guesses nor resets the code's total.
+func TestCodeAttemptBudgetSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_700_000_000, 0)
+	path := filepath.Join(t.TempDir(), "auth.db")
+	open := func() *SQLite {
+		s, err := OpenSQLite(path)
+		if err != nil {
+			t.Fatalf("OpenSQLite: %v", err)
+		}
+		return s
+	}
+
+	s := open()
+	if err := s.SaveCode(ctx, "a@example.com", "right", now.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	// One network spends its budget of 5; three others spend 2 each, so the
+	// code has taken 11 of its total of 12.
+	for i := 0; i < 5; i++ {
+		s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "wrong", 5, 12, now)
+	}
+	for _, ip := range []string{"2.2.2.2", "3.3.3.3", "4.4.4.4"} {
+		for i := 0; i < 2; i++ {
+			s.ConsumeCode(ctx, "a@example.com", ip, "wrong", 5, 12, now)
+		}
+	}
+	s.Close()
+
+	s = open()
+	if res, err := s.ConsumeCode(ctx, "a@example.com", "1.1.1.1", "right", 5, 12, now); err != nil || res != ConsumeTooManyAttempts {
+		t.Fatalf("spent network after restart = %v, %v; want ConsumeTooManyAttempts", res, err)
+	}
+	// The 12th wrong guess spends the total and burns the code.
+	if res, _ := s.ConsumeCode(ctx, "a@example.com", "5.5.5.5", "wrong", 5, 12, now); res != ConsumeBurned {
+		t.Fatalf("12th guess = %v, want ConsumeBurned", res)
+	}
+	s.Close()
+
+	s = open()
+	defer s.Close()
+	if res, err := s.ConsumeCode(ctx, "a@example.com", "6.6.6.6", "right", 5, 12, now); err != nil || res != ConsumeNoCode {
+		t.Fatalf("right code after the total was spent and the gateway restarted = %v, %v; want ConsumeNoCode (burned)", res, err)
 	}
 }

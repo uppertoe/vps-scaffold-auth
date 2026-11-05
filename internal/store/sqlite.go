@@ -419,9 +419,9 @@ func (s *SQLite) ConsumeCode(ctx context.Context, email, clientIP, candidateHash
 	// a single stranger still cannot burn a victim's code on their own.
 	if maxTotalAttempts > 0 && total >= maxTotalAttempts {
 		if err := clear(); err != nil {
-			return ConsumeTooManyAttempts, err
+			return ConsumeBurned, err
 		}
-		return ConsumeTooManyAttempts, tx.Commit()
+		return ConsumeBurned, tx.Commit()
 	}
 
 	var attempts int
@@ -459,9 +459,9 @@ func (s *SQLite) ConsumeCode(ctx context.Context, email, clientIP, candidateHash
 	}
 	if maxTotalAttempts > 0 && total >= maxTotalAttempts {
 		if err := clear(); err != nil {
-			return ConsumeTooManyAttempts, err
+			return ConsumeBurned, err
 		}
-		return ConsumeTooManyAttempts, tx.Commit()
+		return ConsumeBurned, tx.Commit()
 	}
 	if attempts >= maxAttempts {
 		return ConsumeTooManyAttempts, tx.Commit()
