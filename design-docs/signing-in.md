@@ -86,10 +86,10 @@ A session lasts two hours by default, or twenty-four hours if the person ticks
 hours and thirty days.
 
 A session in use renews itself, every hour by default and every six hours on
-the department's server. At each renewal the gateway checks the person against
-the current rules, and a person whose domain or admin listing has been removed
-is signed out there. A change to a person's groups takes effect at their next
-request, without waiting for a renewal.
+the department's server. A change to the rules takes effect at each person's
+next request. A person whose domain is removed from the allow-list is signed
+out, a person removed from the admin listing loses the admin pages, and a
+change to a person's groups applies straight away.
 
 However often it renews, no session lasts longer than a fixed time from the
 moment the person signed in: seven days by default, or the "Keep me signed in"

@@ -401,7 +401,7 @@ func TestGuestBreakGlassScanGrantsDirectly(t *testing.T) {
 }
 
 // Emptying OPEN_REGISTRATION_HOSTS ends every guest session at its next
-// renewal, the way de-listing a domain ends a user's: a guest only exists
+// request, the way de-listing a domain ends a user's: a guest only exists
 // because some host admits guests.
 func TestGuestSessionEndsWhenNoHostIsOpen(t *testing.T) {
 	srv, sender := guestServer(t)
@@ -409,15 +409,9 @@ func TestGuestSessionEndsWhenNoHostIsOpen(t *testing.T) {
 	loginGuest(t, c, sender, strangerAddr)
 
 	srv.cfg.OpenRegistrationHosts = nil
-	// Before renewal the session is still honoured: revocation takes effect at
-	// SESSION_RENEW_AFTER, as it does for everyone.
-	if rec := c.get("/verify", map[string]string{"X-Auth-Policy": "any;guests=allow"}); rec.Code != http.StatusOK {
-		t.Fatalf("guest before renewal = %d, want 200", rec.Code)
-	}
-	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
 	rec := c.get("/verify", map[string]string{"X-Auth-Policy": "any;guests=allow"})
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
-		t.Fatalf("guest at renewal with no open host should be sent to login; got %d %q", rec.Code, rec.Header().Get("Location"))
+		t.Fatalf("guest with no open host should be sent to login at once; got %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 	if ck := c.cookies[session.SessionCookie]; ck != nil && ck.Value != "" {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)

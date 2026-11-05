@@ -111,9 +111,11 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		renewed := false
 		// A session is renewed when it is due, at once when membership has
 		// changed since its groups were worked out (so a person removed from a
-		// group loses it at their next request), and at once when its admin
-		// tier has lapsed or been withdrawn (see tierStale).
-		if s.sessions.NeedsRenew(id, now) || s.groupsStale(id) || s.tierStale(id) {
+		// group loses it at their next request), at once when its admin tier
+		// has lapsed or been withdrawn (see tierStale), and at once when the
+		// policy no longer admits its person (see policyWithdrawn), which the
+		// renewal then refuses.
+		if s.sessions.NeedsRenew(id, now) || s.groupsStale(id) || s.tierStale(id) || s.policyWithdrawn(id) {
 			if !s.renewSession(w, r, id, now) {
 				return
 			}
@@ -1195,7 +1197,7 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	}
 	// A guest never gets the remember-me lifetime. Sessions are stateless, so
 	// the only ways to end one guest's access are emptying
-	// OPEN_REGISTRATION_HOSTS (every guest, at their next renewal) or rotating
+	// OPEN_REGISTRATION_HOSTS (every guest, at their next request) or rotating
 	// SESSION_SECRET (everyone). Keeping a stranger on the short lifetime bounds
 	// how long an unwanted guest can hold a cookie before renewal re-checks it.
 	ttl := s.cfg.SessionTTL
@@ -1270,6 +1272,19 @@ func (s *Server) tierStale(id *session.Identity) bool {
 	return authz.HasGroup(id.Groups, authz.RoleAdmin) != (s.tierRole(id, s.renewalRole(id)) == authz.RoleAdmin)
 }
 
+// policyWithdrawn reports whether the current policy refuses a normal or
+// guest session's person: their domain has been taken off the allow-list (and
+// they are not listed as an administrator), or no host admits guests any
+// longer. The policy is read from the configuration at start, so this is a
+// lookup in memory. Break-glass sessions are not policy logins and end at
+// their own short lifetime or when their card is revoked.
+func (s *Server) policyWithdrawn(id *session.Identity) bool {
+	if id.Kind != "" && id.Kind != session.KindGuest {
+		return false
+	}
+	return s.renewalRole(id) == authz.RoleDeny
+}
+
 // wantsAdminStep reports whether a refused session would be admitted with the
 // admin tier: a normal session of a current administrator whose second step
 // is not recent, on a route whose group list names admin.
@@ -1332,8 +1347,8 @@ func (s *Server) renewalRole(id *session.Identity) string {
 	if id.Kind == session.KindGuest {
 		// A guest stays a guest at renewal, but only while some host still
 		// admits guests: emptying OPEN_REGISTRATION_HOSTS ends every guest
-		// session at its next renewal, the same way de-listing a domain ends
-		// a user's. The address is re-checked for plausibility, nothing more.
+		// session at its next request (see policyWithdrawn), the same way
+		// de-listing a domain ends a user's. The address is re-checked for plausibility, nothing more.
 		if len(s.cfg.OpenRegistrationHosts) > 0 && authz.GuestEligible(id.Email) {
 			return authz.RoleGuest
 		}

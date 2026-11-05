@@ -201,3 +201,64 @@ func TestBreakGlassSessionCannotActOutsideItsCard(t *testing.T) {
 		t.Error("a break-glass session added a passkey")
 	}
 }
+
+// A domain taken off the allow-list, an administrator taken off the admin
+// listing, and guests turned off all take effect at the next request, as a
+// group change does, not at the next scheduled renewal.
+func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
+	t.Run("domain", func(t *testing.T) {
+		srv, sender := testServer(t)
+		c := newClient(t, srv.Handler())
+		loginAs(t, c, sender, "user@example.com", nil)
+		if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
+			t.Fatalf("initial /verify = %d, want 200", rec.Code)
+		}
+		srv.policy = authz.NewPolicy([]string{"other.org"}, []string{"admin@example.com"})
+		rec := c.get("/verify", protectedAny())
+		if rec.Code == http.StatusOK {
+			t.Fatal("de-listed person still admitted before the scheduled renewal")
+		}
+		if ck := c.cookies[session.SessionCookie]; ck != nil {
+			t.Errorf("de-listed person's session cookie not cleared: %v", ck)
+		}
+	})
+	t.Run("admin listing", func(t *testing.T) {
+		srv, sender := testServer(t)
+		c := newClient(t, srv.Handler())
+		loginAs(t, c, sender, "admin@example.com", nil)
+		if g := c.get("/verify", protectedAny()).Header().Get("Remote-Groups"); g != "admin" {
+			t.Fatalf("initial groups = %q, want admin", g)
+		}
+		srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
+		rec := c.get("/verify", protectedAny())
+		if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
+			t.Fatalf("de-listed admin = %d groups=%q, want 200 as user", rec.Code, rec.Header().Get("Remote-Groups"))
+		}
+		if rec := c.get("/admin/", nil); rec.Code == http.StatusOK {
+			t.Error("de-listed admin still reaches the admin pages")
+		}
+	})
+	t.Run("admin listing, outside the allow-list", func(t *testing.T) {
+		srv, sender := testServer(t)
+		srv.policy = authz.NewPolicy([]string{"example.com"}, []string{"admin@example.com", "boss@other.org"})
+		c := newClient(t, srv.Handler())
+		loginAs(t, c, sender, "boss@other.org", nil)
+		srv.policy = authz.NewPolicy([]string{"example.com"}, []string{"admin@example.com"})
+		if rec := c.get("/verify", protectedAny()); rec.Code == http.StatusOK {
+			t.Fatal("de-listed admin outside the allow-list still admitted")
+		}
+	})
+	t.Run("guests", func(t *testing.T) {
+		srv, sender := guestServer(t)
+		c := newClient(t, srv.Handler())
+		loginGuest(t, c, sender, "stranger@other.org")
+		guestRoute := map[string]string{"X-Auth-Policy": "any;guests=allow"}
+		if rec := c.get("/verify", guestRoute); rec.Code != http.StatusOK {
+			t.Fatalf("initial guest /verify = %d, want 200", rec.Code)
+		}
+		srv.cfg.OpenRegistrationHosts = nil
+		if rec := c.get("/verify", guestRoute); rec.Code == http.StatusOK {
+			t.Fatal("guest still admitted after guests were turned off")
+		}
+	})
+}
