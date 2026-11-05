@@ -930,6 +930,9 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		// An emailed code is the first factor only, so the session records
 		// totp=false. An administrator signs in like anyone else and is an
 		// ordinary user until the admin door (/totp) takes the second step.
+		// The step is recorded so the access log can show the sign-in was by
+		// email code; a passkey sign-in records its own step.
+		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeOK)
 		s.completeLogin(w, r, st.Email, role, rd, st.Remember, false, 0, now)
 	case store.ConsumeMismatch:
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeWrongCode)
