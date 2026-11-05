@@ -31,6 +31,9 @@ type Server struct {
 	secrets        *secretbox.Box
 	emailLimiter   *ratelimit.Limiter // codes sent, per (address, client IP)
 	emailCeiling   *ratelimit.Limiter // codes sent, per address from all IPs
+	emailDaily     *ratelimit.Limiter // the same, over a day
+	codeAlerts     dailyOnce          // administrator alerts about an address's codes
+	alertsPerDay   dailyCount         // administrator alerts, all addresses together
 	sendsPerIP     *ratelimit.Limiter // codes sent, per client IP across all addresses
 	ipLimiter      *ratelimit.Limiter // code requests, per client IP
 	wrongCodes     *ratelimit.Limiter // wrong email or TOTP codes, per client IP
@@ -92,6 +95,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		secrets:      secrets,
 		emailLimiter: ratelimit.New(cfg.RateLimitPerEmail.Count, cfg.RateLimitPerEmail.Window),
 		emailCeiling: limiterOr(cfg.RateLimitPerEmailCeiling, config.RateLimit{Count: 12, Window: time.Hour}),
+		emailDaily:   limiterOr(cfg.RateLimitPerEmailDaily, config.RateLimit{Count: 20, Window: 24 * time.Hour}),
 		sendsPerIP:   limiterOr(cfg.RateLimitSendsPerIP, config.RateLimit{Count: 60, Window: time.Hour}),
 		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
 		wrongCodes:   limiterOr(cfg.RateLimitWrongCodesPerIP, cfg.RateLimitPerIP),

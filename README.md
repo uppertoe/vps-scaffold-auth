@@ -33,7 +33,7 @@ browser ──▶ Caddy (app.example.com)
 
 1. Caddy calls `GET /verify` on every request to a protected app.
 2. No/invalid session → `/verify` returns a 302 to the login page.
-3. User enters email → a one-time code (`OTP_LENGTH` digits, 8 recommended) is emailed (single-use, ~10 min).
+3. User enters email → a one-time code (`OTP_LENGTH` digits, six by default) is emailed (single-use, ~10 min).
 4. User types the code → an HMAC-signed session cookie is set on `.example.com`
    (shared across all app subdomains).
 5. `/verify` now returns 200 plus `Remote-User`, `Remote-Email`, and
@@ -624,9 +624,10 @@ as a second address.
   from, and a shared egress IP (e.g. a hospital NAT) doesn't throttle many
   distinct users who type their codes correctly:
   - code sends are limited per (address, client IP) (`RATELIMIT_PER_EMAIL`), per
-    address across all IPs (`RATELIMIT_PER_EMAIL_CEILING`) and per client IP
-    across all addresses (`RATELIMIT_SENDS_PER_IP`); an address that signed in
-    from the same IP within 30 days passes the last two;
+    address across all IPs in an hour (`RATELIMIT_PER_EMAIL_CEILING`) and in a
+    day (`RATELIMIT_PER_EMAIL_DAILY`), and per client IP across all addresses
+    (`RATELIMIT_SENDS_PER_IP`); an address that signed in from the same IP
+    within 30 days passes the last three;
   - code requests are limited per client IP (`RATELIMIT_PER_IP`, generous);
   - wrong email or authenticator codes are limited per client IP
     (`RATELIMIT_WRONG_CODES_PER_IP`), refunded on a correct code;
@@ -634,6 +635,16 @@ as a second address.
     guessing against any one code. Break-glass scans use a separate,
   more permissive per-IP limit (`RATELIMIT_BREAKGLASS_PER_IP`) since the 128-bit
   token — not the IP throttle — is the real boundary there.
+- Six digits is the supported production default. Each code accepts at most
+  `OTP_MAX_TOTAL_ATTEMPTS` wrong guesses from all networks together, after
+  which the gateway deletes it. The count is stored with the code, so a restart
+  does not reset it. Codes sent to one address from unfamiliar networks are
+  limited per hour (`RATELIMIT_PER_EMAIL_CEILING`) and per day
+  (`RATELIMIT_PER_EMAIL_DAILY`). The administrators are emailed when an address
+  reaches the daily limit or a code is destroyed, so that a slow attempt is
+  noticed. Every code a guesser triggers is also emailed to the person. The
+  send limits are held in memory and reset when the gateway restarts, which
+  only the server's operator can do.
 - Open-redirect safe: the post-login target must be `https` and on a subdomain
   of the server domain. A login with no app target (or one resolving to the bare
   apex) lands on the auth host's own signed-in page instead — that host always

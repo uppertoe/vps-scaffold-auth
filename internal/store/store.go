@@ -23,6 +23,9 @@ const (
 	// ConsumeTooManyAttempts means the calling clientIP reached the wrong-guess
 	// cap. The code is left intact for other clients (it is not invalidated).
 	ConsumeTooManyAttempts
+	// ConsumeBurned means the code's total of wrong guesses from all sources
+	// is spent, and the code has been destroyed.
+	ConsumeBurned
 )
 
 // Break-glass code status values.

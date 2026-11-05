@@ -8,8 +8,8 @@ lastmod: 2026-10-31
 ## The code
 
 A person enters their email address, and the gateway emails them a code to
-type in. On the department's server the code has eight digits, and the
-gateway refuses any setting below six. A code lasts ten minutes and can be
+type in. The code has six digits, and the gateway refuses any setting below
+six. A code lasts ten minutes and can be
 used once. The email puts the code in its subject line, so that phones can
 offer to fill it in.
 
@@ -20,9 +20,12 @@ hash without the gateway's key.
 ## Limits on guessing
 
 On the department's server, ten wrong guesses at one code, from anywhere,
-destroy the code. With eight digits, an attacker's chance of guessing a given
-code is about one in ten million. The other limits stop one network or one
-attacker from wearing down the defences or flooding an inbox.
+destroy the code, so an attacker's chance of guessing a given code is about one
+in a hundred thousand. Four codes an hour, and twenty a day, can be sent to one
+address from an unfamiliar network, and each one reaches the person's inbox.
+The administrators are emailed when an address reaches the daily limit or a
+code is destroyed. The other limits stop one network or one attacker from
+wearing down the defences or flooding an inbox.
 
 | Limit | Gateway default | What it prevents |
 |---|---|---|
@@ -31,13 +34,14 @@ attacker from wearing down the defences or flooding an inbox.
 | Wrong codes from one network, across all addresses | 60 in 15 minutes | Guessing spread across many people's codes |
 | Code requests from one network | 60 in 15 minutes (300 on the department's server) | Scripted requests from one place |
 | Codes sent to one address from one network | 5 in 15 minutes | A stranger spending the owner's allowance |
-| Codes sent to one address from all networks | 12 an hour | A distributed flood of one inbox |
+| Codes sent to one address from all networks | 12 an hour (4 on the department's server) | A distributed flood of one inbox |
+| Codes sent to one address from all networks, in a day | 20 | A guesser who is in no hurry |
 | Codes sent from one network, across all addresses | 60 an hour (120 on the department's server) | Mail that would damage the sending account's reputation |
 
 The limits are shaped around the hospital's network. Many staff reach the
 server from one public address, so the limits per network are generous and a
 correct code costs nothing against them. An address that has signed in
-successfully from the same network in the past thirty days passes the two
+successfully from the same network in the past thirty days passes the three
 sending ceilings, so an attacker who floods an address cannot lock its owner
 out from their usual network.
 

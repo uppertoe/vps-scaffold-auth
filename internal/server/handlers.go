@@ -710,7 +710,11 @@ func (s *Server) allowSend(ctx context.Context, emailAddr, ip string, now time.T
 	// drain an owner's ceiling.
 	if s.sendsPerIP.Allow(ip) {
 		if s.emailCeiling.Allow(emailAddr) {
-			return true
+			if s.emailDaily.Allow(emailAddr) {
+				return true
+			}
+			s.emailCeiling.Refund(emailAddr)
+			s.alertAboutCodes(emailAddr, codeAlertDaily, now)
 		}
 		s.sendsPerIP.Refund(ip)
 	}
@@ -936,7 +940,10 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusUnauthorized, "code", pageData{
 			Error: "Incorrect code. Please try again.", Email: st.Email, Redirect: rd,
 		})
-	case store.ConsumeTooManyAttempts:
+	case store.ConsumeTooManyAttempts, store.ConsumeBurned:
+		if res == store.ConsumeBurned {
+			s.alertAboutCodes(st.Email, codeAlertBurned, now)
+		}
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeLockedOut)
 		s.sessions.ClearState(w)
 		s.render(w, http.StatusUnauthorized, "login", pageData{
