@@ -23,6 +23,8 @@ type pageData struct {
 	Message  string
 	Remember bool
 	LogoURL  string
+	// LogoType is the logo's content type, for the page's icon link.
+	LogoType string
 	// CodePlaceholder shows the email code's length in the code box (OTP_LENGTH
 	// zeros), filled in by render.
 	CodePlaceholder string
@@ -136,6 +138,7 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 	if data.LogoURL == "" {
 		if b, err := s.publicBranding(context.Background()); err == nil && b.logoVersion != "" {
 			data.LogoURL = "/logo.img?v=" + b.logoVersion
+			data.LogoType = b.logoType
 		}
 	}
 	// Fill domain-derived UX fields on the login page (hint line + email

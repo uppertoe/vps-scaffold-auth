@@ -171,6 +171,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /break", s.handleBreakGlass)
 	mux.HandleFunc("POST /break/activate", s.handleBreakGlassActivate)
 	mux.HandleFunc("GET /logo.img", s.handleLogo)
+	// The logo is also the favicon. Browsers ask for /favicon.ico on pages
+	// that link no icon (the admin pages, and anything a browser fetches
+	// before a page), and accept any image type there.
+	mux.HandleFunc("GET /favicon.ico", s.handleLogo)
 	// Passkeys (passkeys.go). Each handler answers 404 unless PASSKEYS_ENABLED.
 	mux.HandleFunc("GET /passkey.js", s.handlePasskeyScript)
 	mux.HandleFunc("POST /passkey/login", s.handlePasskeyLogin)

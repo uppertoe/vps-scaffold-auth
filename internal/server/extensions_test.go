@@ -258,8 +258,18 @@ func TestBrandingColorsPersistAndLogoServed(t *testing.T) {
 
 	// Login page references the logo at its versioned address.
 	logoSrc := `src="/logo.img?v=` + logoVersion([]byte{0x89, 'P', 'N', 'G', 1, 2}) + `"`
-	if body := c.get("/login", nil).Body.String(); !strings.Contains(body, logoSrc) {
+	body := c.get("/login", nil).Body.String()
+	if !strings.Contains(body, logoSrc) {
 		t.Errorf("login page does not show the branding logo at %s", logoSrc)
+	}
+	// The logo is also the page's icon, and the favicon for pages that link
+	// none.
+	iconLink := `<link rel="icon" href="/logo.img?v=` + logoVersion([]byte{0x89, 'P', 'N', 'G', 1, 2}) + `" type="image/png">`
+	if !strings.Contains(body, iconLink) {
+		t.Errorf("login page has no icon link %s", iconLink)
+	}
+	if rec := c.get("/favicon.ico", nil); rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" || rec.Body.Len() != 6 {
+		t.Errorf("favicon: status=%d type=%q len=%d, want the logo", rec.Code, rec.Header().Get("Content-Type"), rec.Body.Len())
 	}
 
 	// Admin branding page reflects saved colours.
@@ -467,5 +477,18 @@ func TestLoginPageDoesNotCopyLogo(t *testing.T) {
 	runtime.ReadMemStats(&after)
 	if perPage := (after.TotalAlloc - before.TotalAlloc) / 20; perPage > uint64(len(logo))/4 {
 		t.Errorf("each /login allocated %d bytes with a %d-byte logo", perPage, len(logo))
+	}
+}
+
+// With no logo set, the favicon is missing rather than empty, and the pages
+// link no icon.
+func TestNoFaviconWithoutALogo(t *testing.T) {
+	srv, _ := testServer(t)
+	c := newClient(t, srv.Handler())
+	if rec := c.get("/favicon.ico", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("favicon with no logo: status=%d, want 404", rec.Code)
+	}
+	if body := c.get("/login", nil).Body.String(); strings.Contains(body, `rel="icon"`) {
+		t.Error("login page links an icon with no logo set")
 	}
 }
