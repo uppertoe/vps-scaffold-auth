@@ -1799,8 +1799,9 @@ func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request
 	s.grantBreakGlass(w, r, code, ip, ua, now)
 }
 
-// handleLogo serves the global branding logo for the public login pages.
-// Returns 404 when no logo is configured.
+// handleLogo serves the global branding logo for the public login pages, at
+// /logo.img and as the favicon at /favicon.ico. Returns 404 when no logo is
+// configured, so a browser shows its default icon rather than an empty one.
 func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
 	logo, mime, v, err := s.siteLogo(r.Context())
 	if err != nil {
