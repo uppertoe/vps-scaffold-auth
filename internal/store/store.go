@@ -130,6 +130,10 @@ type GroupSyncState struct {
 	// administrator chose not to have applied automatically.
 	HeldSince time.Time
 	KeptHash  string
+	// AddedFrom maps an address the feed made from another (tom.darling
+	// listed for a roster's tom.darling2) to that address, from the last
+	// feed answer, so the Groups page can label it.
+	AddedFrom map[string]string
 }
 
 // Feed sync outcomes.

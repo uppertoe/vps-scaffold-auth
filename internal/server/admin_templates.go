@@ -223,6 +223,8 @@ type missingGroupView struct {
 type memberView struct {
 	Email     string
 	Permitted bool
+	// AddedFrom is the address a feed made this one from, if it did.
+	AddedFrom string
 }
 
 type codeView struct {

@@ -893,9 +893,13 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 		if err != nil {
 			return nil, nil, false, err
 		}
+		var addedFrom map[string]string
+		if _, fed := s.feedFor(g.Name); fed {
+			addedFrom = syncStates[g.Name].AddedFrom
+		}
 		mv := make([]memberView, 0, len(members))
 		for _, m := range members {
-			mv = append(mv, memberView{Email: m, Permitted: s.policy.Allowed(m)})
+			mv = append(mv, memberView{Email: m, Permitted: s.policy.Allowed(m), AddedFrom: addedFrom[m]})
 		}
 		hosts := routeGroups[g.Name]
 		inc := map[string]bool{}
