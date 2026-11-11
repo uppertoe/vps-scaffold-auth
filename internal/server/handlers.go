@@ -128,6 +128,11 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		// to login — they are already signed in; logging in again wouldn't help and
 		// would clobber a working (e.g. break-glass) session. Their cookie is left
 		// untouched, so access to apps they *are* allowed on keeps working.
+		// A guard that names an app is decided by app roles (app_roles.go).
+		if wantsRoles(r) {
+			s.verifyByRole(w, r, id, now, renewed)
+			return
+		}
 		policy := r.Header.Get(headerPolicy)
 		s.warnLegacyPolicy(r)
 		reqDomains, reqGroups, allowGuests, ok := parsePolicy(policy)
@@ -220,6 +225,11 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	// planted by a sibling host) are left alone: the clear carries the shared
 	// Domain, so it would delete the visitor's real cookie and leave the
 	// planted one, turning a one-app nuisance into a sign-out everywhere.
+	// A guard that names an app may admit a request with no session from a
+	// network its role is given to.
+	if wantsRoles(r) && s.verifyByNetwork(w, r) {
+		return
+	}
 	n := 0
 	for _, ck := range r.Cookies() {
 		if ck.Name == session.SessionCookie {
@@ -634,7 +644,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// code's was reset (or that never spent a send token) would answer the
 	// next wrong guess differently, and that difference is allow-list
 	// membership.
-	permitted := s.policy.LoginRole(emailAddr, s.isOpenHost(rd)) != authz.RoleDeny
+	permitted := s.loginRole(r.Context(), emailAddr, s.isOpenHost(rd)) != authz.RoleDeny
 	// Suppress a re-request while the last code is still fresh: a code minted
 	// within the cooldown window has expires_at > now + OTPTTL - cooldown.
 	// Deriving issue time from expiry is exact because SaveCode sets
@@ -926,7 +936,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		// strangers out: a guest session is the same whichever host minted it,
 		// and the boundary is CanAccessApp admitting guests only on routes that
 		// opt in. The host check only decides where a guest login is offered.
-		role := s.policy.LoginRole(st.Email, s.isOpenHost(rd))
+		role := s.loginRole(r.Context(), st.Email, s.isOpenHost(rd))
 		if role == authz.RoleDeny {
 			s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeDenied)
 			s.sessions.ClearState(w)
@@ -1364,7 +1374,13 @@ func (s *Server) renewalRole(id *session.Identity) string {
 		}
 		return authz.RoleDeny
 	}
-	return s.policy.Role(id.Email)
+	role := s.policy.Role(id.Email)
+	if role == authz.RoleDeny && id.Kind == "" && s.mayHoldRoleSnapshot(context.Background(), id) {
+		// Not on the allow-list, but holds an app role through a domain group,
+		// a list or a current person assignment (app_roles.go).
+		return authz.RoleUser
+	}
+	return role
 }
 
 // isOpenHost reports whether a (validated) post-login destination is on a host

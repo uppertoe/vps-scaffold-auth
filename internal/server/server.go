@@ -16,6 +16,7 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 	"github.com/uppertoe/vps-scaffold-auth/internal/ratelimit"
+	"github.com/uppertoe/vps-scaffold-auth/internal/roles"
 	"github.com/uppertoe/vps-scaffold-auth/internal/secretbox"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
@@ -58,6 +59,8 @@ type Server struct {
 	now               func() time.Time
 	loc               *time.Location // timezone for rendering timestamps in the admin UI
 	branding          brandingCache  // public branding snapshot (see logo_cache.go)
+	appRoles          roles.Manifest // each app's roles (APP_ROLES_FILE, see app_roles.go)
+	roleCache         roleCache      // role assignments as /verify reads them
 }
 
 // New constructs a Server from its dependencies.
@@ -114,6 +117,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		emailTmpl:    emailTmpl,
 		now:          time.Now,
 		loc:          loc,
+		appRoles:     loadAppRoles(cfg.AppRolesFile, cfg.Domain),
 	}
 	// Anti-replay reads the clock through s.now so tests sharing a fake clock stay
 	// consistent with the rest of the server.

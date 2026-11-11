@@ -182,6 +182,7 @@ type AdminEvent struct {
 type Group struct {
 	Name      string
 	Label     string
+	Kind      string // GroupKindList or GroupKindDomain
 	CreatedAt time.Time
 }
 
@@ -199,12 +200,16 @@ type BreakGlassCode struct {
 	Label       string
 	Note        string
 	TargetGroup string
-	TokenEnc    string
-	TokenHash   string
-	Redirect    string
-	Status      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// App and Role name the app role the card opens, under the app-roles
+	// model. Both are empty for a card that still targets a group.
+	App       string
+	Role      string
+	TokenEnc  string
+	TokenHash string
+	Redirect  string
+	Status    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // BreakGlassEvent records one use (or attempted use) of a break-glass code.
@@ -423,6 +428,31 @@ type Store interface {
 	ListGroupMembers(ctx context.Context, group string) ([]string, error)
 	// GroupsForEmail returns the group names an email belongs to.
 	GroupsForEmail(ctx context.Context, email string) ([]string, error)
+
+	// --- App roles (see roles.go) ---
+
+	// CreateGroupOfKind inserts a group of the given kind (GroupKindList or
+	// GroupKindDomain), ignoring a duplicate name as CreateGroup does. It
+	// refuses to change the kind of an existing group.
+	CreateGroupOfKind(ctx context.Context, name, label, kind string) error
+	// AddGroupDomain adds an email domain rule to a domain group. It refuses
+	// a list group (ErrGroupKind), a malformed domain (ErrInvalidDomain) and a
+	// public webmail domain (ErrWebmailDomain).
+	AddGroupDomain(ctx context.Context, group, domain string) error
+	RemoveGroupDomain(ctx context.Context, group, domain string) error
+	// ListGroupDomains returns domain group -> its domains, sorted.
+	ListGroupDomains(ctx context.Context) (map[string][]string, error)
+	// AddRoleAssignment gives an app role to a domain group, a list, a person,
+	// a network or guests (see RoleAssignment). Adding the same assignment
+	// again replaces its until, how and created_by.
+	AddRoleAssignment(ctx context.Context, a RoleAssignment) error
+	RemoveRoleAssignment(ctx context.Context, app, role, kind, ref string) error
+	// ListRoleAssignments returns the assignments of one app, or of every app
+	// when app is empty, ordered by app, role, kind and ref.
+	ListRoleAssignments(ctx context.Context, app string) ([]RoleAssignment, error)
+	// SetBreakGlassRole points a card at an app role. Only the user role may
+	// be given to a card (ErrCardRole), because its holder is not identified.
+	SetBreakGlassRole(ctx context.Context, id int64, app, role string) error
 
 	// --- Break-the-glass codes ---
 

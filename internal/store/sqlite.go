@@ -94,6 +94,31 @@ CREATE TABLE IF NOT EXISTS group_includes (
 	PRIMARY KEY (group_name, included)
 );
 CREATE INDEX IF NOT EXISTS idx_group_includes_included ON group_includes(included);
+-- A domain group admits everyone whose address is at one of its domains. It
+-- has no members; a list group (the default) has no domains.
+CREATE TABLE IF NOT EXISTS group_domains (
+	group_name TEXT NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+	domain     TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (group_name, domain)
+);
+-- Who holds each app role. kind is domain_group, list, person, network or
+-- guests; ref names the group, the address or the network, and is empty for
+-- guests. until (Unix seconds, 0 for none) ends a person's assignment; how
+-- records whether an administrator added the person or an invitation did.
+-- No foreign key on ref: a group's deletion is refused while it is assigned.
+CREATE TABLE IF NOT EXISTS role_assignments (
+	app        TEXT NOT NULL,
+	role       TEXT NOT NULL,
+	kind       TEXT NOT NULL,
+	ref        TEXT NOT NULL DEFAULT '',
+	until      INTEGER NOT NULL DEFAULT 0,
+	how        TEXT NOT NULL DEFAULT '',
+	created_by TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (app, role, kind, ref)
+);
+CREATE INDEX IF NOT EXISTS idx_role_assignments_ref ON role_assignments(kind, ref);
 -- The last sync of each feed-filled group, for the admin pages. Not tied to
 -- groups by a foreign key: a feed's state outlives a deleted group row.
 CREATE TABLE IF NOT EXISTS group_sync_state (
@@ -257,6 +282,11 @@ CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 	}); err != nil {
 		return err
 	}
+	if err := s.ensureColumns("groups", []column{
+		{"kind", "TEXT NOT NULL DEFAULT 'list'"},
+	}); err != nil {
+		return err
+	}
 	if err := s.ensureColumns("group_sync_state", []column{
 		{"held_since", "INTEGER NOT NULL DEFAULT 0"},
 		{"kept_hash", "TEXT NOT NULL DEFAULT ''"},
@@ -277,6 +307,8 @@ CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 		{"ov_logo_type", "TEXT NOT NULL DEFAULT ''"},
 		{"ov_glyph", "BLOB"},
 		{"ov_glyph_type", "TEXT NOT NULL DEFAULT ''"},
+		{"app", "TEXT"},
+		{"role", "TEXT"},
 	})
 }
 
@@ -688,7 +720,7 @@ func (s *SQLite) ClearTOTPFailures(ctx context.Context, email string) error {
 
 // ListGroups returns all groups ordered by name.
 func (s *SQLite) ListGroups(ctx context.Context) ([]Group, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, label, created_at FROM groups ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT name, label, kind, created_at FROM groups ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -697,7 +729,7 @@ func (s *SQLite) ListGroups(ctx context.Context) ([]Group, error) {
 	for rows.Next() {
 		var g Group
 		var created int64
-		if err := rows.Scan(&g.Name, &g.Label, &created); err != nil {
+		if err := rows.Scan(&g.Name, &g.Label, &g.Kind, &created); err != nil {
 			return nil, err
 		}
 		g.CreatedAt = time.Unix(created, 0)
@@ -793,6 +825,9 @@ func (s *SQLite) ListGroupIncludes(ctx context.Context) (map[string][]string, er
 // AddGroupMembers adds several addresses to a group in one transaction and
 // returns the ones that were not already members.
 func (s *SQLite) AddGroupMembers(ctx context.Context, group string, emails []string) ([]string, error) {
+	if err := s.refuseDomainGroup(ctx, group); err != nil {
+		return nil, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -951,8 +986,12 @@ func (s *SQLite) DeleteGroup(ctx context.Context, name string) error {
 	return err
 }
 
-// AddGroupMember adds an email to a group (idempotent).
+// AddGroupMember adds an email to a group (idempotent). A domain group has
+// no members, so it is refused with ErrGroupKind.
 func (s *SQLite) AddGroupMember(ctx context.Context, group, email string) error {
+	if err := s.refuseDomainGroup(ctx, group); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO group_members (group_name, email, created_at) VALUES (?, ?, ?)
 		 ON CONFLICT(group_name, email) DO NOTHING`,
@@ -1015,12 +1054,12 @@ func (s *SQLite) GroupsForEmail(ctx context.Context, email string) ([]string, er
 
 // --- Break-the-glass codes ---
 
-const bgColumns = `id, label, note, target_group, token_enc, token_hash, redirect, status, created_at, updated_at`
+const bgColumns = `id, label, note, target_group, COALESCE(app, ''), COALESCE(role, ''), token_enc, token_hash, redirect, status, created_at, updated_at`
 
 func scanBreakGlass(sc interface{ Scan(...any) error }) (BreakGlassCode, error) {
 	var c BreakGlassCode
 	var created, updated int64
-	err := sc.Scan(&c.ID, &c.Label, &c.Note, &c.TargetGroup, &c.TokenEnc, &c.TokenHash,
+	err := sc.Scan(&c.ID, &c.Label, &c.Note, &c.TargetGroup, &c.App, &c.Role, &c.TokenEnc, &c.TokenHash,
 		&c.Redirect, &c.Status, &created, &updated)
 	if err != nil {
 		return BreakGlassCode{}, err
@@ -1038,9 +1077,9 @@ func (s *SQLite) CreateBreakGlassCode(ctx context.Context, c BreakGlassCode) (in
 	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO break_glass_codes
-		 (label, note, target_group, token_enc, token_hash, redirect, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.Label, c.Note, c.TargetGroup, c.TokenEnc, c.TokenHash, c.Redirect, c.Status, now, now)
+		 (label, note, target_group, app, role, token_enc, token_hash, redirect, status, created_at, updated_at)
+		 VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?)`,
+		c.Label, c.Note, c.TargetGroup, c.App, c.Role, c.TokenEnc, c.TokenHash, c.Redirect, c.Status, now, now)
 	if err != nil {
 		return 0, err
 	}
