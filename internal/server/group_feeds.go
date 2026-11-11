@@ -321,7 +321,7 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 	// KeptHash survives every write, whatever the feed does in between, so
 	// a change an administrator kept cannot be revived by the roster
 	// returning something else for a round and then the same change again.
-	st := store.GroupSyncState{Group: group, LastAttempt: now, AcceptedList: prev.AcceptedList, KeptHash: prev.KeptHash}
+	st := store.GroupSyncState{Group: group, LastAttempt: now, AcceptedList: prev.AcceptedList, KeptHash: prev.KeptHash, AddedFrom: prev.AddedFrom}
 	finish := func(status, detail string) (store.GroupSyncState, error) {
 		st.Status, st.Detail = status, detail
 		if status == store.GroupSyncOK {
@@ -341,7 +341,7 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 		return st, nil
 	}
 
-	emails, skipped, err := s.fetchFeed(ctx, feed)
+	emails, addedFrom, skipped, err := s.fetchFeed(ctx, feed)
 	if err != nil {
 		detail := "The feed could not be used: " + err.Error() + "."
 		var un *feedUnreachable
@@ -353,6 +353,7 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 	if len(emails) == 0 {
 		return finish(store.GroupSyncEmpty, "The feed returned no usable addresses.")
 	}
+	st.AddedFrom = addedFrom
 	exists, err := s.groupExistsCtx(dbCtx, group)
 	if err != nil {
 		return finish(store.GroupSyncFailed, "The gateway could not read groups.")
@@ -575,18 +576,22 @@ func feedSetHash(emails []string) string {
 }
 
 // fetchFeed GETs the feed and returns its valid, de-duplicated, lower-cased
-// addresses and the count of entries skipped as not addresses. The body may
-// be a JSON array of strings or an object with an "emails" array.
-func (s *Server) fetchFeed(ctx context.Context, feed config.GroupFeed) ([]string, int, error) {
+// addresses, the feed's "added_from" labels for those addresses, and the
+// count of entries skipped as not addresses. The body may be a JSON array of
+// strings or an object with an "emails" array and, optionally, an
+// "added_from" object mapping a listed address to the address the feed made
+// it from (roster-insights lists tom.darling for a roster's tom.darling2).
+// The labels only describe members; they never add one.
+func (s *Server) fetchFeed(ctx context.Context, feed config.GroupFeed) ([]string, map[string]string, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feed.URL, nil)
 	if err != nil {
-		return nil, 0, errors.New("the feed URL is not usable")
+		return nil, nil, 0, errors.New("the feed URL is not usable")
 	}
 	req.Header.Set("Authorization", "Bearer "+feed.Token)
 	req.Header.Set("Accept", "application/json")
 	resp, err := s.feeds.client.Do(req)
 	if err != nil {
-		return nil, 0, &feedUnreachable{"the feed could not be reached"}
+		return nil, nil, 0, &feedUnreachable{"the feed could not be reached"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -596,29 +601,31 @@ func (s *Server) fetchFeed(ctx context.Context, feed config.GroupFeed) ([]string
 		// (404, or a redirect, which is never followed) and the like will not
 		// change by waiting, and are reported at once.
 		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
-			return nil, 0, &feedUnreachable{msg}
+			return nil, nil, 0, &feedUnreachable{msg}
 		}
-		return nil, 0, errors.New(msg)
+		return nil, nil, 0, errors.New(msg)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, feedMaxBody+1))
 	if err != nil {
-		return nil, 0, &feedUnreachable{"the feed could not be read"}
+		return nil, nil, 0, &feedUnreachable{"the feed could not be read"}
 	}
 	if len(body) > feedMaxBody {
-		return nil, 0, errors.New("the feed is larger than 1 MiB")
+		return nil, nil, 0, errors.New("the feed is larger than 1 MiB")
 	}
 	var list []string
+	var labels map[string]string
 	if err := json.Unmarshal(body, &list); err != nil {
 		var obj struct {
-			Emails []string `json:"emails"`
+			Emails    []string          `json:"emails"`
+			AddedFrom map[string]string `json:"added_from"`
 		}
 		if err2 := json.Unmarshal(body, &obj); err2 != nil || obj.Emails == nil {
-			return nil, 0, errors.New("the feed is not a JSON list of addresses")
+			return nil, nil, 0, errors.New("the feed is not a JSON list of addresses")
 		}
-		list = obj.Emails
+		list, labels = obj.Emails, obj.AddedFrom
 	}
 	if len(list) > feedMaxAddresses {
-		return nil, 0, fmt.Errorf("the feed lists more than %d addresses", feedMaxAddresses)
+		return nil, nil, 0, fmt.Errorf("the feed lists more than %d addresses", feedMaxAddresses)
 	}
 	seen := map[string]bool{}
 	var out []string
@@ -638,7 +645,17 @@ func (s *Server) fetchFeed(ctx context.Context, feed config.GroupFeed) ([]string
 		}
 	}
 	sort.Strings(out)
-	return out, skipped, nil
+	var addedFrom map[string]string
+	for k, v := range labels {
+		k, v = normalizeEmail(k), normalizeEmail(v)
+		if seen[k] && plainAddress(v) && k != v {
+			if addedFrom == nil {
+				addedFrom = map[string]string{}
+			}
+			addedFrom[k] = v
+		}
+	}
+	return out, addedFrom, skipped, nil
 }
 
 func (s *Server) groupExistsCtx(ctx context.Context, name string) (bool, error) {

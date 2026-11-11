@@ -73,7 +73,7 @@
   {{if .Members}}
   {{if .Feed}}
   <ul class="addresses">
-    {{range .Members}}<li>{{.Email}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</li>{{end}}
+    {{range .Members}}<li>{{.Email}}{{if .AddedFrom}} <span class="pill tag" title="The roster holds this person as {{.AddedFrom}}. The feed also lists this form of the address, because a renumbered account is often renamed back.">added from {{.AddedFrom}}</span>{{end}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</li>{{end}}
   </ul>
   {{else}}
   <div class="tablewrap" style="margin-top:22px">

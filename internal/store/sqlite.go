@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -259,6 +260,7 @@ CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 	if err := s.ensureColumns("group_sync_state", []column{
 		{"held_since", "INTEGER NOT NULL DEFAULT 0"},
 		{"kept_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"added_from", "TEXT NOT NULL DEFAULT ''"},
 	}); err != nil {
 		return err
 	}
@@ -852,8 +854,8 @@ func (s *SQLite) ApplyGroupSync(ctx context.Context, group string, add, remove [
 func (s *SQLite) SetGroupSyncState(ctx context.Context, st GroupSyncState) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO group_sync_state (group_name, last_attempt, last_success, status, detail, pending_add, pending_remove,
-		   pending_hash, pending_add_list, pending_remove_list, accepted_list, held_since, kept_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   pending_hash, pending_add_list, pending_remove_list, accepted_list, held_since, kept_hash, added_from)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(group_name) DO UPDATE SET
 		   last_attempt = excluded.last_attempt,
 		   last_success = CASE WHEN excluded.last_success > 0 THEN excluded.last_success ELSE group_sync_state.last_success END,
@@ -861,10 +863,10 @@ func (s *SQLite) SetGroupSyncState(ctx context.Context, st GroupSyncState) error
 		   pending_add = excluded.pending_add, pending_remove = excluded.pending_remove,
 		   pending_hash = excluded.pending_hash, pending_add_list = excluded.pending_add_list,
 		   pending_remove_list = excluded.pending_remove_list, accepted_list = excluded.accepted_list,
-		   held_since = excluded.held_since, kept_hash = excluded.kept_hash`,
+		   held_since = excluded.held_since, kept_hash = excluded.kept_hash, added_from = excluded.added_from`,
 		st.Group, st.LastAttempt.Unix(), unixOrZero(st.LastSuccess), st.Status, st.Detail, len(st.PendingAddList), len(st.PendingRemoveList),
 		st.PendingHash, strings.Join(st.PendingAddList, "\n"), strings.Join(st.PendingRemoveList, "\n"), strings.Join(st.AcceptedList, "\n"),
-		unixOrZero(st.HeldSince), st.KeptHash)
+		unixOrZero(st.HeldSince), st.KeptHash, joinPairs(st.AddedFrom))
 	return err
 }
 
@@ -872,7 +874,7 @@ func (s *SQLite) SetGroupSyncState(ctx context.Context, st GroupSyncState) error
 func (s *SQLite) ListGroupSyncStates(ctx context.Context) (map[string]GroupSyncState, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT group_name, last_attempt, last_success, status, detail, pending_add, pending_remove,
-		        pending_hash, pending_add_list, pending_remove_list, accepted_list, held_since, kept_hash FROM group_sync_state`)
+		        pending_hash, pending_add_list, pending_remove_list, accepted_list, held_since, kept_hash, added_from FROM group_sync_state`)
 	if err != nil {
 		return nil, err
 	}
@@ -882,11 +884,12 @@ func (s *SQLite) ListGroupSyncStates(ctx context.Context) (map[string]GroupSyncS
 		var st GroupSyncState
 		var attempt, success, heldSince int64
 		var nAdd, nRemove int
-		var addList, removeList, acceptedList string
+		var addList, removeList, acceptedList, addedFrom string
 		if err := rows.Scan(&st.Group, &attempt, &success, &st.Status, &st.Detail, &nAdd, &nRemove,
-			&st.PendingHash, &addList, &removeList, &acceptedList, &heldSince, &st.KeptHash); err != nil {
+			&st.PendingHash, &addList, &removeList, &acceptedList, &heldSince, &st.KeptHash, &addedFrom); err != nil {
 			return nil, err
 		}
+		st.AddedFrom = splitPairs(addedFrom)
 		st.PendingAddList, st.PendingRemoveList = splitLines(addList), splitLines(removeList)
 		st.AcceptedList = splitLines(acceptedList)
 		st.LastAttempt = time.Unix(attempt, 0)
@@ -899,6 +902,33 @@ func (s *SQLite) ListGroupSyncStates(ctx context.Context) (map[string]GroupSyncS
 		out[st.Group] = st
 	}
 	return out, rows.Err()
+}
+
+// joinPairs stores a map as sorted "key<TAB>value" lines; splitPairs reads it.
+func joinPairs(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, k := range keys {
+		lines = append(lines, k+"\t"+m[k])
+	}
+	return strings.Join(lines, "\n")
+}
+
+func splitPairs(s string) map[string]string {
+	if s == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(s, "\n") {
+		if k, v, ok := strings.Cut(line, "\t"); ok {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func splitLines(s string) []string {

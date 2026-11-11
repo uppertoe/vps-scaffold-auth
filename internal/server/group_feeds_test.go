@@ -1199,3 +1199,46 @@ func TestARotatingGroupChangesOverAfterTheWait(t *testing.T) {
 		t.Fatalf("an empty list for a rotating group = %+v", st)
 	}
 }
+
+// A feed may say which listed addresses it made from another (roster-insights
+// lists tom.darling for a roster's tom.darling2). The gateway keeps those
+// labels for listed members only, never adds a member from them, and shows
+// them on the group page.
+func TestFeedAddedFromLabels(t *testing.T) {
+	var body atomic.Value
+	var hits atomic.Int32
+	body.Store(`{"emails":["tom.darling2@example.com","Tom.Darling@example.com"],
+		"added_from":{"tom.darling@example.com":"Tom.Darling2@example.com",
+		              "ghost@example.com":"tom.darling2@example.com",
+		              "tom.darling2@example.com":"tom.darling2@example.com"}}`)
+	ts := feedEndpoint(t, &body, &hits)
+	srv, sender := feedServer(t, ts.URL, "")
+	ctx := context.Background()
+	if st, err := srv.syncFeed(ctx, "rch-consultants", "group feed", ""); err != nil || st.Status != store.GroupSyncOK {
+		t.Fatalf("sync = %v, %v", st.Status, err)
+	}
+	if got := members(t, srv); !reflect.DeepEqual(got, []string{"tom.darling2@example.com", "tom.darling@example.com"}) {
+		t.Fatalf("members = %v", got)
+	}
+	want := map[string]string{"tom.darling@example.com": "tom.darling2@example.com"}
+	if got := syncState(t, srv).AddedFrom; !reflect.DeepEqual(got, want) {
+		t.Errorf("stored labels = %v, want %v", got, want)
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	page := c.get("/admin/groups/rch-consultants", nil).Body.String()
+	if !strings.Contains(page, "added from tom.darling2@example.com") || strings.Contains(page, "ghost@example.com") {
+		t.Error("group page does not label the added address, or shows a label for a non-member")
+	}
+	// A failed fetch keeps the labels; a plain list clears them.
+	body.Store("500")
+	srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+	if got := syncState(t, srv).AddedFrom; !reflect.DeepEqual(got, want) {
+		t.Errorf("labels after a failed fetch = %v", got)
+	}
+	body.Store(`["tom.darling2@example.com","tom.darling@example.com"]`)
+	srv.syncFeed(ctx, "rch-consultants", "group feed", "")
+	if got := syncState(t, srv).AddedFrom; len(got) != 0 {
+		t.Errorf("labels after a plain list = %v", got)
+	}
+}
