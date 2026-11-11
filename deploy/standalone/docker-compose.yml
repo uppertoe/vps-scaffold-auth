@@ -39,7 +39,7 @@ services:
   auth:
     # Latest build, for kicking the tyres. Pin to a :vX.Y.Z tag (ideally by
     # digest) in production. The image is distroless and runs as nonroot (65532).
-    image: ghcr.io/uppertoe/vps-scaffold-auth:latest@sha256:0566817cc8cd3a3fb49e9e1c335464e46d4784bdb1a9b3a966ea4e78f4a155c6
+    image: ghcr.io/uppertoe/vps-scaffold-auth:latest@sha256:d41a76394f6a28dbc099fb26d3b43319e0349b680c00fd891d3104de6b663fb9
     restart: unless-stopped
     env_file:
       - path: ./.env
