@@ -292,3 +292,15 @@ func (s *Server) loginRole(ctx context.Context, email string, openHost bool) str
 	}
 	return role
 }
+
+// currentRole is policy.Role made role-aware the way loginRole is: an address
+// the allow-list refuses but that holds an app role through a domain group, a
+// list or a current person assignment counts as an ordinary user. With the
+// app-roles model off it is exactly policy.Role.
+func (s *Server) currentRole(ctx context.Context, email string) string {
+	role := s.policy.Role(email)
+	if role == authz.RoleDeny && s.mayHoldRoleNow(ctx, email) {
+		return authz.RoleUser
+	}
+	return role
+}

@@ -80,12 +80,12 @@ func (d *dailyCount) allow(limit int, now time.Time) bool {
 }
 
 // alertAboutCodes emails the administrators about an address's sign-in codes,
-// at most once a day for each address. Only an address the policy permits is
-// reported: a code for any other address is a decoy that sends no mail, and a
-// stranger could otherwise name addresses of their choosing in the
-// administrators' inboxes.
+// at most once a day for each address. Only an address that may sign in is
+// reported (the allow-list, or an app role; see currentRole): a code for any
+// other address is a decoy that sends no mail, and a stranger could otherwise
+// name addresses of their choosing in the administrators' inboxes.
 func (s *Server) alertAboutCodes(addr string, kind codeAlert, now time.Time) {
-	if s.policy.Role(addr) == authz.RoleDeny || len(s.cfg.AdminEmails) == 0 {
+	if len(s.cfg.AdminEmails) == 0 || s.currentRole(context.Background(), addr) == authz.RoleDeny {
 		return
 	}
 	if !s.codeAlerts.due(addr, now) {

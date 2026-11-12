@@ -309,7 +309,7 @@ func (s *Server) passkeySession(r *http.Request) (*session.Identity, string, boo
 	if !ok || id.Kind != "" {
 		return nil, "", false
 	}
-	role := s.policy.Role(id.Email)
+	role := s.currentRole(r.Context(), id.Email)
 	if role != authz.RoleUser && role != authz.RoleAdmin {
 		return nil, "", false
 	}
