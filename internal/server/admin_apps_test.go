@@ -401,3 +401,21 @@ func TestDomainGroupPages(t *testing.T) {
 		t.Error("groups page does not list domain groups and lists apart")
 	}
 }
+
+// A user role with no holders of its own is still reached by the holders of
+// the app's other roles, so its row is not shown as closed.
+func TestUserRowCountsOtherRoles(t *testing.T) {
+	srv, _, c := appsAdmin(t)
+	mustDomainGroup(t, srv, "staff", "example.com")
+	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignDomainGroup, Ref: "staff"})
+	body := html.UnescapeString(c.get("/admin/apps?q=enquiries", nil).Body.String())
+	if !strings.Contains(body, "Only the holders of Administrator reach these paths.") {
+		t.Error("the user row does not name the other role")
+	}
+	if strings.Contains(body, "Fellowship enquiries</a>, so nobody can reach it.") {
+		t.Error("the attention line calls the app unreachable")
+	}
+	if strings.Contains(body, ">Closed<") {
+		t.Error("the user row is shown as closed")
+	}
+}

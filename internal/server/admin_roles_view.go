@@ -292,6 +292,25 @@ type reachView struct {
 	Title  string
 }
 
+// msgNobodyHolds and msgOnlyOtherRoles are the empty user row's wording. The
+// second is PROPOSED: a user role with no holders of its own is still reached
+// by the holders of the app's other roles.
+const (
+	msgNobodyHolds    = "Nobody holds this role."
+	msgOnlyOtherRoles = "Only the holders of %s reach these paths."
+)
+
+// level is the step a reach cell shows, 0 when closed.
+func (r reachView) level() int {
+	n := 0
+	for _, b := range r.Bars {
+		if b {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Server) reach(level int) reachView {
 	bars := make([]bool, 6)
 	for i := range bars {
@@ -356,6 +375,7 @@ type roleRowView struct {
 	PathsMono       bool
 	Tokens          []tokenView
 	Nobody          bool
+	NobodyText      string
 	Reach           reachView
 	Mark            string // "hit" or "dim" while an address or holder is checked
 	Editable        bool
@@ -516,8 +536,27 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 		row.Tokens = append(row.Tokens, tokenView{Icon: iconCard, Tone: "card", Label: capFirst(countWords(len(cards), "card", "cards")), Title: strings.Join(cards, ", ")})
 		level = max(level, 1)
 	}
-	row.Reach = s.reach(level)
 	row.Nobody = len(row.Tokens) == 0
+	row.NobodyText = msgNobodyHolds
+	if role == roles.UserRole {
+		// Any role in an app admits its user paths, so the user row's widest
+		// access is the widest of every role in the app, not only its own.
+		var others []string
+		for r := range a.Roles {
+			if r == roles.UserRole {
+				continue
+			}
+			if l := s.roleRow(w, a, r, false, nil, nil).Reach.level(); l > 0 {
+				level = max(level, l)
+				others = append(others, a.Roles[r])
+			}
+		}
+		if row.Nobody && len(others) > 0 {
+			sort.Strings(others)
+			row.NobodyText = fmt.Sprintf(msgOnlyOtherRoles, joinAnd(others))
+		}
+	}
+	row.Reach = s.reach(level)
 	if f.active() {
 		hit := false
 		if f.address != "" {

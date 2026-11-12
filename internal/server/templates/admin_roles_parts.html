@@ -218,7 +218,7 @@
   {{range .Rows}}
   <div class="rrow{{if .Mark}} {{.Mark}}{{end}}">
     <div class="rrole" title="{{.Label}}{{if .Paths}}: {{.Paths}}{{end}}"><b>{{.Label}}</b><span{{if .PathsMono}} class="p"{{end}}>{{.Paths}}</span></div>
-    <div class="rwho" data-fit>{{range .Tokens}}{{template "token" .}}{{end}}{{if .Tokens}}<span class="tok more" hidden></span>{{end}}{{if and .Nobody (not .Editable)}}<span class="nobody">Nobody holds this role.</span>{{end}}{{if .Editable}}<a class="tok add" href="#{{.PickID}}" title="Give this role to a group, a list or a setting">{{template "ico" "k-plus"}}<span class="l">{{.AddText}}</span></a>{{end}}</div>
+    <div class="rwho" data-fit>{{range .Tokens}}{{template "token" .}}{{end}}{{if .Tokens}}<span class="tok more" hidden></span>{{end}}{{if and .Nobody (not .Editable)}}<span class="nobody">{{.NobodyText}}</span>{{end}}{{if .Editable}}<a class="tok add" href="#{{.PickID}}" title="Give this role to a group, a list or a setting">{{template "ico" "k-plus"}}<span class="l">{{.AddText}}</span></a>{{end}}</div>
     {{template "reach" .Reach}}
   </div>
   {{end}}
