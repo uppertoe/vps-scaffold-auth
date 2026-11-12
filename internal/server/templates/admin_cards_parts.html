@@ -20,6 +20,7 @@
   .clist .rrow.colhead { height: 36px; }
   .clist .rrow.colhead > div:first-child { padding-left: 0; }
   .clist .rrow.app { grid-template-columns: minmax(0, 1fr) auto; height: 40px; }
+  .clist .rrow.app .name { grid-column: 1; }
   .clist .rrow > div { min-width: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .clist .rrow.withdrawn > div:not(:last-child) { opacity: .5; }
   .clist .loc b { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
@@ -55,7 +56,7 @@
   .cfacts dd > span { overflow: hidden; text-overflow: ellipsis; }
   .acthead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 24px 0 8px; }
   .acthead h2 { margin: 0; }
-  .tbl.events .rrow { grid-template-columns: 140px 220px minmax(0, 1fr) 140px; }
+  .tbl.events .rrow { grid-template-columns: 112px 196px minmax(0, 1fr) 112px; }
   .pill.tag { background: var(--tag-bg); color: var(--tag-fg); border-color: var(--tag-line); }
   .pill.test { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
 
@@ -156,11 +157,14 @@
     .clist .rrow > div:nth-child(3), .clist .rrow > div:nth-child(4), .clist .rrow > div:nth-child(5) { display: none; }
     .clist .rrow.colhead { display: none; }
     .clist .rrow.app { grid-template-columns: minmax(0, 1fr) auto; height: 40px; }
+  .clist .rrow.app .name { grid-column: 1; }
     .clist .rrow.app .host { display: none; }
     .tbl.events .rrow { grid-template-columns: minmax(0, 1fr); }
     .twocol { grid-template-columns: 1fr; }
     .twocol p { min-height: 0; }
     .cfacts > div { grid-template-columns: 1fr; gap: 2px; padding: 8px 16px; }
+    .cfacts dd { flex-wrap: wrap; white-space: normal; row-gap: 2px; }
+    .cfacts dd > span { overflow-wrap: anywhere; }
     .choice { grid-template-columns: 20px minmax(0, 1fr); }
     .choice .reach { display: none; }
     .cgrid.three { grid-template-columns: 1fr; }
