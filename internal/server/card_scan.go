@@ -222,7 +222,7 @@ func (s *Server) wrongAppPage(ctx context.Context, id *session.Identity, rd stri
 		return nil, false
 	}
 	v := &scanView{Variant: scanWrongApp, Label: code.Label, App: s.cardAppLabel(code),
-		AppURL: authz.SafeRedirect(code.Redirect, s.cfg.Domain, s.cfg.DefaultRedirect),
+		AppURL:   authz.SafeRedirect(code.Redirect, s.cfg.Domain, s.cfg.DefaultRedirect),
 		LoginURL: s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd)}
 	s.scanBand(ctx, code, v)
 	return v, true

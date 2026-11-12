@@ -194,7 +194,7 @@ type colourField struct {
 
 type choiceView struct {
 	Value, Title, Detail, Caption string
-	Checked, Rec         bool
+	Checked, Rec                  bool
 }
 
 func (s *Server) handleAdminDesignNew(w http.ResponseWriter, r *http.Request) {

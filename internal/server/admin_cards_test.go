@@ -90,7 +90,7 @@ func TestNewCardOpensOnlyCardPagesAsUser(t *testing.T) {
 		return url.Values{"csrf": {csrfOf(t, c, "/admin/break/new")}, "label": {"PICU bed 4"}, "design": {strconv.FormatInt(d.ID, 10)}}
 	}
 	for name, extra := range map[string]url.Values{
-		"a path no card page names": {"app": {"neverdrugs"}, "page.neverdrugs": {"/admin"}},
+		"a path no card page names":  {"app": {"neverdrugs"}, "page.neverdrugs": {"/admin"}},
 		"an app with no card pages":  {"app": {"caffeine"}, "page.caffeine": {"/"}},
 		"an app not in the manifest": {"app": {"roster"}, "page.roster": {"/"}},
 	} {

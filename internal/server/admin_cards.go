@@ -950,4 +950,3 @@ func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) 
 	s.emailOtherAdmins(s.actor(r), fmt.Sprintf(msgCardReplaceSubj, c.Label), []string{c.Label + " · replaced, and the printed card no longer works"})
 	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(c.ID, 10), "card-reminted", "")
 }
-
