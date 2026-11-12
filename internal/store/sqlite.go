@@ -768,6 +768,17 @@ func (s *SQLite) AddGroupInclude(ctx context.Context, group, included string) er
 	if group == included {
 		return ErrIncludeCycle
 	}
+	// Only a list includes another list: a domain group holds domains, not
+	// people, so it neither includes nor is included.
+	for _, g := range []string{group, included} {
+		kind, ok, err := s.groupKind(ctx, g)
+		if err != nil {
+			return err
+		}
+		if ok && kind != GroupKindList {
+			return ErrGroupKind
+		}
+	}
 	// Check and insert in one transaction, so two opposite includes posted at
 	// once cannot both pass the check.
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -856,6 +867,9 @@ func (s *SQLite) AddGroupMembers(ctx context.Context, group string, emails []str
 // the audit events, in one transaction: the change and its record succeed or
 // fail together.
 func (s *SQLite) ApplyGroupSync(ctx context.Context, group string, add, remove []string, events []AdminEvent) error {
+	if err := s.refuseDomainGroup(ctx, group); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -980,10 +994,26 @@ func unixOrZero(t time.Time) int64 {
 	return t.Unix()
 }
 
-// DeleteGroup removes a group; memberships cascade.
+// DeleteGroup removes a group; memberships, includes and domain rules
+// cascade. A group that a role assignment names is refused with
+// ErrGroupHoldsRoles, checked in the same transaction as the delete.
 func (s *SQLite) DeleteGroup(ctx context.Context, name string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM groups WHERE name = ?`, name)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	n, err := groupRoleCountIn(ctx, tx, name)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrGroupHoldsRoles
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM groups WHERE name = ?`, name); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // AddGroupMember adds an email to a group (idempotent). A domain group has

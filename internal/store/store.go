@@ -402,7 +402,8 @@ type Store interface {
 	// CreateGroup inserts a group (no-op if it already exists).
 	CreateGroup(ctx context.Context, name, label string) error
 	// AddGroupInclude makes every member of included a member of group too;
-	// ErrIncludeCycle refuses a self-include or a cycle.
+	// ErrIncludeCycle refuses a self-include or a cycle, and ErrGroupKind
+	// an include where either group is not a list.
 	AddGroupInclude(ctx context.Context, group, included string) error
 	RemoveGroupInclude(ctx context.Context, group, included string) error
 	// ListGroupIncludes returns group -> included groups.
@@ -418,7 +419,8 @@ type Store interface {
 	// UpdateGroupLabel changes an existing group's display label. It reports
 	// whether the group exists.
 	UpdateGroupLabel(ctx context.Context, name, label string) (bool, error)
-	// DeleteGroup removes a group and (via cascade) its memberships.
+	// DeleteGroup removes a group and (via cascade) its memberships. A group
+	// a role assignment names is refused with ErrGroupHoldsRoles.
 	DeleteGroup(ctx context.Context, name string) error
 	// AddGroupMember adds an email to a group (idempotent).
 	AddGroupMember(ctx context.Context, group, email string) error
@@ -447,6 +449,11 @@ type Store interface {
 	// again replaces its until, how and created_by.
 	AddRoleAssignment(ctx context.Context, a RoleAssignment) error
 	RemoveRoleAssignment(ctx context.Context, app, role, kind, ref string) error
+	// ApplyRoleChanges removes take and adds give (each checked as
+	// AddRoleAssignment checks it) and records events, in one transaction.
+	ApplyRoleChanges(ctx context.Context, give, take []RoleAssignment, events []AdminEvent) error
+	// GroupRoleCount returns how many role assignments name a group.
+	GroupRoleCount(ctx context.Context, group string) (int, error)
 	// ListRoleAssignments returns the assignments of one app, or of every app
 	// when app is empty, ordered by app, role, kind and ref.
 	ListRoleAssignments(ctx context.Context, app string) ([]RoleAssignment, error)

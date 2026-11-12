@@ -1,0 +1,47 @@
+# A sample app-roles manifest (APP_ROLES_FILE) for running the gateway locally.
+# The format is described at the top of internal/roles/manifest.go. Fields are
+# separated by one TAB. Phase 3 of the app-roles work renders this file from the
+# apps' Caddy snippets; until then it is written by hand.
+
+caffeine	user	User	caffeine.{$DOMAIN}
+@label	caffeine	Caffeine
+@source	caffeine	apps/caffeine/caffeine.caddy
+@path	caffeine	*	user
+
+enquiries	user	User	enquiries.{$DOMAIN}
+enquiries	admin	Administrator	enquiries.{$DOMAIN}
+@label	enquiries	Fellowship enquiries
+@source	enquiries	apps/fellows/fellows.caddy
+@open	enquiries	/ /faq /privacy	The landing page, the questions and the privacy policy are read before a person signs in
+@open	enquiries	/static/* /healthz	The health check, and the page's styles and scripts
+@path	enquiries	/admin/*	admin
+@path	enquiries	*	user
+
+handbook	user	User	handbook.{$DOMAIN}
+@label	handbook	Handbook
+@source	handbook	apps/orchestrator/orchestrator.caddy
+@path	handbook	*	user
+@card-page	handbook	/	Handbook home page
+@card-page	handbook	/emergencies	Emergency protocols
+@card-page	handbook	/drugs	Drug doses
+
+neverdrugs	user	User	neverdrugs.{$DOMAIN}
+@label	neverdrugs	NeverDrugs
+@source	neverdrugs	apps/neverdrugs/neverdrugs.caddy
+@path	neverdrugs	*	user
+@card-page	neverdrugs	/	NeverDrugs home page
+@card-page	neverdrugs	/search	Drug search
+
+prototype-x	user	User	prototype-x.{$DOMAIN}
+@label	prototype-x	Prototype X
+@source	prototype-x	apps/prototype-x/prototype-x.caddy
+@path	prototype-x	*	user
+
+roster	user	User	roster.{$DOMAIN}
+roster	admin	Administrator	roster.{$DOMAIN}
+@label	roster	Roster insights
+@source	roster	apps/roster-insights/roster-insights.caddy
+@open	roster	/on-call/calendar/*	A consultant's calendar app cannot sign in, so the app checks a token of its own
+@open	roster	/feeds/staff/*	The gateway's group sync fetches these, and the app checks the bearer token
+@path	roster	/admin/*	admin
+@path	roster	*	user

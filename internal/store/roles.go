@@ -50,6 +50,9 @@ var (
 	ErrInvalidAssignment = errors.New("invalid role assignment")
 	// ErrNoSuchGroup refuses an assignment or domain rule for a missing group.
 	ErrNoSuchGroup = errors.New("no such group")
+	// ErrGroupHoldsRoles refuses deleting a group that a role assignment
+	// names; the assignments are removed first, on each app's page.
+	ErrGroupHoldsRoles = errors.New("the group holds app roles")
 	// ErrCardRole refuses giving a card any role but RoleUser.
 	ErrCardRole = errors.New("a break-glass card can hold the user role only")
 )
@@ -105,10 +108,21 @@ func NormalizeDomain(domain string) (string, error) {
 	return d, nil
 }
 
+// querier is what both *sql.DB and *sql.Tx offer, so a check can run inside
+// or outside a transaction.
+type querier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 // groupKind returns a group's kind; ok is false when the group is missing.
 func (s *SQLite) groupKind(ctx context.Context, name string) (string, bool, error) {
+	return groupKindIn(ctx, s.db, name)
+}
+
+func groupKindIn(ctx context.Context, q querier, name string) (string, bool, error) {
 	var kind string
-	err := s.db.QueryRowContext(ctx, `SELECT kind FROM groups WHERE name = ?`, name).Scan(&kind)
+	err := q.QueryRowContext(ctx, `SELECT kind FROM groups WHERE name = ?`, name).Scan(&kind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -203,6 +217,15 @@ func (s *SQLite) ListGroupDomains(ctx context.Context) (map[string][]string, err
 // AddRoleAssignment inserts or replaces an assignment after checking that
 // its fields fit its kind.
 func (s *SQLite) AddRoleAssignment(ctx context.Context, a RoleAssignment) error {
+	if err := checkAssignment(ctx, s.db, &a); err != nil {
+		return err
+	}
+	return insertAssignment(ctx, s.db, a)
+}
+
+// checkAssignment normalises a and checks that its fields fit its kind and
+// that a group it names exists and is of the right kind.
+func checkAssignment(ctx context.Context, q querier, a *RoleAssignment) error {
 	a.App = strings.TrimSpace(a.App)
 	a.Role = strings.TrimSpace(a.Role)
 	a.Ref = strings.TrimSpace(a.Ref)
@@ -215,7 +238,7 @@ func (s *SQLite) AddRoleAssignment(ctx context.Context, a RoleAssignment) error 
 		if a.Kind == AssignList {
 			want = GroupKindList
 		}
-		kind, ok, err := s.groupKind(ctx, a.Ref)
+		kind, ok, err := groupKindIn(ctx, q, a.Ref)
 		if err != nil {
 			return err
 		}
@@ -247,11 +270,15 @@ func (s *SQLite) AddRoleAssignment(ctx context.Context, a RoleAssignment) error 
 	default:
 		return ErrInvalidAssignment
 	}
+	return nil
+}
+
+func insertAssignment(ctx context.Context, q querier, a RoleAssignment) error {
 	var until int64
 	if !a.Until.IsZero() {
 		until = a.Until.Unix()
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := q.ExecContext(ctx,
 		`INSERT INTO role_assignments (app, role, kind, ref, until, how, created_by, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(app, role, kind, ref) DO UPDATE SET
@@ -260,12 +287,68 @@ func (s *SQLite) AddRoleAssignment(ctx context.Context, a RoleAssignment) error 
 	return err
 }
 
+// ApplyRoleChanges removes the take assignments and adds the give ones in
+// one transaction, recording events with them: every change and its record
+// is saved, or none is. Each give is checked as AddRoleAssignment checks it.
+func (s *SQLite) ApplyRoleChanges(ctx context.Context, give, take []RoleAssignment, events []AdminEvent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	for _, a := range take {
+		if err := removeAssignment(ctx, tx, a.App, a.Role, a.Kind, a.Ref); err != nil {
+			return err
+		}
+	}
+	for _, a := range give {
+		if err := checkAssignment(ctx, tx, &a); err != nil {
+			return err
+		}
+		if err := insertAssignment(ctx, tx, a); err != nil {
+			return err
+		}
+	}
+	for _, e := range events {
+		if err := insertAdminEvent(ctx, tx, e); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func insertAdminEvent(ctx context.Context, q querier, e AdminEvent) error {
+	_, err := q.ExecContext(ctx,
+		`INSERT INTO admin_events (actor, action, target, detail, client_ip, user_agent, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		e.Actor, e.Action, e.Target, e.Detail, e.ClientIP, e.UserAgent, e.CreatedAt.Unix())
+	return err
+}
+
+// GroupRoleCount returns how many role assignments name group, as a domain
+// group or as a list.
+func (s *SQLite) GroupRoleCount(ctx context.Context, group string) (int, error) {
+	return groupRoleCountIn(ctx, s.db, group)
+}
+
+func groupRoleCountIn(ctx context.Context, q querier, group string) (int, error) {
+	var n int
+	err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM role_assignments WHERE kind IN (?, ?) AND ref = ?`,
+		AssignDomainGroup, AssignList, group).Scan(&n)
+	return n, err
+}
+
 // RemoveRoleAssignment deletes one assignment.
 func (s *SQLite) RemoveRoleAssignment(ctx context.Context, app, role, kind, ref string) error {
+	return removeAssignment(ctx, s.db, app, role, kind, ref)
+}
+
+func removeAssignment(ctx context.Context, q querier, app, role, kind, ref string) error {
 	if kind == AssignPerson {
 		ref = strings.ToLower(strings.TrimSpace(ref))
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := q.ExecContext(ctx,
 		`DELETE FROM role_assignments WHERE app = ? AND role = ? AND kind = ? AND ref = ?`,
 		app, role, kind, ref)
 	return err
