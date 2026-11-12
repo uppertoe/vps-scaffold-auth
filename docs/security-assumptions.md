@@ -46,6 +46,7 @@ out of the attacker's reach, write it down here.
 | C7 | The post-login destination is the request the browser made, and stays on the domain as a browser reads it. | Caddy sets `X-Forwarded-*` itself; `ValidateRedirect` | e2e: *forged forwarding headers do not change the destination*; `FuzzValidateRedirect` |
 | C8 | The per-network limits key on the real client address. | The auth host overwrites `X-Forwarded-For`; the gateway reads only its right-most entry | e2e: *a forged forwarded address does not escape the per-network limit*; `TestClientIP_TrustsRightmostXFF` |
 | C9 | Only Caddy can reach the gateway and the apps. | No published ports; one private network per app | Not provable here: the server repo's CI and on-server compose audit |
+| C10 | A role guard asks the gateway for its own app and role, never the client's, and the app receives only the gateway's `Remote-Roles`. | `(role)` deletes the client's identity, role and rule headers; `auth_gate_role` sets `X-Auth-App` and `X-Auth-Role` with `header_up`, removes `X-Auth-Policy` and copies `Remote-Roles` | e2e: *a role guard names its app and role to the gateway and gives the app the roles*; `TestRoleGuardRefusesMisconfiguredGuards` |
 
 C1 and C8 are each held by two layers. Removing one layer leaves the other
 holding, so the end-to-end suite passes with either layer alone. Each layer

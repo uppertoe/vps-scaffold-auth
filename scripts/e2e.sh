@@ -42,7 +42,7 @@ trap cleanup EXIT
 # renamed to the test domain, and a guard for a feature the server does not use
 # is taken from the reference copy, with a notice. A missing security snippet
 # fails the run.
-OPTIONAL_SNIPPETS="protected_open"
+OPTIONAL_SNIPPETS="protected_open auth_gate_role role"
 REQUIRED_SNIPPETS="protected protected_domains protected_groups protected_admin protected_access auth_gate strip_client_identity strip_auth_cookie strip_public"
 if [ -n "${E2E_AUTH_CADDY:-}" ]; then
   src="$E2E_AUTH_CADDY"

@@ -329,7 +329,7 @@ func TestChain(t *testing.T) {
 	t.Run("forged identity and rule headers do not admit a visitor with no session", func(t *testing.T) {
 		forged := map[string]string{
 			"Remote-User": "boss@admins.example", "Remote-Email": "boss@admins.example",
-			"Remote-Groups": "admin", "X-Auth-Policy": "any;guests=allow",
+			"Remote-Groups": "admin", "Remote-Roles": "admin", "X-Auth-Policy": "any;guests=allow",
 		}
 		for _, host := range []string{"app", "reports", "admin"} {
 			r := newBrowser(t).get("https://"+host+"."+domain+"/", forged)
@@ -341,7 +341,7 @@ func TestChain(t *testing.T) {
 		// not handed the forged identity (strip_public).
 		for _, target := range []string{"https://public." + domain + "/", "https://mixed." + domain + "/webhooks/x"} {
 			h := appSees(t, newBrowser(t).get(target, forged))
-			for _, k := range []string{"Remote-User", "Remote-Email", "Remote-Groups"} {
+			for _, k := range []string{"Remote-User", "Remote-Email", "Remote-Groups", "Remote-Roles"} {
 				if v := h.Get(k); v != "" {
 					t.Errorf("%s handed the app a forged %s: %q", target, k, v)
 				}
@@ -597,10 +597,12 @@ func TestChain(t *testing.T) {
 	})
 
 	t.Run("an admin change through Caddy reaches a session at its next request", func(t *testing.T) {
-		page := boss.get(authHost+"/admin/groups", nil)
+		// The new-group page carries the form token; since the app roles
+		// admin pages, the groups list has no form of its own.
+		page := boss.get(authHost+"/admin/groups/new", nil)
 		csrf := hidden(page.body).Get("csrf")
 		if csrf == "" {
-			t.Fatalf("no form token on the groups page (%d)", page.status)
+			t.Fatalf("no form token on the new-group page (%d)", page.status)
 		}
 		admin := func(path string, form url.Values) reply {
 			form.Set("csrf", csrf)
@@ -624,6 +626,59 @@ func TestChain(t *testing.T) {
 			t.Errorf("alice's groups after renewal = %q", h.Get("Remote-Groups"))
 		}
 		appSees(t, alice.get("https://either."+domain+"/", nil))
+	})
+
+	t.Run("a role guard names its app and role to the gateway and gives the app the roles", func(t *testing.T) {
+		forged := map[string]string{
+			"X-Auth-Policy": "any", "X-Auth-App": "other", "X-Auth-Role": "user",
+			"Remote-User": "boss@admins.example", "Remote-Roles": "editor",
+		}
+		// No session: sent to sign in as from a role guard. Had the client's
+		// X-Auth-Policy reached the gateway beside the guard's X-Auth-App, the
+		// gateway would have refused the request as misconfigured instead.
+		r := newBrowser(t).get("https://roles."+domain+"/", forged)
+		if r.status != http.StatusFound || !strings.HasPrefix(r.location(), authHost+"/login?") || !strings.Contains(r.location(), "rqr=1") {
+			t.Fatalf("role guard without a session: %d to %q, want sign-in for a role guard", r.status, r.location())
+		}
+		if r := alice.get("https://roles."+domain+"/", nil); !strings.HasPrefix(r.location(), authHost+"/denied?") {
+			t.Fatalf("role guard before the role is given: %d to %q", r.status, r.location())
+		}
+
+		page := boss.get(authHost+"/admin/apps/e2e", nil)
+		csrf := hidden(page.body).Get("csrf")
+		if csrf == "" {
+			t.Fatalf("no form token on the app's page (%d)", page.status)
+		}
+		saved := boss.do(http.MethodPost, authHost+"/admin/apps/e2e/save", url.Values{
+			"csrf": {csrf}, "c": {"give|manager|person|alice@example.org|0"},
+		}, map[string]string{"Origin": authHost, "Sec-Fetch-Site": "same-origin"})
+		if saved.status != http.StatusFound {
+			t.Fatalf("give alice the Manager role: %d: %.300s", saved.status, saved.body)
+		}
+
+		h := appSees(t, alice.get("https://roles."+domain+"/", forged))
+		if got := h["Remote-User"]; len(got) != 1 || got[0] != "alice@example.org" {
+			t.Errorf("app saw Remote-User %q", got)
+		}
+		if got := h["Remote-Roles"]; len(got) != 1 || got[0] != "manager" {
+			t.Errorf("app saw Remote-Roles %q, want exactly [manager]", got)
+		}
+		if got := h["Remote-Groups"]; len(got) != 1 || got[0] != "user,reports" {
+			t.Errorf("app saw Remote-Groups %q, want exactly [user,reports]", got)
+		}
+		for _, k := range []string{"X-Auth-App", "X-Auth-Role", "X-Auth-Policy"} {
+			if v := h.Get(k); v != "" {
+				t.Errorf("the client's %s reached the app: %q", k, v)
+			}
+		}
+		if c := strings.Join(h["Cookie"], ";"); strings.Contains(c, cookieKey) {
+			t.Errorf("the session cookie reached the app: %s", c)
+		}
+		// The guard's role is the one decided: naming the Manager role from
+		// the client does not open the Editor guard.
+		if r := alice.get("https://editors."+domain+"/", map[string]string{"X-Auth-Role": "manager"}); !strings.HasPrefix(r.location(), authHost+"/denied?") {
+			t.Errorf("editor guard for a manager: %d to %q", r.status, r.location())
+		}
 	})
 
 	t.Run("a sign-in form posted from a sibling host is refused", func(t *testing.T) {

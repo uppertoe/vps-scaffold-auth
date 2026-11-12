@@ -44,6 +44,11 @@ auth.{$DOMAIN} {
 #   import protected_admin UPSTREAM                 -- admins only; for a separate admin door
 #   import protected_access  "rch.org.au" "dash_guests" UPSTREAM
 #                                                   -- in a listed domain OR a listed group
+#   import role "enquiries" "admin" UPSTREAM        -- a person who holds that role in that app,
+#                                                      as the app roles admin pages assign it.
+#                                                      Use "user" for the app's ordinary role,
+#                                                      which any role in the app also admits.
+#                                                      The app also receives Remote-Roles.
 # e.g.  import protected dashboard:3000
 #
 # For a per-route entrance, put the import inside a handle block (the upstream
@@ -250,6 +255,63 @@ auth.{$DOMAIN} {
 	}
 }
 
+# The gate for a role guard. It is auth_gate_common with two differences: it
+# names the app and the role in X-Auth-App and X-Auth-Role instead of sending
+# X-Auth-Policy, which it removes, because the gateway refuses a request that
+# carries both; and it also copies Remote-Roles, the roles the person holds in
+# the app, to the upstream. Remote-Groups is still copied until the old
+# guards are retired. Args: app, role.
+(auth_gate_role) {
+	reverse_proxy auth:8080 {
+		method GET
+		rewrite /verify
+		header_up X-Forwarded-Method {method}
+		header_up X-Forwarded-Uri {uri}
+		header_up X-Auth-App "{args[0]}"
+		header_up X-Auth-Role "{args[1]}"
+		header_up -X-Auth-Policy
+		@renewed {
+			status 2xx
+			header Set-Cookie vps_auth_session=*
+		}
+		handle_response @renewed {
+			request_header Remote-User {http.reverse_proxy.header.Remote-User}
+			request_header Remote-Email {http.reverse_proxy.header.Remote-Email}
+			request_header Remote-Groups {http.reverse_proxy.header.Remote-Groups}
+			request_header Remote-Roles {http.reverse_proxy.header.Remote-Roles}
+			header +Set-Cookie {http.reverse_proxy.header.Set-Cookie}
+		}
+		@allowed status 2xx
+		handle_response @allowed {
+			request_header Remote-User {http.reverse_proxy.header.Remote-User}
+			request_header Remote-Email {http.reverse_proxy.header.Remote-Email}
+			request_header Remote-Groups {http.reverse_proxy.header.Remote-Groups}
+			request_header Remote-Roles {http.reverse_proxy.header.Remote-Roles}
+		}
+	}
+}
+
+# A person who holds a role in an app. Args: app, role, upstream, e.g.
+#   import role "enquiries" "admin" fellows:8080
+# The app and role must be declared in the gateway's app roles manifest, or
+# every request is refused. The guard deletes the client's copies of every
+# identity and rule header first, Remote-Roles and the role headers included,
+# so the app sees only the gateway's answer. Caddy cannot give one snippet
+# two signatures, so this guard is named role rather than protected.
+(role) {
+	route {
+		import strip_client_identity
+		request_header -Remote-Roles
+		request_header -X-Auth-App
+		request_header -X-Auth-Role
+		request_header -X-Auth-Policy
+		import auth_gate_role "{args[0]}" "{args[1]}"
+		reverse_proxy {args[2]} {
+			import strip_auth_cookie
+		}
+	}
+}
+
 # Strip the shared session cookie before the request reaches an app backend. The
 # session cookie is scoped to .<domain>, so the browser sends it to every
 # subdomain, and forward_auth proxies the original request (cookies included)
@@ -277,6 +339,7 @@ auth.{$DOMAIN} {
 	header_up -Remote-User
 	header_up -Remote-Email
 	header_up -Remote-Groups
+	header_up -Remote-Roles
 }
 
 # Delete any client-supplied identity headers from the request BEFORE forward_auth
