@@ -288,6 +288,9 @@ CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 	}
 	if err := s.ensureColumns("groups", []column{
 		{"kind", "TEXT NOT NULL DEFAULT 'list'"},
+		// A domain group's organisation name, such as RCH, which a
+		// withdrawn card's page names. NULL for none.
+		{"org", "TEXT"},
 	}); err != nil {
 		return err
 	}
@@ -727,7 +730,7 @@ func (s *SQLite) ClearTOTPFailures(ctx context.Context, email string) error {
 
 // ListGroups returns all groups ordered by name.
 func (s *SQLite) ListGroups(ctx context.Context) ([]Group, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, label, kind, created_at FROM groups ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT name, label, kind, COALESCE(org, ''), created_at FROM groups ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -736,7 +739,7 @@ func (s *SQLite) ListGroups(ctx context.Context) ([]Group, error) {
 	for rows.Next() {
 		var g Group
 		var created int64
-		if err := rows.Scan(&g.Name, &g.Label, &g.Kind, &created); err != nil {
+		if err := rows.Scan(&g.Name, &g.Label, &g.Kind, &g.Org, &created); err != nil {
 			return nil, err
 		}
 		g.CreatedAt = time.Unix(created, 0)
@@ -757,6 +760,21 @@ func (s *SQLite) CreateGroup(ctx context.Context, name, label string) error {
 // UpdateGroupLabel changes an existing group's display label.
 func (s *SQLite) UpdateGroupLabel(ctx context.Context, name, label string) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE groups SET label = ? WHERE name = ?`, label, name)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SetGroupOrg sets a domain group's organisation name; an empty name is
+// stored as NULL. It reports whether the domain group exists.
+func (s *SQLite) SetGroupOrg(ctx context.Context, name, org string) (bool, error) {
+	var v any
+	if org != "" {
+		v = org
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE groups SET org = ? WHERE name = ? AND kind = ?`, v, name, GroupKindDomain)
 	if err != nil {
 		return false, err
 	}

@@ -141,6 +141,10 @@ type groupView struct {
 	RoleCount int
 	AppCount  int
 	UsedBy    string
+	// Org is a domain group's organisation name, and OrgText the field's
+	// wording.
+	Org     string
+	OrgText orgNameCopy
 }
 
 // feedView is a feed-filled group's source and last sync, for the Groups page.

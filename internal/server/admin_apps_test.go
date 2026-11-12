@@ -419,3 +419,77 @@ func TestUserRowCountsOtherRoles(t *testing.T) {
 		t.Error("the user row is shown as closed")
 	}
 }
+
+// A domain group's organisation name is set on the new-group form or on the
+// group's page. Setting it is audited and emails nobody; a list has none.
+func TestDomainGroupOrganisationName(t *testing.T) {
+	srv, sender, c := appsAdmin(t)
+	ctx := context.Background()
+	tok := csrfOf(t, c, "/admin/groups/new")
+	page := html.UnescapeString(c.get("/admin/groups/new", nil).Body.String())
+	for _, want := range []string{msgOrgLabel, msgOrgHint, `name="org"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("new group page lacks %q", want)
+		}
+	}
+	rec := c.postForm("/admin/groups", url.Values{"csrf": {tok}, "from": {"new"}, "kind": {"domain"}, "label": {"Monash staff"}, "domains": {"monashhealth.org"}, "org": {"  Monash Health "}})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("create = %d", rec.Code)
+	}
+	// A list ignores the field.
+	c.postForm("/admin/groups", url.Values{"csrf": {tok}, "from": {"new"}, "kind": {"list"}, "label": {"Exec"}, "org": {"Exec"}})
+	orgs := map[string]string{}
+	gs, _ := srv.store.ListGroups(ctx)
+	for _, g := range gs {
+		orgs[g.Name] = g.Org
+	}
+	if orgs["monash-staff"] != "Monash Health" || orgs["exec"] != "" {
+		t.Fatalf("organisation names = %v", orgs)
+	}
+
+	page = html.UnescapeString(c.get("/admin/groups/monash-staff", nil).Body.String())
+	for _, want := range []string{msgOrgLabel, msgOrgHint, msgOrgButton, `value="Monash Health"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("domain group page lacks %q", want)
+		}
+	}
+	if list := c.get("/admin/groups/exec", nil).Body.String(); strings.Contains(list, msgOrgLabel) {
+		t.Error("a list offers an organisation name")
+	}
+
+	sender.reset()
+	rec = c.postForm("/admin/groups/monash-staff/org", url.Values{"csrf": {tok}, "org": {"MHS"}})
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/groups/monash-staff" {
+		t.Fatalf("save = %d to %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if page := html.UnescapeString(c.get("/admin/groups/monash-staff", nil).Body.String()); !strings.Contains(page, msgOrgSaved) || !strings.Contains(page, `value="MHS"`) {
+		t.Error("the saved name or the notice is missing")
+	}
+	if mail := noticesAfter(sender, 0); len(mail) != 0 {
+		t.Errorf("saving the name emailed %+v", mail)
+	}
+	// Emptying it stores no name; a list cannot be given one.
+	c.postForm("/admin/groups/monash-staff/org", url.Values{"csrf": {tok}, "org": {"  "}})
+	if rec := c.postForm("/admin/groups/exec/org", url.Values{"csrf": {tok}, "org": {"Exec"}}); rec.Code != http.StatusNotFound {
+		t.Errorf("a list's name = %d", rec.Code)
+	}
+	gs, _ = srv.store.ListGroups(ctx)
+	for _, g := range gs {
+		if g.Org != "" {
+			t.Errorf("%s keeps %q", g.Name, g.Org)
+		}
+	}
+	events, _ := srv.store.ListAdminEvents(ctx, 50, 0)
+	var details []string
+	for _, e := range events {
+		if e.Action == store.AdminActionGroupOrg {
+			details = append(details, e.Target+"="+e.Detail)
+		}
+	}
+	if strings.Join(details, ",") != "monash-staff=,monash-staff=MHS,monash-staff=Monash Health" {
+		t.Errorf("audited = %v", details)
+	}
+	if audit := html.UnescapeString(c.get("/admin/audit", nil).Body.String()); !strings.Contains(audit, msgOrgAudit) {
+		t.Error("the audit page does not label the change")
+	}
+}

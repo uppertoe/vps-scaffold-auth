@@ -26,6 +26,11 @@
     <input type="text" name="domains" class="mono" value="{{.Domains}}" placeholder="monashhealth.org" aria-label="Domains">
     <p class="hint">Public webmail domains, such as gmail.com, are refused, because they would admit anyone.</p>
   </section>
+  <section class="fsec for-domain">
+    <h2><span class="step">4</span><label for="org">{{.OrgText.Label}}</label></h2>
+    <input type="text" id="org" name="org" maxlength="80" value="{{.Org}}" placeholder="RCH">
+    <p class="hint">{{.OrgText.Hint}}</p>
+  </section>
   <section class="fsec for-list">
     <h2><span class="step">3</span>How is the list kept?</h2>
     <div class="segs"><span class="on">By hand</span><span class="off" aria-disabled="true">From a feed</span></div>

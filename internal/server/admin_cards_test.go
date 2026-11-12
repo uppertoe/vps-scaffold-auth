@@ -241,11 +241,12 @@ func TestAdminScanIsATest(t *testing.T) {
 	}
 }
 
-// A withdrawn or a replaced card says so by name, and offers the sign-in
-// domains that hold its app, from the domain groups rather than a fixed line.
+// A withdrawn or a replaced card says so by name, and offers the
+// organisations whose domain groups hold a role in its app.
 func TestWithdrawnAndReplacedCardPages(t *testing.T) {
 	srv, sender, c := cardsAdmin(t)
 	ctx := context.Background()
+	mustOrg(t, srv, "staff", "RCH")
 	id, token := newCard(t, srv, c, "Theatre 2", "/")
 	sid := strconv.FormatInt(id, 10)
 	sender.reset()
@@ -258,7 +259,7 @@ func TestWithdrawnAndReplacedCardPages(t *testing.T) {
 	anon := newClient(t, srv.Handler())
 	rec := anon.get("/break/"+token, nil)
 	body := html.UnescapeString(rec.Body.String())
-	for _, want := range []string{"This card no longer works", "The card for Theatre 2 has been withdrawn.", "If you have an EXAMPLE or MCRI email address, you can sign in with it instead.", ">Sign in</a>"} {
+	for _, want := range []string{"This card no longer works", "The card for Theatre 2 has been withdrawn.", "If you have an RCH email address, you can sign in with it instead.", ">Sign in</a>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("withdrawn page lacks %q:\n%s", want, body)
 		}
@@ -360,5 +361,73 @@ func TestDesignInUseAndSave(t *testing.T) {
 	unused := strconv.FormatInt(ds[1].ID, 10)
 	if rec := c.postForm("/admin/break/designs/"+unused+"/delete", url.Values{"csrf": {csrfOf(t, c, "/admin/break/designs/"+unused)}}); rec.Code != http.StatusFound {
 		t.Errorf("delete unused = %d", rec.Code)
+	}
+}
+
+func mustOrg(t *testing.T, srv *Server, group, org string) {
+	t.Helper()
+	if ok, err := srv.store.SetGroupOrg(context.Background(), group, org); err != nil || !ok {
+		t.Fatalf("set the organisation name of %s: %v %v", group, ok, err)
+	}
+}
+
+// The withdrawn card's page names the organisations of the domain groups
+// that hold a role in the card's app, by the names an administrator gave
+// them: once each, in the groups' order, joined as a sentence. A group with
+// no name is left out, and with no names the sentence is left out.
+func TestWithdrawnCardNamesOrganisations(t *testing.T) {
+	srv, _, c := cardsAdmin(t)
+	_, token := newCard(t, srv, c, "Theatre 2", "/")
+	if rec := c.postForm("/admin/break/1/revoke", url.Values{"csrf": {csrfOf(t, c, "/admin/break/1")}}); rec.Code != http.StatusFound {
+		t.Fatalf("withdraw = %d", rec.Code)
+	}
+	page := func() string {
+		srv.forgetRoles()
+		return html.UnescapeString(newClient(t, srv.Handler()).get("/break/"+token, nil).Body.String())
+	}
+	// No group has a name: no sentence, and no name guessed from a domain.
+	if body := page(); strings.Contains(body, "email address, you can sign in") || strings.Contains(body, "EXAMPLE") || strings.Contains(body, "MCRI") {
+		t.Errorf("a page with no organisation names:\n%s", body)
+	}
+	if !strings.Contains(page(), ">Sign in</a>") {
+		t.Error("the page lost its Sign in button")
+	}
+
+	mustDomainGroup(t, srv, "mcri", "mcri.edu.au")
+	mustDomainGroup(t, srv, "monash", "monashhealth.org")
+	mustDomainGroup(t, srv, "unnamed", "health.nsw.gov.au")
+	mustDomainGroup(t, srv, "elsewhere", "elsewhere.org")
+	mustDomainGroup(t, srv, "rch-too", "rch.org.au")
+	for _, g := range []string{"mcri", "monash", "unnamed", "rch-too"} {
+		mustAssign(t, srv, store.RoleAssignment{App: "neverdrugs", Role: "user", Kind: store.AssignDomainGroup, Ref: g})
+	}
+	mustOrg(t, srv, "staff", "RCH")
+	mustOrg(t, srv, "rch-too", "RCH")
+	mustOrg(t, srv, "mcri", "MCRI")
+	if body := page(); !strings.Contains(body, "If you have an MCRI or RCH email address, you can sign in with it instead.") {
+		t.Errorf("two names:\n%s", body)
+	}
+	mustOrg(t, srv, "monash", "Monash Health")
+	mustOrg(t, srv, "elsewhere", "Elsewhere") // holds no role in the app
+	body := page()
+	if !strings.Contains(body, "If you have an MCRI, Monash Health or RCH email address, you can sign in with it instead.") {
+		t.Errorf("three names:\n%s", body)
+	}
+	if strings.Contains(body, "Elsewhere") || strings.Contains(body, "HEALTH") {
+		t.Errorf("a group outside the app, or a guessed name, is named:\n%s", body)
+	}
+	for _, g := range []string{"staff", "rch-too", "mcri", "monash"} {
+		mustOrg(t, srv, g, "")
+	}
+	if body := page(); strings.Contains(body, "you can sign in with it instead") {
+		t.Errorf("names cleared, yet:\n%s", body)
+	}
+}
+
+func TestArticleFor(t *testing.T) {
+	for name, want := range map[string]string{"RCH": "an", "MCRI": "an", "Monash Health": "a", "Alfred Health": "an", "NSW Health": "an", "Peter Mac": "a"} {
+		if got := articleFor(name); got != want {
+			t.Errorf("articleFor(%q) = %q, want %q", name, got, want)
+		}
 	}
 }

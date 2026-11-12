@@ -47,6 +47,15 @@
     <button type="submit" class="ghost">Add the domain</button>
   </form>
 </section>
+<section class="fsec">
+  <h2><label for="org-{{$group}}">{{.OrgText.Label}}</label></h2>
+  <p class="hint">{{.OrgText.Hint}}</p>
+  <form class="inlineform" method="post" action="/admin/groups/{{$group}}/org">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input type="text" id="org-{{$group}}" name="org" maxlength="80" value="{{.Org}}" placeholder="RCH">
+    <button type="submit" class="ghost">{{.OrgText.Button}}</button>
+  </form>
+</section>
 {{end}}
 
 {{if ne .Kind "domain"}}

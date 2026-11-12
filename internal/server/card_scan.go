@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -11,7 +12,6 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
-	"github.com/uppertoe/vps-scaffold-auth/internal/roles"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
@@ -84,39 +84,61 @@ func (s *Server) handleCardLogo(w http.ResponseWriter, r *http.Request) {
 	writeImage(w, "image/png", png)
 }
 
-// signInSentence offers the email domains that hold the card's app, named
-// by their organisation ("rch.org.au" is RCH): the domain groups that hold
-// the app's user role, or the allow-list's domains.
+// msgSignInInstead is the withdrawn or replaced card's offer to sign in,
+// naming organisations: "If you have an RCH or MCRI email address, you can
+// sign in with it instead."
+const msgSignInInstead = "If you have %s %s email address, you can sign in with it instead."
+
+// signInSentence offers the organisations whose domain groups hold a role in
+// the card's app (any app's, for a card that opens a group), by the
+// organisation name each group is given, in the groups' order. A group with
+// no name is left out, and with no names there is no sentence.
 func (s *Server) signInSentence(ctx context.Context, c store.BreakGlassCode) string {
-	var domains []string
-	if c.App != "" && s.rolesOn() {
-		st := s.roleData(ctx)
-		for _, a := range st.assignments {
-			if a.App == c.App && a.Role == roles.UserRole && a.Kind == store.AssignDomainGroup {
-				domains = append(domains, st.domains[a.Ref]...)
-			}
+	if !s.rolesOn() {
+		return ""
+	}
+	held := map[string]bool{}
+	for _, a := range s.roleData(ctx).assignments {
+		if a.Kind == store.AssignDomainGroup && (c.App == "" || a.App == c.App) {
+			held[a.Ref] = true
 		}
 	}
-	if len(domains) == 0 {
-		domains = s.cfg.AllowedDomains
+	groups, err := s.store.ListGroups(ctx)
+	if err != nil {
+		log.Printf("break-glass sign-in sentence: %v", err)
+		return ""
 	}
 	var orgs []string
 	seen := map[string]bool{}
-	for _, d := range domains {
-		org := strings.ToUpper(strings.SplitN(strings.TrimPrefix(strings.TrimSpace(d), "@"), ".", 2)[0])
-		if org != "" && !seen[org] {
-			seen[org] = true
-			orgs = append(orgs, org)
+	for _, g := range groups {
+		if !held[g.Name] || g.Kind != store.GroupKindDomain || g.Org == "" || seen[g.Org] {
+			continue
 		}
+		seen[g.Org] = true
+		orgs = append(orgs, g.Org)
 	}
 	if len(orgs) == 0 {
 		return ""
 	}
-	article := "a"
-	if strings.ContainsRune("AEFHILMNORSX", rune(orgs[0][0])) {
-		article = "an"
+	return fmt.Sprintf(msgSignInInstead, articleFor(orgs[0]), joinOr(orgs))
+}
+
+// articleFor is "a" or "an" before a name: by the sound of its first letter
+// for an initialism such as RCH or MCRI ("an RCH"), and by its first vowel
+// for a word such as Monash ("a Monash").
+func articleFor(name string) string {
+	word, _, _ := strings.Cut(name, " ")
+	if word == "" {
+		return "a"
 	}
-	return "If you have " + article + " " + joinOr(orgs) + " email address, you can sign in with it instead."
+	vowels := "AEIOUaeiou"
+	if len(word) > 1 && strings.ToUpper(word) == word {
+		vowels = "AEFHILMNORSX"
+	}
+	if strings.ContainsRune(vowels, rune(word[0])) {
+		return "an"
+	}
+	return "a"
 }
 
 // isGatewayAdmin reports a signed-in administrator of the gateway (an

@@ -37,7 +37,8 @@ type appRoleRef struct {
 
 // newGroupView is the New group page.
 type newGroupView struct {
-	Kind, Label, Domains string
+	Kind, Label, Domains, Org string
+	OrgText                   orgNameCopy
 	// Kinds is false with the app-roles model off, when only lists exist.
 	Kinds bool
 }
@@ -58,8 +59,10 @@ func (s *Server) fillGroupRoles(r *http.Request, view []groupView) error {
 		return err
 	}
 	kinds := map[string]string{}
+	orgs := map[string]string{}
 	for _, g := range groups {
 		kinds[g.Name] = g.Kind
+		orgs[g.Name] = g.Org
 	}
 	domains, err := s.store.ListGroupDomains(ctx)
 	if err != nil {
@@ -76,6 +79,7 @@ func (s *Server) fillGroupRoles(r *http.Request, view []groupView) error {
 			g.Kind = store.GroupKindList
 		}
 		g.Domains = domains[g.Name]
+		g.Org, g.OrgText = orgs[g.Name], orgNameText
 		apps := map[string]bool{}
 		for _, a := range as {
 			if (a.Kind != store.AssignDomainGroup && a.Kind != store.AssignList) || a.Ref != g.Name {
@@ -146,6 +150,7 @@ func (s *Server) handleAdminNewGroup(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) renderNewGroup(w http.ResponseWriter, r *http.Request, status int, v *newGroupView, warning string) {
 	v.Kinds = s.rolesOn()
+	v.OrgText = orgNameText
 	if !v.Kinds {
 		v.Kind = store.GroupKindList
 	}
@@ -184,7 +189,8 @@ func splitDomains(raw string) []string {
 // (the group's label, from which its name is made) and, for a domain group,
 // its domains, all checked before anything is created.
 func (s *Server) createGroupFromNewPage(w http.ResponseWriter, r *http.Request) {
-	v := &newGroupView{Kind: r.PostFormValue("kind"), Label: clampLabel(r.PostFormValue("label")), Domains: r.PostFormValue("domains")}
+	v := &newGroupView{Kind: r.PostFormValue("kind"), Label: clampLabel(r.PostFormValue("label")), Domains: r.PostFormValue("domains"),
+		Org: clampOrg(r.PostFormValue("org"))}
 	if v.Kind != store.GroupKindDomain || !s.rolesOn() {
 		v.Kind = store.GroupKindList
 	}
@@ -234,6 +240,13 @@ func (s *Server) createGroupFromNewPage(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		s.auditAdmin(r, store.AdminActionGroupDomainAdd, name, d)
+	}
+	if v.Kind == store.GroupKindDomain && v.Org != "" {
+		if _, err := s.store.SetGroupOrg(r.Context(), name, v.Org); err != nil {
+			s.adminError(w, r)
+			return
+		}
+		s.auditAdmin(r, store.AdminActionGroupOrg, name, v.Org)
 	}
 	s.redirectDone(w, r, "/admin/groups", "group-created", name)
 }
@@ -326,4 +339,41 @@ func (s *Server) domainChanged(r *http.Request, group, domain, action, line stri
 		}
 	}
 	s.emailOtherAdmins(actor, fmt.Sprintf(msgDomainSubject, label), []string{line})
+}
+
+// clampOrg trims an organisation name, drops control characters and caps it
+// at 80 characters.
+func clampOrg(org string) string {
+	org = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, trimField(org))
+	if r := []rune(org); len(r) > 80 {
+		org = strings.TrimSpace(string(r[:80]))
+	}
+	return org
+}
+
+// handleAdminGroupOrg sets a domain group's organisation name, which a
+// withdrawn or replaced card's page names. It changes nobody's access, so the
+// other administrators are not emailed.
+func (s *Server) handleAdminGroupOrg(w http.ResponseWriter, r *http.Request) {
+	if !s.checkCSRF(w, r) {
+		return
+	}
+	group := normalizeGroupName(r.PathValue("name"))
+	org := clampOrg(r.PostFormValue("org"))
+	found, err := s.store.SetGroupOrg(r.Context(), group, org)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	s.auditAdmin(r, store.AdminActionGroupOrg, group, org)
+	s.redirectDone(w, r, "/admin/groups", "org-saved", group)
 }

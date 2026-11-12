@@ -45,6 +45,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/groups/{name}", s.handleAdminGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/delete", s.handleAdminDeleteGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/label", s.handleAdminGroupLabel)
+	mux.HandleFunc("POST /admin/groups/{name}/org", s.handleAdminGroupOrg)
 	mux.HandleFunc("POST /admin/groups/{name}/members", s.handleAdminAddMember)
 	mux.HandleFunc("POST /admin/groups/{name}/members/confirm", s.handleAdminConfirmMembers)
 	mux.HandleFunc("POST /admin/groups/{name}/includes", s.handleAdminAddInclude)

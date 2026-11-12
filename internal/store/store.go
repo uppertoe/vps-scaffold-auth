@@ -114,11 +114,14 @@ const (
 	AdminActionPasskeysRemove     = "passkeys_remove"
 	// App roles: an app role given to or taken from a holder (target
 	// "app:role", detail "kind ref"), and a domain rule added to or removed
-	// from a domain group (target the group, detail the domain).
+	// from a domain group (target the group, detail the domain), and a
+	// domain group's organisation name set (target the group, detail the
+	// name).
 	AdminActionRoleGive          = "role_give"
 	AdminActionRoleTake          = "role_take"
 	AdminActionGroupDomainAdd    = "group_domain_add"
 	AdminActionGroupDomainRemove = "group_domain_remove"
+	AdminActionGroupOrg          = "group_org"
 	// Card designs: a design created, saved or deleted (target the design's
 	// name), and a card given another design.
 	AdminActionDesignCreate = "card_design_create"
@@ -199,9 +202,12 @@ type AdminEvent struct {
 
 // Group is a named, DB-managed group surfaced via Remote-Groups.
 type Group struct {
-	Name      string
-	Label     string
-	Kind      string // GroupKindList or GroupKindDomain
+	Name  string
+	Label string
+	Kind  string // GroupKindList or GroupKindDomain
+	// Org is a domain group's organisation name, such as RCH; empty for
+	// none.
+	Org       string
 	CreatedAt time.Time
 }
 
@@ -445,6 +451,9 @@ type Store interface {
 	// UpdateGroupLabel changes an existing group's display label. It reports
 	// whether the group exists.
 	UpdateGroupLabel(ctx context.Context, name, label string) (bool, error)
+	// SetGroupOrg sets a domain group's organisation name (empty for none).
+	// It reports whether the domain group exists.
+	SetGroupOrg(ctx context.Context, name, org string) (bool, error)
 	// DeleteGroup removes a group and (via cascade) its memberships. A group
 	// a role assignment names is refused with ErrGroupHoldsRoles.
 	DeleteGroup(ctx context.Context, name string) error
