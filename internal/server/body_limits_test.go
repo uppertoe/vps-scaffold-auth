@@ -109,7 +109,7 @@ func TestOversizeBrandingShowsAdminPage(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/settings", nil).Body.String())
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -133,7 +133,7 @@ func TestBrandingUploadFitsUnderAdminCeiling(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/settings", nil).Body.String())
 
 	logo := testPNG(t, 610, 610, true, 1) // about 1.5 MB, within MaxRasterSide
 	if len(logo) < 1400<<10 || len(logo) > maxBrandingUpload {
@@ -163,7 +163,7 @@ func TestBrandingRefusesHugeDimensions(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/settings", nil).Body.String())
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -186,7 +186,7 @@ func TestBrandingRefuses16BitImages(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/settings", nil).Body.String())
 	var img bytes.Buffer
 	if err := png.Encode(&img, image.NewNRGBA64(image.Rect(0, 0, 8, 8))); err != nil {
 		t.Fatal(err)
@@ -204,17 +204,17 @@ func TestBrandingRefuses16BitImages(t *testing.T) {
 	}
 }
 
-// A refused image leaves the rest of the form unsaved.
+// A refused image is not saved.
 func TestRefusedImageSavesNothing(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/settings", nil).Body.String())
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	mw.WriteField("csrf", tok)
-	mw.WriteField("title", "Changed title")
-	fw, _ := mw.CreateFormFile("glyph", "wide.png")
+	mw.WriteField("remove_logo", "")
+	fw, _ := mw.CreateFormFile("logo", "wide.png")
 	fw.Write(testPNG(t, breakglass.MaxRasterSide+1, 1, false, 3))
 	mw.Close()
 	req := httptest.NewRequest(http.MethodPost, "/admin/branding", &buf)
@@ -222,7 +222,7 @@ func TestRefusedImageSavesNothing(t *testing.T) {
 	if rec := c.do(req); rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400", rec.Code)
 	}
-	if b, ok, _ := srv.store.GetBranding(context.Background()); ok && b.Title == "Changed title" {
-		t.Error("the title was saved although the image was refused")
+	if b, ok, _ := srv.store.GetBranding(context.Background()); ok && len(b.Logo) > 0 {
+		t.Error("the logo was saved although the image was refused")
 	}
 }

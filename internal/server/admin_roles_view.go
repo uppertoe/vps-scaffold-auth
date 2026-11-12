@@ -367,8 +367,10 @@ type roleRowView struct {
 type pickerView struct {
 	ID, Title string
 	Sections  []pickerSection
-	// PeopleHref jumps to the form that adds a person.
+	// PeopleHref jumps to the form that adds a person. CardHref, for the
+	// user role only, opens the new-card form with the app chosen.
 	PeopleHref string
+	CardHref   string
 }
 
 type pickerSection struct {
@@ -545,6 +547,9 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 // hold the role yet, under the prototype's headings.
 func (s *Server) picker(w *rolesWorld, a *roles.App, role string, inRow map[string]bool, p *pending) *pickerView {
 	pv := &pickerView{ID: "pick-" + role, Title: a.Label + ": " + a.Roles[role], PeopleHref: "#people"}
+	if role == roles.UserRole && len(a.CardPages) > 0 {
+		pv.CardHref = "/admin/break/new?app=" + a.Name
+	}
 	settings := pickerSection{Heading: "Settings"}
 	for _, n := range s.networkNames() {
 		settings.Options = append(settings.Options, s.pickerOption(w, role, store.AssignNetwork, n, inRow))

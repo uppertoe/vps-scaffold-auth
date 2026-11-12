@@ -58,8 +58,14 @@ func (s *Server) publicBrandingAt(ctx context.Context, now time.Time) (brandingS
 		return brandingSnapshot{}, err
 	}
 	var snap brandingSnapshot
-	if ok {
+	// Emails take their colours from the first card design, which is the
+	// department's; the old global colours only while there is none.
+	if ds, err := s.store.ListCardDesigns(ctx); err == nil && len(ds) > 0 {
+		snap.headerColor, snap.accentColor = ds[0].Header, ds[0].Accent
+	} else if ok {
 		snap.headerColor, snap.accentColor = b.HeaderColor, b.AccentColor
+	}
+	if ok {
 		if len(b.Logo) > 0 {
 			snap.logo, snap.logoType, snap.logoVersion = b.Logo, b.LogoType, logoVersion(b.Logo)
 		}

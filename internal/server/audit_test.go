@@ -68,7 +68,7 @@ func TestBreakGlassCannotTargetReservedGroup(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
 
 	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Evil"}, "group": {"admin"}})
 	if rec.Code == http.StatusFound {
@@ -111,7 +111,7 @@ func TestGroupNameWithSeparatorRejected(t *testing.T) {
 		t.Fatalf("a group with a comma in its name was created: %+v (would smuggle 'admin' into Remote-Groups)", groups)
 	}
 
-	tok = extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	tok = extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
 	c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Evil"}, "group": {"lab,admin"}})
 	if codes, _ := srv.store.ListBreakGlassCodes(context.Background()); len(codes) != 0 {
 		t.Fatalf("a break-glass code targeting 'lab,admin' was created: %+v", codes)

@@ -280,11 +280,10 @@
       <a href="/admin/"{{if eq .Active "admin_home"}} aria-current="page"{{end}}>Overview</a>
       {{if .RolesOn}}<a href="/admin/invitations"{{if or (eq .Active "admin_invites") (eq .Active "admin_invite_new")}} aria-current="page"{{end}}>Invitations</a>{{end}}
       <a href="/admin/groups"{{if or (eq .Active "admin_groups") (eq .Active "admin_group") (eq .Active "admin_bulk_add") (eq .Active "admin_group_new")}} aria-current="page"{{end}}>Groups</a>
-      <a href="/admin/break"{{if or (eq .Active "admin_codes") (eq .Active "admin_code_detail")}} aria-current="page"{{end}}>Break-glass codes</a>
+      <a href="/admin/break"{{if or (eq .Active "admin_codes") (eq .Active "admin_code_detail") (eq .Active "admin_card_new") (eq .Active "admin_designs") (eq .Active "admin_design")}} aria-current="page"{{end}}>Break-glass cards</a>
       <a href="/admin/access"{{if eq .Active "admin_access"}} aria-current="page"{{end}}>Access log</a>
       <a href="/admin/audit"{{if eq .Active "admin_audit"}} aria-current="page"{{end}}>Admin audit</a>
       <a href="/admin/totp"{{if eq .Active "admin_totp"}} aria-current="page"{{end}}>Admin 2FA</a>
-      <a href="/admin/branding"{{if eq .Active "admin_branding"}} aria-current="page"{{end}}>Branding</a>
       <a href="/admin/settings"{{if eq .Active "admin_settings"}} aria-current="page"{{end}}>Settings</a>
     </nav>
     {{if .AdminEmail}}<span class="who">{{.AdminEmail}} <a href="/logout">Sign out</a></span>{{end}}

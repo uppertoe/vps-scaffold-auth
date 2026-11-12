@@ -50,6 +50,12 @@ const (
 	// OutcomeRefusedTarget records a scan of a card whose group has since
 	// become an application role or a feed group: nothing was granted.
 	OutcomeRefusedTarget = "refused_target"
+	// OutcomeTested records a scan by a signed-in gateway administrator,
+	// which grants nothing and marks the card tested.
+	OutcomeTested = "tested"
+	// OutcomeReplaced records a scan of a card's code from before it was
+	// replaced: nothing was granted.
+	OutcomeReplaced = "replaced"
 )
 
 // Human-login audit event types, recorded in auth_events.
@@ -113,6 +119,12 @@ const (
 	AdminActionRoleTake          = "role_take"
 	AdminActionGroupDomainAdd    = "group_domain_add"
 	AdminActionGroupDomainRemove = "group_domain_remove"
+	// Card designs: a design created, saved or deleted (target the design's
+	// name), and a card given another design.
+	AdminActionDesignCreate = "card_design_create"
+	AdminActionDesignSave   = "card_design_save"
+	AdminActionDesignDelete = "card_design_delete"
+	AdminActionCardDesign   = "card_design_change"
 )
 
 // GroupSyncState is the outcome of the last sync of a feed-filled group.
@@ -217,6 +229,13 @@ type BreakGlassCode struct {
 	Status    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// DesignID is the card's design (0 for none, which draws the first
+	// design). PDFAt is when its PDF was last downloaded and TestedAt when an
+	// administrator last scanned it as a test; zero for never. A replaced
+	// card starts again with neither.
+	DesignID int64
+	PDFAt    time.Time
+	TestedAt time.Time
 }
 
 // BreakGlassEvent records one use (or attempted use) of a break-glass code.
@@ -625,6 +644,9 @@ type Store interface {
 	DeletePasskey(ctx context.Context, email string, id int64) (bool, error)
 	// DeletePasskeys removes all of email's passkeys and returns how many.
 	DeletePasskeys(ctx context.Context, email string) (int, error)
+
+	// Card designs, and each card's design, download and test.
+	CardDesignStore
 
 	// Close releases underlying resources.
 	Close() error

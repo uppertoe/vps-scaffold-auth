@@ -50,6 +50,8 @@ type pageData struct {
 	// BreakToken is the scanned card's token, carried in the confirmation
 	// page's form so that the grant is a POST (break_confirm.html).
 	BreakToken string
+	// Scan is a card's scan page, drawn with the card's design (card_scan.go).
+	Scan *scanView
 	// CSRF is the double-submit token embedded in the emergency-access form on
 	// the denial page; /break/activate verifies it. Necessary because the offer
 	// cookie is SameSite=Lax, which is site- not origin-scoped: a sibling app on

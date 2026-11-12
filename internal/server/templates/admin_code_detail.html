@@ -1,122 +1,60 @@
-{{define "title"}}{{.Code.Label}}{{end}}
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "cards_css"}}{{end}}
 {{define "content"}}
-{{with .Code}}
-<p><a href="/admin/break">← All codes</a></p>
-<h1>{{.Label}}</h1>
-<p class="sub">
-  {{if .Active}}<span class="pill ok">active</span>{{else}}<span class="pill off">revoked</span>{{end}}
-  &nbsp;·&nbsp; group <code class="mono">{{.TargetGroup}}</code>
-</p>
-
-<div class="row">
-  <div class="panel qrbox" style="flex:0 0 280px">
+{{template "role_icons"}}
+{{$csrf := .CSRF}}
+{{with .CardPage}}
+<a class="back" href="/admin/break">&larr; All cards</a>
+<div class="ptitle"><div><h1>{{.Label}}</h1><p>{{if .AppLabel}}Opens {{.AppLabel}} for whoever holds it{{else}}Opens the group {{.Group}} for whoever holds it{{end}}</p></div>{{if .Active}}<span class="pill ok">Active</span>{{else}}<span class="pill off">Withdrawn</span>{{end}}</div>
+{{if .Active}}
+<ol class="steps">{{range .Steps}}<li{{if .Done}} class="done"{{end}}><i>{{if .Done}}&#10003;{{end}}</i><b>{{.Title}}</b><span title="{{.Detail}}">{{.Detail}}</span></li>{{end}}</ol>
+{{else}}
+<ol class="steps one"><li class="gone"><i>&times;</i><b>Withdrawn</b><span>{{.Withdrawn}}</span></li></ol>
+{{end}}
+<div class="cardlayout">
+  <div class="previewcol">
+    <img class="cardimg{{if not .Active}} off{{end}}" src="{{.PreviewURL}}" alt="The printed card for {{.Label}}">
+    <div class="caption" title="{{.DesignName}} design">{{.Caption}}</div>
     {{if .Active}}
-      <img src="/admin/break/{{.ID}}/qr.png" alt="QR code for {{.Label}}" width="240" height="240">
-      <p class="muted">Scan to grant access</p>
-      <p><a href="/admin/break/{{.ID}}/pdf">Download printable PDF →</a></p>
-    {{else}}
-      <p class="muted">This code is revoked. Re-mint to issue a new card.</p>
+    <a class="btnlink wide" href="/admin/break/{{.ID}}/pdf">Download the PDF</a>
+    <form method="post" action="/admin/break/{{.ID}}/design">
+      <input type="hidden" name="csrf" value="{{$csrf}}">
+      <label for="cardDesign">Design</label>
+      <select id="cardDesign" name="design">{{range .Designs}}<option value="{{.ID}}"{{if .Checked}} selected{{end}}>{{.Name}}</option>{{end}}</select>
+      <button type="submit" class="ghost">Use this design</button>
+    </form>
+    <a class="small" href="/admin/break/designs/{{.DesignID}}">Edit the {{.DesignName}} design</a>
     {{end}}
   </div>
-  <div class="panel" style="flex:1 1 320px">
-    <h2>Details</h2>
-    <table>
-      <tr><th>Label</th><td>{{.Label}}</td></tr>
-      <tr><th>Note</th><td>{{if .Note}}{{.Note}}{{else}}<span class="muted">—</span>{{end}}</td></tr>
-      <tr><th>Group</th><td><code class="mono">{{.TargetGroup}}</code></td></tr>
-      <tr><th>Redirect</th><td>{{if .Redirect}}{{.Redirect}}{{else}}<span class="muted">default</span>{{end}}</td></tr>
-      <tr><th>Created</th><td class="muted">{{.Created}}</td></tr>
-      <tr><th>Updated</th><td class="muted">{{.Updated}}</td></tr>
-    </table>
+  <div>
+    <dl class="cfacts">
+      <div><dt>Opens</dt><dd>{{if .AppLabel}}{{if .Group}}<span>{{.AppLabel}}</span>{{else}}{{template "token" .AppToken}}<span class="muted">as a user</span>{{end}}{{else}}<span>The group {{.Group}}</span>{{end}}</dd></div>
+      <div><dt>A scan opens</dt><dd><span>{{.PageLabel}}</span>{{if ne .PageLabel .PageURL}}<span class="muted mono">{{.PageURL}}</span>{{end}}</dd></div>
+      <div><dt>Note for administrators</dt><dd><span>{{if .Note}}{{.Note}}{{else}}<span class="muted">No note</span>{{end}}</span><span class="muted"> · not printed</span></dd></div>
+    </dl>
+    <div class="acthead"><h2>Activity</h2><span class="muted">{{.UsesLine}}</span></div>
+    <div class="rlist tbl events">
+      <div class="rrow colhead"><div>When</div><div>Outcome</div><div>Device</div><div>Network address</div></div>
+      {{range .Events}}
+      <div class="rrow"><div>{{.When}}</div><div><span class="pill {{.Tone}}">{{.Outcome}}</span></div><div>{{.Device}}</div><div class="mono muted">{{.Address}}</div></div>
+      {{else}}
+      <div class="rrow"><div class="muted">Nobody has scanned this card yet.</div></div>
+      {{end}}
+    </div>
   </div>
 </div>
-
-<div class="panel">
-  <h2>Manage</h2>
-  <details class="confirm">
-    <summary>Re-mint this code</summary>
-    <div class="confirmbody">
-      <p>Re-minting issues a new code. Every card already printed for this location stops working, and the sessions its scans have granted end, so print and place the new card straight away.</p>
-      <form class="inline" method="post" action="/admin/break/{{.ID}}/remint">
-        <input type="hidden" name="csrf" value="{{$.CSRF}}">
-        <button type="submit" class="danger">Re-mint the code</button>
-      </form>
-    </div>
-  </details>
-  {{if .Active}}
-  <details class="confirm">
-    <summary>Revoke this code</summary>
-    <div class="confirmbody">
-      <p>Revoking refuses every future scan of this card at once, and ends the sessions its scans have granted.</p>
-      <form class="inline" method="post" action="/admin/break/{{.ID}}/revoke">
-        <input type="hidden" name="csrf" value="{{$.CSRF}}">
-        <button type="submit" class="danger">Revoke the code</button>
-      </form>
-    </div>
-  </details>
-  {{end}}
+{{if .Active}}
+<div class="dangerpanel" id="danger">
+  <h2>Replace or withdraw the card</h2>
+  <div class="twocol">
+    <div>{{if eq .Confirm "replace"}}
+      <div class="confirmbox"><p><b>Replace the card for {{.Label}}?</b> {{.ReplaceText}}</p><div class="acts"><form method="post" action="/admin/break/{{.ID}}/remint"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="danger">Replace the card</button></form><a class="btnlink quiet" href="/admin/break/{{.ID}}">Keep the card</a></div></div>
+    {{else}}<p>{{.ReplaceText}}</p><a class="btnlink red" href="/admin/break/{{.ID}}?confirm=replace#danger">Replace the card</a>{{end}}</div>
+    <div>{{if eq .Confirm "withdraw"}}
+      <div class="confirmbox"><p><b>Withdraw the card for {{.Label}}?</b> {{.WithdrawTxt}}</p><div class="acts"><form method="post" action="/admin/break/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="danger">Withdraw the card</button></form><a class="btnlink quiet" href="/admin/break/{{.ID}}">Keep the card</a></div></div>
+    {{else}}<p>{{.WithdrawTxt}}</p><a class="btnlink red" href="/admin/break/{{.ID}}?confirm=withdraw#danger">Withdraw the card</a>{{end}}</div>
+  </div>
 </div>
 {{end}}
-
-{{with .CodeBranding}}
-<div class="panel">
-  <h2>Card customisation</h2>
-  <p class="muted">Override the PDF for this card. Leave a field blank to inherit the global <a href="/admin/branding">PDF branding</a>.</p>
-  <form method="post" action="/admin/break/{{$.Code.ID}}/branding" enctype="multipart/form-data">
-    <input type="hidden" name="csrf" value="{{$.CSRF}}">
-    <label for="cb-title">Title</label>
-    <input id="cb-title" name="title" type="text" value="{{.Title}}" placeholder="{{.InhTitle}}">
-    <label for="cb-body">Body</label>
-    <textarea id="cb-body" name="body" rows="2" placeholder="{{.InhBody}}">{{.Body}}</textarea>
-    <label for="cb-instr">Instructions</label>
-    <textarea id="cb-instr" name="instructions" rows="4" placeholder="{{.InhInstr}}">{{.Instructions}}</textarea>
-
-    <label class="ck"><input type="checkbox" name="custom_colors" value="1" {{if .CustomColors}}checked{{end}}> Use custom colours for this card</label>
-    <div class="row">
-      <div class="swatch"><label for="cb-header">Header</label><input id="cb-header" name="header_color" type="color" value="{{.HeaderColor}}"></div>
-      <div class="swatch"><label for="cb-accent">Accent</label><input id="cb-accent" name="accent_color" type="color" value="{{.AccentColor}}"></div>
-      <div class="swatch"><label for="cb-bar1">Bar 1</label><input id="cb-bar1" name="bar1_color" type="color" value="{{.Bar1Color}}"></div>
-      <div class="swatch"><label for="cb-bar2">Bar 2</label><input id="cb-bar2" name="bar2_color" type="color" value="{{.Bar2Color}}"></div>
-      <div class="swatch"><label for="cb-bar3">Bar 3</label><input id="cb-bar3" name="bar3_color" type="color" value="{{.Bar3Color}}"></div>
-    </div>
-
-    <div class="row">
-      <div style="flex:1 1 240px">
-        <label>Logo override</label>
-        {{if .HasLogo}}<p><img src="/admin/break/{{$.Code.ID}}/branding/logo/img" alt="Logo" style="max-height:48px;background:#003a5c;padding:6px;border-radius:8px"></p>
-        <label class="ck"><input type="checkbox" name="remove_logo" value="1"> Remove (use global)</label>{{else}}<p class="muted">Using global logo.</p>{{end}}
-        <input name="logo" type="file" accept="image/png,image/jpeg,image/svg+xml">
-      </div>
-      <div style="flex:1 1 240px">
-        <label>Glyph override</label>
-        {{if .HasGlyph}}<p><img src="/admin/break/{{$.Code.ID}}/branding/glyph/img" alt="Glyph" style="max-height:48px;padding:6px;border:1px solid #ccd0d5;border-radius:8px"></p>
-        <label class="ck"><input type="checkbox" name="remove_glyph" value="1"> Remove (use global)</label>{{else}}<p class="muted">Using global glyph.</p>{{end}}
-        <input name="glyph" type="file" accept="image/png,image/jpeg,image/svg+xml">
-      </div>
-    </div>
-    <button type="submit">Save customisation</button>
-  </form>
-</div>
 {{end}}
-
-<div class="panel">
-  <h2>Use log</h2>
-  {{if .Events}}
-  <table>
-    <thead><tr><th>Time</th><th>Outcome</th><th>Client IP</th><th>User agent</th></tr></thead>
-    <tbody>
-    {{range .Events}}
-      <tr>
-        <td class="muted">{{fmtTime .CreatedAt}}</td>
-        <td>{{if eq .Outcome "granted"}}<span class="pill ok">granted</span>{{else if eq .Outcome "refused_target"}}<span class="pill off">refused</span>{{else}}<span class="pill off">{{.Outcome}}</span>{{end}}</td>
-        <td><code class="mono">{{.ClientIP}}</code></td>
-        <td class="muted">{{.UserAgent}}</td>
-      </tr>
-    {{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <p class="muted">No recorded uses yet.</p>
-  {{end}}
-</div>
 {{end}}
