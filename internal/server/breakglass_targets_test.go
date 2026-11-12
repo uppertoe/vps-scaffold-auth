@@ -87,7 +87,7 @@ func TestBreakGlassRefusesGroupListedWithAdmin(t *testing.T) {
 	srv, sender := appRoleServer(t, nil)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
 
 	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Imaging"}, "group": {"airdb_admin"}})
 	if rec.Code != http.StatusBadRequest {
@@ -107,7 +107,7 @@ func TestBreakGlassRefusesDeclaredGroup(t *testing.T) {
 	srv, sender := appRoleServer(t, nil)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
 
 	// The typed name is checked the same way as a chosen one.
 	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Boards"}, "group_new": {"planka-admins"}})
@@ -127,7 +127,7 @@ func TestBreakGlassRefusesConfiguredGroup(t *testing.T) {
 	})
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
 
 	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Insights"}, "group": {"insights-admins"}})
 	if rec.Code != http.StatusBadRequest {
@@ -147,7 +147,7 @@ func TestBreakGlassRefusesFeedGroup(t *testing.T) {
 	srv, sender := feedServer(t, "https://feed.example.com/list", "")
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
 
 	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Consultants"}, "group": {"rch-consultants"}})
 	if rec.Code != http.StatusBadRequest {
@@ -167,7 +167,7 @@ func TestBreakGlassReservedStillRefusedAndPlainGroupAllowed(t *testing.T) {
 	srv, sender := appRoleServer(t, nil)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
 
 	for _, role := range []string{"admin", "user", "guest"} {
 		rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Role " + role}, "group": {role}})
@@ -201,7 +201,7 @@ func TestCodesPageMarksRefusedTargets(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	body := c.get("/admin/break", nil).Body.String()
+	body := c.get("/admin/break/new", nil).Body.String()
 
 	for _, want := range []string{
 		`<option value="airdb_admin" disabled>airdb_admin (used as an application role)</option>`,
@@ -218,8 +218,9 @@ func TestCodesPageMarksRefusedTargets(t *testing.T) {
 	if strings.Contains(body, `<option value="admin"`) {
 		t.Error("a reserved role is offered as a target")
 	}
+	body = c.get("/admin/break", nil).Body.String()
 	row := body[strings.Index(body, ">Old</a>"):]
-	row = row[:strings.Index(row, "</tr>")]
+	row = row[:strings.Index(row, "</small>")]
 	if !strings.Contains(row, `>used as an application role</span>`) {
 		t.Errorf("existing card targeting prototypes is not marked:\n%s", row)
 	}
@@ -405,7 +406,7 @@ func TestCardLabelRefusesAtCommaAndLineBreak(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
 	for _, label := range []string{"ops@example.com", "ED, Resus", "Ward\nB"} {
 		rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {label}, "group_new": {"ward-b"}})
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Invalid label") {

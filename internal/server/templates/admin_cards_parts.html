@@ -175,7 +175,7 @@
 
 {{define "card_row"}}<div class="rrow{{if not .Active}} withdrawn{{end}}">
   <div><img class="cardimg mini" src="/admin/break/{{.ID}}/card.svg?thumb=1&amp;v={{.Version}}" alt="" width="40" height="56" loading="lazy"></div>
-  <div class="loc"><b><a href="/admin/break/{{.ID}}">{{.Label}}</a></b><small>{{if .Note}}{{.Note}}{{else if .Group}}Opens the group {{.Group}}{{else}}No note{{end}}</small></div>
+  <div class="loc"><b><a href="/admin/break/{{.ID}}">{{.Label}}</a></b><small>{{if .Refused}}<span class="pill guest">{{.Refused}}</span> {{end}}{{if .Note}}{{.Note}}{{else if .Group}}Opens the group {{.Group}}{{else}}No note{{end}}</small></div>
   <div>{{if .LastUsed}}{{.LastUsed}}{{else}}<span class="muted">Never</span>{{end}}</div>
   <div>{{if .Uses}}{{.Uses}}{{else}}<span class="muted">None</span>{{end}}</div>
   <div>{{if .Tested}}{{.Tested}}{{else if .Active}}<span class="never">Never</span>{{else}}<span class="muted">Never</span>{{end}}</div>

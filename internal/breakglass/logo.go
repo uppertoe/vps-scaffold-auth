@@ -157,3 +157,13 @@ func LogoInk(data []byte, mime string) (string, bool) {
 	}
 	return rgb{int(sr/sw + .5), int(sg/sw + .5), int(sb/sw + .5)}.hex(), true
 }
+
+// LogoPNG is a logo as cards draw it in a treatment: PNG bytes, white in the
+// white treatment. ok is false for a logo that cannot be read.
+func LogoPNG(data []byte, mime, mode string) ([]byte, bool) {
+	p, ok := prepareLogo(data, mime, mode)
+	return p.png, ok
+}
+
+// InkOn is the title colour on a header colour: white or near-black.
+func InkOn(header string) string { return inkOn(hexOr(header, colNavy)).hex() }

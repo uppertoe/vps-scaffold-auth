@@ -307,6 +307,11 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 	if id, ok := s.readSession(r, now); ok {
 		switch id.Kind {
 		case session.KindBreakGlass:
+			// A card that opens an app names that app.
+			if v, ok := s.wrongAppPage(r.Context(), id, rd); ok {
+				s.render(w, http.StatusForbidden, "break_confirm", pageData{Scan: v})
+				return
+			}
 			data.BreakGlass = true
 			// principal is "breakglass:<label>"; show the human label.
 			data.Identity = strings.TrimPrefix(id.Email, "breakglass:")
@@ -1515,40 +1520,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// browser the next admin must not see it.
 	s.clearNotice(w)
 	http.Redirect(w, r, s.loginURL(rd), http.StatusFound)
-}
-
-// handleBreakGlassScan answers the address printed on a card. It grants
-// nothing: it shows a page whose one button posts the token to /break. Link
-// previews, chat apps and mail scanners (Safe Links among them) fetch a
-// shared card's address on their own, and before this page each fetch was a
-// grant, with its audit row and notification. The fetch is recorded as
-// "viewed", so a card whose address is being passed around still shows up.
-func (s *Server) handleBreakGlassScan(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r)
-	ua := clampUserAgent(r.UserAgent())
-	if !s.viewLimiter.Allow(ip) {
-		s.breakTooMany(w)
-		return
-	}
-	token := r.PathValue("token")
-	code, ok := s.activeCard(w, r, token, ip, ua)
-	if !ok {
-		return
-	}
-	// A card whose group has become an application role shows the same page
-	// as any card that is not active; the grant records and reports it.
-	if _, refused := s.targetRefusal(code.TargetGroup); refused {
-		s.cardNotAvailable(w)
-		return
-	}
-	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
-		CodeID: code.ID, Label: code.Label, ClientIP: ip,
-		UserAgent: ua, Outcome: store.OutcomeViewed,
-	}); err != nil {
-		// Nothing is granted here, so a failed write cannot hide a grant.
-		log.Printf("break-glass record viewed event for %q: %v", code.Label, err)
-	}
-	s.render(w, http.StatusOK, "break_confirm", pageData{BreakToken: token})
 }
 
 // handleBreakGlass grants emergency access from a card, once the person has

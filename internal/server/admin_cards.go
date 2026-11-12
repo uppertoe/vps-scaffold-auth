@@ -75,6 +75,7 @@ type cardRow struct {
 	Tested   string
 	Active   bool
 	Group    string // a legacy card's group
+	Refused  string // why that group may no longer be a card's (see refusedTargets)
 	Version  string // changes when the drawing does, so the thumbnail is fetched again
 }
 
@@ -133,6 +134,7 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 	}
 	v := &cardsView{Empty: len(codes) == 0, LegacyH: msgLegacyHeading, LegacyN: msgLegacyNote}
 	groups := map[string]*cardAppGroup{}
+	refused := s.refusedTargets()
 	sort.SliceStable(codes, func(i, j int) bool {
 		ai, aj := codes[i].Status == store.BreakGlassActive, codes[j].Status == store.BreakGlassActive
 		if ai != aj {
@@ -158,6 +160,7 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 		}
 		if c.App == "" {
 			row.Group = c.TargetGroup
+			row.Refused = refused[normalizeGroupName(c.TargetGroup)]
 			v.Legacy = append(v.Legacy, row)
 			continue
 		}

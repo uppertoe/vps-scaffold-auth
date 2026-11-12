@@ -32,7 +32,7 @@
     </section>
     {{else}}
     <section class="fsec"><h2><span>2</span>Which group does the card open?</h2>
-      <select name="group" aria-label="Group">{{range .Targets}}<option value="{{.Name}}"{{if .Refused}} disabled{{end}}{{if eq .Name $.NewCard.Group}} selected{{end}}>{{.Name}}{{if .Refused}} ({{.Refused}}){{end}}</option>{{end}}</select>
+      <select name="group" aria-label="Group">{{range .Targets}}<option value="{{.Name}}"{{if .Reason}} disabled{{end}}{{if eq .Name $.NewCard.Group}} selected{{end}}>{{.Name}}{{if .Reason}} ({{.Reason}}){{end}}</option>{{end}}</select>
       <input type="text" name="group_new" placeholder="Or a new group, such as ward-b" aria-label="A new group">
       <p class="hint">Without app roles, a card opens the sites of one group.</p></section>
     <section class="fsec"><h2><span>3</span>Which address should a scan open?</h2>

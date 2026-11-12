@@ -185,7 +185,7 @@ func TestAdminRequiresAdminGroup(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("admin /admin/break = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Break-glass codes") {
+	if !strings.Contains(rec.Body.String(), "Break-glass cards") {
 		t.Error("admin page did not render expected content")
 	}
 }
@@ -196,7 +196,7 @@ func TestAdminCreateCodeCSRF(t *testing.T) {
 	loginAs(t, c, sender, "admin@example.com", nil)
 
 	// Load the page to obtain a CSRF cookie + token.
-	rec := c.get("/admin/break", nil)
+	rec := c.get("/admin/break/new", nil)
 	tok := extractCSRF(t, rec.Body.String())
 
 	// Missing token → 403.
@@ -272,55 +272,15 @@ func TestBrandingColorsPersistAndLogoServed(t *testing.T) {
 		t.Errorf("favicon: status=%d type=%q len=%d, want the logo", rec.Code, rec.Header().Get("Content-Type"), rec.Body.Len())
 	}
 
-	// Admin branding page reflects saved colours.
+	// The old branding page now sends an administrator to Settings, where
+	// the site logo is set.
 	ac := newClient(t, srv.Handler())
 	loginAs(t, ac, sender, "admin@example.com", nil)
-	if body := ac.get("/admin/branding", nil).Body.String(); !strings.Contains(body, "#222222") {
-		t.Error("admin branding page does not show saved accent colour")
+	if rec := ac.get("/admin/branding", nil); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/admin/settings#logo" {
+		t.Errorf("GET /admin/branding = %d %q, want a redirect to Settings", rec.Code, rec.Header().Get("Location"))
 	}
-}
-
-func TestPerCodeBrandingOverridesAndInherits(t *testing.T) {
-	srv, _ := testServer(t)
-	ctx := context.Background()
-	// Global branding.
-	if err := srv.store.SaveBrandingText(ctx, "Global Title", "Global body", "Global instr"); err != nil {
-		t.Fatal(err)
-	}
-	id, err := srv.store.CreateBreakGlassCode(ctx, store.BreakGlassCode{
-		Label: "Lab", TargetGroup: "g", TokenEnc: "x", TokenHash: "h",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// No override yet → inherits global.
-	eff := srv.effectiveCardBranding(ctx, id)
-	if eff.Title != "Global Title" || eff.Body != "Global body" {
-		t.Fatalf("inherit failed: %+v", eff)
-	}
-
-	// Override just the title + accent colour.
-	if err := srv.store.SaveCodeBrandingMeta(ctx, id, "Cardiology", "", "", "", "#123456", "", "", ""); err != nil {
-		t.Fatal(err)
-	}
-	eff = srv.effectiveCardBranding(ctx, id)
-	if eff.Title != "Cardiology" {
-		t.Errorf("override title = %q, want Cardiology", eff.Title)
-	}
-	if eff.Body != "Global body" {
-		t.Errorf("blank body should inherit, got %q", eff.Body)
-	}
-	if eff.AccentColor != "#123456" {
-		t.Errorf("override accent = %q", eff.AccentColor)
-	}
-
-	// A different code stays on the global branding.
-	id2, _ := srv.store.CreateBreakGlassCode(ctx, store.BreakGlassCode{
-		Label: "Lab2", TargetGroup: "g", TokenEnc: "y", TokenHash: "h2",
-	})
-	if eff2 := srv.effectiveCardBranding(ctx, id2); eff2.Title != "Global Title" {
-		t.Errorf("second code should inherit global, got %q", eff2.Title)
+	if body := ac.get("/admin/settings", nil).Body.String(); !strings.Contains(body, "/admin/branding/logo/img") {
+		t.Error("the Settings page does not show the site logo")
 	}
 }
 
@@ -435,7 +395,7 @@ func TestLogoCacheClearedOnBrandingSave(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 	upload := func(logo []byte) {
-		tok := extractCSRF(t, c.get("/admin/branding", nil).Body.String())
+		tok := extractCSRF(t, c.get("/admin/settings", nil).Body.String())
 		var buf bytes.Buffer
 		mw := multipart.NewWriter(&buf)
 		mw.WriteField("csrf", tok)

@@ -174,6 +174,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /break/{token}", s.handleBreakGlassScan)
 	mux.HandleFunc("POST /break", s.handleBreakGlass)
 	mux.HandleFunc("POST /break/activate", s.handleBreakGlassActivate)
+	mux.HandleFunc("GET /card-logo/{id}", s.handleCardLogo)
 	mux.HandleFunc("GET /logo.img", s.handleLogo)
 	// The logo is also the favicon. Browsers ask for /favicon.ico on pages
 	// that link no icon (the admin pages, and anything a browser fetches
