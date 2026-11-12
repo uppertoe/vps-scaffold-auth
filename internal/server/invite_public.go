@@ -186,7 +186,7 @@ func (s *Server) handleInviteLink(w http.ResponseWriter, r *http.Request) {
 	}
 	a, known := s.appRoles.Apps[v.App]
 	if !ok || !known {
-		s.renderInvite(w, http.StatusNotFound, &invitePage{Heading: msgInviteBadTitle, Lines: []string{msgInviteBadBody, msgInviteBadNext}})
+		s.renderInvite(w, http.StatusNotFound, badInvitePage())
 		return
 	}
 	now := s.now()
@@ -209,7 +209,8 @@ func (s *Server) handleInviteLink(w http.ResponseWriter, r *http.Request) {
 }
 
 // closedInvitePage is the page of an invitation that can no longer be
-// accepted: accepted, withdrawn or expired.
+// accepted: accepted, withdrawn, not delivered or expired. A link whose email
+// was not delivered shows the page of a link that is not recognised.
 func (s *Server) closedInvitePage(r *http.Request, a *roles.App, v store.Invitation) *invitePage {
 	switch {
 	case !v.AcceptedAt.IsZero():
@@ -226,11 +227,18 @@ func (s *Server) closedInvitePage(r *http.Request, a *roles.App, v store.Invitat
 			fmt.Sprintf(msgInviteGoneBody, v.Email, s.longDate(v.WithdrawnAt)),
 			fmt.Sprintf(msgInviteAskAgain, v.CreatedBy),
 		}}
+	case v.Undelivered:
+		return badInvitePage()
 	}
 	return &invitePage{Heading: msgInviteExpTitle, Lines: []string{
 		fmt.Sprintf(msgInviteExpBody, v.Email, s.longDate(v.ExpiresAt)),
 		fmt.Sprintf(msgInviteAskAgain, v.CreatedBy),
 	}}
+}
+
+// badInvitePage is the page of a link that is not recognised.
+func badInvitePage() *invitePage {
+	return &invitePage{Heading: msgInviteBadTitle, Lines: []string{msgInviteBadBody, msgInviteBadNext}}
 }
 
 // handleInviteSend is "Send the code". It is a sign-in form like /request:
@@ -253,7 +261,7 @@ func (s *Server) handleInviteSend(w http.ResponseWriter, r *http.Request) {
 	}
 	a, known := s.appRoles.Apps[v.App]
 	if !ok || !known {
-		s.renderInvite(w, http.StatusNotFound, &invitePage{Heading: msgInviteBadTitle, Lines: []string{msgInviteBadBody, msgInviteBadNext}})
+		s.renderInvite(w, http.StatusNotFound, badInvitePage())
 		return
 	}
 	if !v.Open(now) {

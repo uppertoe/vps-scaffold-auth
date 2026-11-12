@@ -20,6 +20,10 @@ type orgNameCopy struct{ Label, Hint, Button string }
 
 var orgNameText = orgNameCopy{Label: msgOrgLabel, Hint: msgOrgHint, Button: msgOrgButton}
 
+// The Invitations page's warning about an invitation the mailer refused,
+// which closes it.
+const msgInviteUndelivered = "The invitation to %s could not be delivered, so its link no longer works. Check the address, then send it again or withdraw it."
+
 func init() {
 	adminNotices["org-saved"] = msgOrgSaved
 	adminActionLabels[store.AdminActionGroupOrg] = msgOrgAudit

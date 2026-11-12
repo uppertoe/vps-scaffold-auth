@@ -43,8 +43,7 @@ const (
 // The strings of the Invitations pages. Those marked DRAFT are not yet
 // approved.
 const (
-	msgInviteUndelivered = "The invitation to %s could not be delivered. Check the address, then withdraw it and invite again."
-	msgInviteWaiting     = "The invitation to %s for %s has not been accepted after a week."
+	msgInviteWaiting = "The invitation to %s for %s has not been accepted after a week."
 	// The check step. DRAFT.
 	msgCheckSend        = "A personal link, sent by email"
 	msgCheckWebmail     = "A personal link, sent by email. A webmail address can be invited."
@@ -171,7 +170,7 @@ func (s *Server) handleAdminInvites(w http.ResponseWriter, r *http.Request) {
 		case inviteWaiting:
 			row.Resend, row.Withdraw = true, true
 		case inviteUndelivered:
-			row.Withdraw = true
+			row.SendAgain, row.Withdraw = true, true
 			v.Attention = append(v.Attention, attentionLine{Bad: true, Before: fmt.Sprintf(msgInviteUndelivered, inv.Email)})
 		case inviteExpired:
 			row.SendAgain = true
@@ -558,7 +557,9 @@ func (s *Server) adminEvent(r *http.Request, actor, action, target, detail strin
 
 // sendInvitations emails each invitation its link, one after another on one
 // goroutine, through the notice slots. An email the mailer refuses marks its
-// invitation as not delivered; the log names the address and never the link.
+// invitation as not delivered, which closes it; one it accepts reopens an
+// invitation sent again after a failure. The log names the address and never
+// the link.
 func (s *Server) sendInvitations(invs []store.Invitation, tokens []string) {
 	msgs := make([]inviteMail, len(invs))
 	for i, v := range invs {
@@ -573,8 +574,15 @@ func (s *Server) sendInvitations(invs []store.Invitation, tokens []string) {
 				if err := s.store.MarkInvitationUndelivered(context.Background(), m.inv.ID, m.inv.TokenHash); err != nil {
 					log.Printf("record undelivered invitation to %s: %v", m.inv.Email, err)
 				}
+				continue
+			}
+			if err := s.store.MarkInvitationDelivered(context.Background(), m.inv.ID, m.inv.TokenHash); err != nil {
+				log.Printf("record delivered invitation to %s: %v", m.inv.Email, err)
 			}
 		}
+		// A delivery closes or reopens an invitation, which decides whether
+		// its address may sign in.
+		s.forgetRoles()
 		if failed > 0 {
 			return fmt.Errorf("%d of %d not delivered", failed, len(msgs))
 		}

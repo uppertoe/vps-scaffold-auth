@@ -43,13 +43,16 @@ type Invitation struct {
 	ExpiresAt   time.Time
 	AcceptedAt  time.Time
 	WithdrawnAt time.Time
-	// Undelivered records that the mailer refused the last email sent for it.
+	// Undelivered records that the mailer refused the last email sent for
+	// it. An undelivered invitation is closed: its link does not work and
+	// the address may not sign in through it, until it is sent again and
+	// delivered.
 	Undelivered bool
 }
 
 // Open reports whether the invitation can still be accepted at now.
 func (v Invitation) Open(now time.Time) bool {
-	return v.AcceptedAt.IsZero() && v.WithdrawnAt.IsZero() && now.Before(v.ExpiresAt)
+	return v.AcceptedAt.IsZero() && v.WithdrawnAt.IsZero() && !v.Undelivered && now.Before(v.ExpiresAt)
 }
 
 const invitationSchema = `
@@ -193,9 +196,11 @@ func (s *SQLite) InvitationByTokenHash(ctx context.Context, tokenHash string) (I
 	return s.oneInvitation(ctx, `token_hash = ?`, tokenHash)
 }
 
-// ResendInvitation gives an invitation a new token and a new expiry, and
-// clears a failed delivery. The old link stops working. An accepted or
-// withdrawn invitation is refused with ErrInvitationClosed.
+// ResendInvitation gives an invitation a new token and a new expiry. The old
+// link stops working. A failed delivery is kept until the new email is
+// delivered (MarkInvitationDelivered), so an undelivered invitation reopens
+// only then. An accepted or withdrawn invitation is refused with
+// ErrInvitationClosed.
 func (s *SQLite) ResendInvitation(ctx context.Context, id int64, tokenHash string, sentAt, expiresAt time.Time, e AdminEvent) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -203,7 +208,7 @@ func (s *SQLite) ResendInvitation(ctx context.Context, id int64, tokenHash strin
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
 	res, err := tx.ExecContext(ctx,
-		`UPDATE invitations SET token_hash = ?, sent_at = ?, expires_at = ?, undelivered = 0
+		`UPDATE invitations SET token_hash = ?, sent_at = ?, expires_at = ?
 		 WHERE id = ? AND accepted_at = 0 AND withdrawn_at = 0`,
 		tokenHash, sentAt.Unix(), expiresAt.Unix(), id)
 	if err != nil {
@@ -245,6 +250,14 @@ func (s *SQLite) WithdrawInvitation(ctx context.Context, id int64, at time.Time,
 // alone.
 func (s *SQLite) MarkInvitationUndelivered(ctx context.Context, id int64, tokenHash string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE invitations SET undelivered = 1 WHERE id = ? AND token_hash = ?`, id, tokenHash)
+	return err
+}
+
+// MarkInvitationDelivered records that the email carrying tokenHash was
+// accepted by the mailer, which reopens an invitation whose earlier email was
+// refused. A resend since then has a new hash and is left alone.
+func (s *SQLite) MarkInvitationDelivered(ctx context.Context, id int64, tokenHash string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE invitations SET undelivered = 0 WHERE id = ? AND token_hash = ? AND undelivered = 1`, id, tokenHash)
 	return err
 }
 

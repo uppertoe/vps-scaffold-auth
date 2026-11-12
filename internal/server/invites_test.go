@@ -374,11 +374,91 @@ func TestUndeliveredInvitation(t *testing.T) {
 	ml.waitFor(1, invitationsTo("bounce@monash.org"))
 	time.Sleep(50 * time.Millisecond)
 	body := html.UnescapeString(c.get("/admin/invitations", nil).Body.String())
-	if !strings.Contains(body, ">Not delivered<") || !strings.Contains(body, "The invitation to bounce@monash.org could not be delivered. Check the address, then withdraw it and invite again.") {
+	if !strings.Contains(body, ">Not delivered<") || !strings.Contains(body, "The invitation to bounce@monash.org could not be delivered, so its link no longer works. Check the address, then send it again or withdraw it.") {
 		t.Errorf("Invitations page:\n%s", body)
 	}
-	if strings.Contains(body, ">Resend<") {
-		t.Error("an undelivered invitation offers Resend")
+	if strings.Contains(body, ">Resend<") || !strings.Contains(body, ">Send again<") || !strings.Contains(body, ">Withdraw<") {
+		t.Error("an undelivered invitation should offer Send again and Withdraw, not Resend")
+	}
+}
+
+// A failed delivery closes the invitation: its link no longer works, no code
+// is sent through it, and the address may no longer sign in through it, at
+// once. Send again gives a new link and a new fortnight, and reopens the
+// invitation once the email is delivered.
+func TestFailedDeliveryClosesTheInvitation(t *testing.T) {
+	srv, sender, ml, c := inviteAdmin(t)
+	ctx := context.Background()
+	invite(t, c, adminInviteForm("k.lee@monash.org"))
+	first := inviteLinkIn(t, ml.waitFor(1, invitationsTo("k.lee@monash.org"))[0])
+	// The open invitation lets the address sign in; the session's check and
+	// the sign-in check both read the cached role data.
+	p := newClient(t, srv.Handler())
+	loginAs(t, p, sender, "k.lee@monash.org", nil)
+	id := sessionOf(t, srv, p)
+	if !srv.mayHoldRoleNow(ctx, "k.lee@monash.org") || !srv.mayHoldRoleSnapshot(ctx, id) {
+		t.Fatal("an open invitation does not let the address sign in")
+	}
+
+	// The resend's email is refused.
+	ml.mu.Lock()
+	ml.fail = "k.lee@monash.org"
+	ml.mu.Unlock()
+	if rec := c.postForm("/admin/invitations/1/resend", url.Values{"csrf": {csrfOf(t, c, "/admin/invitations/new")}}); rec.Code != http.StatusFound {
+		t.Fatalf("resend = %d", rec.Code)
+	}
+	failed := inviteLinkIn(t, ml.waitFor(2, invitationsTo("k.lee@monash.org"))[1])
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if v, _, _ := srv.store.GetInvitation(ctx, 1); v.Undelivered {
+			break
+		}
+	}
+	if srv.mayHoldRoleNow(ctx, "k.lee@monash.org") || srv.mayHoldRoleSnapshot(ctx, id) {
+		t.Error("an undelivered invitation still lets the address sign in")
+	}
+	anon := newClient(t, srv.Handler())
+	for _, link := range []string{first, failed} {
+		if body := html.UnescapeString(anon.get(link, nil).Body.String()); !strings.Contains(body, msgInviteBadTitle) || strings.Contains(body, msgInviteSendCode) {
+			t.Errorf("%s shows:\n%s", link, body)
+		}
+	}
+	sender.reset()
+	if rec := anon.postForm("/invite/send", url.Values{"token": {strings.TrimPrefix(failed, "/invite/")}}); strings.Contains(rec.Body.String(), "Enter the code") || sender.code() != "" {
+		t.Error("an undelivered invitation still sends a code")
+	}
+	if _, err := srv.store.AcceptInvitation(ctx, 1, "k.lee@monash.org", srv.now(), store.AdminEvent{CreatedAt: srv.now()}); !errors.Is(err, store.ErrInvitationClosed) {
+		t.Errorf("accepting an undelivered invitation: %v", err)
+	}
+
+	// Send again, delivered this time: a new link, which works.
+	ml.mu.Lock()
+	ml.fail = ""
+	ml.mu.Unlock()
+	before, _, _ := srv.store.GetInvitation(ctx, 1)
+	if rec := c.postForm("/admin/invitations/1/resend", url.Values{"csrf": {csrfOf(t, c, "/admin/invitations/new")}}); rec.Code != http.StatusFound {
+		t.Fatalf("send again = %d", rec.Code)
+	}
+	fresh := inviteLinkIn(t, ml.waitFor(3, invitationsTo("k.lee@monash.org"))[2])
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if v, _, _ := srv.store.GetInvitation(ctx, 1); !v.Undelivered {
+			break
+		}
+	}
+	after, _, _ := srv.store.GetInvitation(ctx, 1)
+	if after.Undelivered || after.TokenHash == before.TokenHash || !after.ExpiresAt.Equal(after.SentAt.Add(inviteTTL)) {
+		t.Errorf("after sending again: %+v", after)
+	}
+	if body := html.UnescapeString(anon.get(fresh, nil).Body.String()); !strings.Contains(body, msgInviteSendCode) {
+		t.Errorf("the new link does not work:\n%s", body)
+	}
+	if body := html.UnescapeString(anon.get(failed, nil).Body.String()); !strings.Contains(body, msgInviteBadTitle) {
+		t.Error("the undelivered link works again")
+	}
+	if !srv.mayHoldRoleNow(ctx, "k.lee@monash.org") {
+		t.Error("the delivered invitation does not let the address sign in")
+	}
+	if list := html.UnescapeString(c.get("/admin/invitations", nil).Body.String()); !strings.Contains(list, ">Waiting for a reply<") || strings.Contains(list, "could not be delivered") {
+		t.Error("the list still shows the invitation as not delivered")
 	}
 }
 

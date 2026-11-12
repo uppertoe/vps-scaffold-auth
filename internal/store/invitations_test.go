@@ -129,3 +129,45 @@ func TestReminderSentOnce(t *testing.T) {
 		t.Error("a new end date did not get its own reminder")
 	}
 }
+
+// A failed delivery closes the invitation: it cannot be accepted. Sending it
+// again keeps it closed until the new email is delivered, which reopens it;
+// a delivery of an older email changes nothing.
+func TestUndeliveredInvitationIsClosedUntilDelivered(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	id := newInvite(s, t, "k.lee@example.org", "h1", now, time.Time{})
+	if err := s.MarkInvitationUndelivered(ctx, id, "h1"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, _ := s.GetInvitation(ctx, id); !v.Undelivered || v.Open(now) {
+		t.Fatalf("an undelivered invitation is open: %+v", v)
+	}
+	if _, err := s.AcceptInvitation(ctx, id, "k.lee@example.org", now, AdminEvent{CreatedAt: now}); !errors.Is(err, ErrInvitationClosed) {
+		t.Errorf("accept undelivered: err = %v", err)
+	}
+	later := now.Add(time.Hour)
+	if err := s.ResendInvitation(ctx, id, "h2", later, later.Add(14*24*time.Hour), AdminEvent{Action: AdminActionInviteResend, CreatedAt: later}); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, _ := s.GetInvitation(ctx, id); v.Open(later) {
+		t.Error("sending again reopened the invitation before the email was delivered")
+	}
+	if err := s.MarkInvitationDelivered(ctx, id, "h1"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, _ := s.GetInvitation(ctx, id); v.Open(later) {
+		t.Error("the delivery of the old email reopened the invitation")
+	}
+	if err := s.MarkInvitationDelivered(ctx, id, "h2"); err != nil {
+		t.Fatal(err)
+	}
+	v, _, _ := s.GetInvitation(ctx, id)
+	if v.Undelivered || !v.Open(later) || !v.ExpiresAt.Equal(later.Add(14*24*time.Hour)) {
+		t.Errorf("after delivery: %+v", v)
+	}
+	if _, err := s.AcceptInvitation(ctx, id, "k.lee@example.org", later, AdminEvent{CreatedAt: later}); err != nil {
+		t.Errorf("accept after delivery: %v", err)
+	}
+}

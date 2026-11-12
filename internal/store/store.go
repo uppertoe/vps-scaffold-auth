@@ -514,6 +514,9 @@ type Store interface {
 	// MarkInvitationUndelivered records a refused email, unless the
 	// invitation has been resent since.
 	MarkInvitationUndelivered(ctx context.Context, id int64, tokenHash string) error
+	// MarkInvitationDelivered reopens an invitation whose email carrying
+	// tokenHash the mailer has accepted.
+	MarkInvitationDelivered(ctx context.Context, id int64, tokenHash string) error
 	// AcceptInvitation marks an open invitation for email accepted and gives
 	// the person its role, in one transaction with e.
 	AcceptInvitation(ctx context.Context, id int64, email string, now time.Time, e AdminEvent) (Invitation, error)
