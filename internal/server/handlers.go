@@ -1167,6 +1167,10 @@ func (s *Server) servedTarget(rawURL string) (string, bool) {
 // since it just served the login page. This makes a missing or misconfigured
 // destination land safely instead of on a TLS error.
 func (s *Server) loginRedirect(rd string) string {
+	// An invitation's code step ends on the auth host's own page for it.
+	if strings.HasPrefix(rd, s.cfg.PublicURL+inviteDonePath) {
+		return rd
+	}
 	if target, ok := s.servedTarget(rd); ok {
 		return target
 	}

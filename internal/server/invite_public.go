@@ -58,6 +58,9 @@ const (
 	msgInviteBadNext    = "If you still need access, you can ask the person who invited you to send a new invitation." // DRAFT
 )
 
+// inviteDonePath is where the code step of an invitation lands.
+const inviteDonePath = "/invite/done?i="
+
 // invitePage is the view of an invitation's page.
 type invitePage struct {
 	Heading  string
@@ -263,7 +266,7 @@ func (s *Server) handleInviteSend(w http.ResponseWriter, r *http.Request) {
 	// The address is permitted while the invitation is open (see
 	// mayHoldRoleNow), so this sends a real code under the usual limits.
 	s.issueCode(r, v.Email, true, now)
-	rd := s.cfg.PublicURL + "/invite/done?i=" + strconv.FormatInt(v.ID, 10)
+	rd := s.cfg.PublicURL + inviteDonePath + strconv.FormatInt(v.ID, 10)
 	if err := s.sessions.SetState(w, session.State{Email: v.Email, Redirect: rd, Invite: v.ID}, s.cfg.OTPTTL, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
