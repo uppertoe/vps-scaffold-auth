@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -40,7 +41,12 @@ type roleState struct {
 	cards       map[int64]store.BreakGlassCode
 	// invited are the addresses with an open invitation, who may sign in.
 	invited map[string]bool
+	// invitedRoles are the app roles with an open invitation, keyed by
+	// roleKey.
+	invitedRoles map[string]bool
 }
+
+func roleKey(app, role string) string { return app + "\x00" + role }
 
 type roleCache struct {
 	mu    sync.Mutex
@@ -109,13 +115,14 @@ func (s *Server) roleData(ctx context.Context) roleState {
 		log.Printf("app roles: reading invitations: %v", err)
 		return s.roleCache.state
 	}
-	invited := map[string]bool{}
+	invited, invitedRoles := map[string]bool{}, map[string]bool{}
 	for _, v := range invites {
 		if v.Open(now) {
 			invited[v.Email] = true
+			invitedRoles[roleKey(v.App, v.Role)] = true
 		}
 	}
-	s.roleCache.state = roleState{assignments: as, domains: domains, cards: cards, invited: invited}
+	s.roleCache.state = roleState{assignments: as, domains: domains, cards: cards, invited: invited, invitedRoles: invitedRoles}
 	s.roleCache.at = now
 	s.roleCache.ok = true
 	return s.roleCache.state
@@ -260,6 +267,53 @@ func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
 	w.Header().Set(headerRoles, strings.Join(held, " "))
 	w.WriteHeader(http.StatusOK)
 	return true
+}
+
+// roleLoginHint is what a role guard adds to the login URL, in the parameters
+// a domain guard uses (see redirectToLogin). When the role is held only by
+// domain groups, it carries their domains as rqd, so the sign-in page hints
+// them and /request declines an address at none of them, exactly as for
+// protected_domains. Otherwise it carries rqr=1, which marks a role guard so
+// the page does not fall back to the allow-list's domains, and rhd, the
+// domains of any domain groups among the holders, which the page hints but
+// never declines on: an address that holds no role is then sent no code and
+// sees the ordinary "check your email" page, so the page does not reveal who
+// holds the role. Like the domain guard's hint, this is a courtesy and not a
+// boundary: /verify decides.
+func (s *Server) roleLoginHint(r *http.Request) string {
+	app := strings.TrimSpace(r.Header.Get(headerApp))
+	role := strings.TrimSpace(r.Header.Get(headerRole))
+	if role == "" {
+		role = roles.UserRole
+	}
+	if r.Header.Get(headerPolicy) != "" || !s.appRoles.Has(app, role) {
+		return ""
+	}
+	st := s.roleData(r.Context())
+	domains, only := roles.SignInDomains(app, role, st.assignments, s.roleEnv(st))
+	if only {
+		// A card or an open invitation for the role admits someone outside
+		// the domains too.
+		for _, c := range st.cards {
+			if c.App == app && c.Status == store.BreakGlassActive && (role == roles.UserRole || c.Role == role) {
+				only = false
+			}
+		}
+		for _, rl := range s.appRoles.Apps[app].RoleOrder {
+			if (rl == role || role == roles.UserRole) && st.invitedRoles[roleKey(app, rl)] {
+				only = false
+			}
+		}
+	}
+	hint := clampHint(strings.Join(domains, " "))
+	if hint != "" && only {
+		return "&rqd=" + url.QueryEscape(hint)
+	}
+	out := "&rqr=1"
+	if hint != "" {
+		out += "&rhd=" + url.QueryEscape(hint)
+	}
+	return out
 }
 
 // mayHoldRoleNow reports whether email holds a role through a domain group,

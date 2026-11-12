@@ -255,7 +255,11 @@ func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	// in handleVerify. A group-only route (admin/collaborator door) declares no
 	// domain, so nothing is carried and it neither hints nor declines.
 	reqDomains, reqGroups, _, _ := parsePolicy(r.Header.Get(headerPolicy))
-	if v := clampHint(reqDomains); v != "" {
+	if wantsRoles(r) {
+		// A role guard sends no X-Auth-Policy; its hint comes from who
+		// holds the role (roleLoginHint).
+		loginURL += s.roleLoginHint(r)
+	} else if v := clampHint(reqDomains); v != "" {
 		loginURL += "&rqd=" + url.QueryEscape(v)
 		// Optional friendly label to display instead of enumerating domains.
 		if lbl := clampHint(r.Header.Get(headerDomainLabel)); lbl != "" {
@@ -364,6 +368,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, "")
 	data := pageData{Redirect: rd, RequireGroups: clampHint(r.URL.Query().Get("rqg"))}
 	applyAccessHint(&data, r.URL.Query().Get("rqd"), r.URL.Query().Get("dlabel"))
+	applyRoleHint(&data, r.URL.Query().Get("rqr"), r.URL.Query().Get("rhd"))
 	s.applyAltLogin(&data, r.URL.Query().Get("alt"), r.URL.Query().Get("altlabel"))
 	s.render(w, http.StatusOK, "login", data)
 }
@@ -382,6 +387,21 @@ func applyAccessHint(d *pageData, rqd, label string) {
 	}
 }
 
+// applyRoleHint records a role guard's hint (see roleLoginHint) on the page,
+// so it survives to /request as hidden fields. rhd is hinted and never
+// declined on. A role guard whose holders are all domain groups carries rqd
+// instead, which applyAccessHint handles and which wins here.
+func applyRoleHint(d *pageData, rqr, rhd string) {
+	if clampHint(rqr) == "" || d.RequireDomains != "" {
+		return
+	}
+	d.RoleGuard = true
+	if rhd = clampHint(rhd); rhd != "" {
+		d.RoleHintDomains = rhd
+		d.HintDomains = formatDomains(rhd)
+	}
+}
+
 // applyLoginBranding fills the domain-derived UX fields on the login page from
 // the configured ALLOWED_EMAIL_DOMAINS, so a DIRECT visit (no route rqd) still
 // tells the user which domain to use. It runs after applyAccessHint, so a
@@ -396,6 +416,14 @@ func (s *Server) applyLoginBranding(d *pageData) {
 	// A group-gated door declares no domain on purpose (it's the entrance for
 	// people who can't match one), so never presume the allow-list here.
 	if d.RequireGroups != "" {
+		return
+	}
+	// Nor at a role guard, where the allow-list says nothing about who holds
+	// the role; only the domains of its domain groups are suggested.
+	if d.RoleGuard {
+		if dom := firstDomain(d.RoleHintDomains); dom != "" && d.EmailPlaceholder == "" {
+			d.EmailPlaceholder = "you@" + dom
+		}
 		return
 	}
 	// Open registration accepts any domain, so there is no domain to advertise:
@@ -592,11 +620,13 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	rqd := clampHint(r.PostFormValue("rqd"))
 	dlabel := clampHint(r.PostFormValue("dlabel"))
 	rqg := clampHint(r.PostFormValue("rqg"))
+	rqr, rhd := r.PostFormValue("rqr"), r.PostFormValue("rhd")
 	alt, altLabel := r.PostFormValue("alt"), r.PostFormValue("altlabel")
 
 	if !validEmail(emailAddr) {
 		data := pageData{Error: "Please enter a valid email address.", Redirect: rd, Remember: remember, RequireGroups: rqg}
 		applyAccessHint(&data, rqd, dlabel)
+		applyRoleHint(&data, rqr, rhd)
 		s.applyAltLogin(&data, alt, altLabel)
 		s.render(w, http.StatusBadRequest, "login", data)
 		return

@@ -77,6 +77,11 @@ type pageData struct {
 	// hint/placeholder: that door is deliberately for people who can't match the
 	// domain, so it must neither hint a domain nor presume one in the example.
 	RequireGroups string
+	// RoleGuard marks a login from a role guard that may not decline early,
+	// and RoleHintDomains are the domains it hints (see roleLoginHint). Both
+	// are carried to /request as hidden fields.
+	RoleGuard       bool
+	RoleHintDomains string
 	// EmailPlaceholder is the login field's example address, derived from the
 	// effective domain (the route requirement, else the configured allow-list)
 	// as you@<domain>; empty falls back to a generic example in the template.

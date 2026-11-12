@@ -137,6 +137,44 @@ func MaySignIn(email string, lists map[string]bool, as []store.RoleAssignment, e
 	return false
 }
 
+// SignInDomains is what the sign-in page may say about a role guard before
+// anyone has typed an address. domains are the email domains of the domain
+// groups that hold role in app (for the user role, any role in the app, since
+// any role admits it), sorted and without repeats. onlyDomains reports
+// whether those groups are the only assignments that could admit anyone, so
+// an address at none of the domains could never be admitted: it is false
+// when a list, a current person assignment, a network or guests also hold
+// the role, and when there are no domains at all. Cards and invitations are
+// not assignments; the caller weighs them.
+func SignInDomains(app, role string, as []store.RoleAssignment, env Env) (domains []string, onlyDomains bool) {
+	onlyDomains = true
+	seen := map[string]bool{}
+	for _, a := range as {
+		if a.App != app || (a.Role != role && role != UserRole) {
+			continue
+		}
+		switch a.Kind {
+		case store.AssignDomainGroup:
+			for _, d := range env.Domains[a.Ref] {
+				if !seen[d] {
+					seen[d] = true
+					domains = append(domains, d)
+				}
+			}
+		case store.AssignPerson:
+			// An ended person assignment admits nobody, so it does not
+			// stand in the way of declining.
+			if current(a, env.Now) {
+				onlyDomains = false
+			}
+		default:
+			onlyDomains = false
+		}
+	}
+	sort.Strings(domains)
+	return domains, onlyDomains && len(domains) > 0
+}
+
 func current(a store.RoleAssignment, now time.Time) bool {
 	return a.Until.IsZero() || now.Before(a.Until)
 }
