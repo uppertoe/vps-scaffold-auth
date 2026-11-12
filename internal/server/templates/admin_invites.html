@@ -21,8 +21,8 @@
     <div><span class="pill {{.Tone}}">{{.State}}</span></div>
     <div class="acts">
       {{if .Resend}}<form method="post" action="/admin/invitations/{{.ID}}/resend"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="link">Resend</button></form><span class="muted">&middot;</span>{{end}}
+      {{if .SendAgain}}<form method="post" action="/admin/invitations/{{.ID}}/resend"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="link">Send again</button></form>{{if .Withdraw}}<span class="muted">&middot;</span>{{end}}{{end}}
       {{if .Withdraw}}<form method="post" action="/admin/invitations/{{.ID}}/withdraw"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="link">Withdraw</button></form>{{end}}
-      {{if .SendAgain}}<form method="post" action="/admin/invitations/{{.ID}}/resend"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="link">Send again</button></form>{{end}}
     </div>
   </div>
   {{else}}

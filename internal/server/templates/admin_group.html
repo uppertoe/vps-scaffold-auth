@@ -52,7 +52,7 @@
   <p class="hint">{{.OrgText.Hint}}</p>
   <form class="inlineform" method="post" action="/admin/groups/{{$group}}/org">
     <input type="hidden" name="csrf" value="{{$csrf}}">
-    <input type="text" id="org-{{$group}}" name="org" maxlength="80" value="{{.Org}}" placeholder="RCH">
+    <input type="text" id="org-{{$group}}" name="org" maxlength="80" value="{{.Org}}">
     <button type="submit" class="ghost">{{.OrgText.Button}}</button>
   </form>
 </section>

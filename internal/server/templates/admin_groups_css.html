@@ -24,6 +24,8 @@
   .segs span.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .segs span.off { color: var(--faint); }
   form.newgroup:has(input[name=kind][value=domain]:checked) .for-list { display: none; }
+  /* A field whose label is its section's heading. */
+  .fsec h2 label { display: inline; font: inherit; color: inherit; margin: 0; }
   form.newgroup:has(input[name=kind][value=list]:checked) .for-domain { display: none; }
   .btnrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .btnrow button { margin: 0; }
