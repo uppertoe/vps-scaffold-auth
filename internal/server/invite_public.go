@@ -24,8 +24,9 @@ import (
 // safe for a mail scanner to fetch. Its button posts the token to
 // /invite/send, which sends a sign-in code to the invited address through the
 // same limits as /request and starts the code step with the invitation named
-// in the signed state cookie. /verify-code then accepts the invitation and
-// signs the person in, and /invite/done shows the result.
+// in the signed state cookie, on the invitation's own code page. Its "Send a
+// new code" posts the token to /invite/send again. /verify-code then accepts
+// the invitation and signs the person in, and /invite/done shows the result.
 
 // The strings of the invitation's pages and email. Those marked DRAFT are not
 // yet approved.
@@ -72,6 +73,16 @@ type invitePage struct {
 	Href     string // a link button, such as Open {app}
 	SignOut  bool
 	SendCode string
+	// The code page: the form that posts the code to /verify-code (CodeForm,
+	// left out once the code step has ended), and the line and button that
+	// send a new code (when Token is set).
+	Code       bool
+	CodeForm   bool
+	CodeButton string
+	Redirect   string
+	Error      string
+	Late       string
+	NewCode    string
 }
 
 // inviteRoleWords is how the invitation says what it gives: "to use
@@ -279,7 +290,43 @@ func (s *Server) handleInviteSend(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}
-	s.render(w, http.StatusOK, "code", pageData{Email: v.Email, Redirect: rd})
+	s.renderInvite(w, http.StatusOK, s.inviteCodePage(a, v, r.PostFormValue("token"), rd))
+}
+
+// inviteCodePage is the invitation's code page: the box naming the app and
+// role, the code form, and the button that sends a new code with the token.
+func (s *Server) inviteCodePage(a *roles.App, v store.Invitation, token, rd string) *invitePage {
+	return &invitePage{
+		Heading: msgInviteCodeTitle, App: a.Label, Access: s.inviteBoxLine(a, v),
+		Lines: []string{fmt.Sprintf(msgInviteCodeBody, v.Email, a.Label)},
+		Code:  true, CodeForm: true, CodeButton: msgInviteCodeButton, Redirect: rd,
+		Token: token, Late: msgInviteCodeLate, NewCode: msgInviteNewCode,
+	}
+}
+
+// renderInviteCodeError shows the invitation's code page again after a code
+// was refused, in place of the sign-in code page. The token comes back with
+// the code form, and is kept for "Send a new code" only when it still names
+// the invitation the code step is for. ended drops the code form, after the
+// code step has ended. It reports false, having drawn nothing, when the
+// invitation cannot be found, so the caller shows its usual page.
+func (s *Server) renderInviteCodeError(w http.ResponseWriter, r *http.Request, status int, st *session.State, rd, msg string, ended bool) bool {
+	v, ok, err := s.store.GetInvitation(r.Context(), st.Invite)
+	if err != nil || !ok {
+		return false
+	}
+	a, known := s.appRoles.Apps[v.App]
+	if !known {
+		return false
+	}
+	token := r.PostFormValue("token")
+	if t, found, err := s.inviteByToken(r.Context(), token); err != nil || !found || t.ID != v.ID {
+		token = ""
+	}
+	p := s.inviteCodePage(a, v, token, rd)
+	p.Error, p.CodeForm = msg, !ended
+	s.renderInvite(w, status, p)
+	return true
 }
 
 // acceptInvite accepts the invitation the code step names, after a correct

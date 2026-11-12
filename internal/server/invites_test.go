@@ -161,7 +161,7 @@ func TestInvitationAcceptedByLinkAndCode(t *testing.T) {
 		}
 	}
 	sender.reset()
-	if rec := p.postForm("/invite/send", url.Values{"token": {token}}); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Check your email") {
+	if rec := p.postForm("/invite/send", url.Values{"token": {token}}); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), msgInviteCodeTitle) {
 		t.Fatalf("send the code = %d", rec.Code)
 	}
 	code := sender.code()
@@ -205,6 +205,106 @@ func TestInvitationAcceptedByLinkAndCode(t *testing.T) {
 	}
 	if !seen[store.AdminActionInviteCreate] || !seen[store.AdminActionInviteAccept] {
 		t.Errorf("admin log = %+v", events)
+	}
+}
+
+// The invitation has its own code page: it names the address and the app,
+// keeps the box, accepts the code with "Accept the invitation", sends a new
+// code with the token, and offers no other address. A wrong code shows the
+// page again with its own sentence; the right one lands on the accepted page.
+func TestInvitationCodePage(t *testing.T) {
+	srv, sender, ml, c := inviteAdmin(t)
+	invite(t, c, adminInviteForm("k.lee@monash.org"))
+	link := inviteLinkIn(t, ml.waitFor(1, invitationsTo("k.lee@monash.org"))[0])
+	token := strings.TrimPrefix(link, "/invite/")
+	p := newClient(t, srv.Handler())
+	p.get(link, nil)
+	sender.reset()
+	rec := p.postForm("/invite/send", url.Values{"token": {token}})
+	body := html.UnescapeString(rec.Body.String())
+	code := sender.code()
+	if rec.Code != http.StatusOK || code == "" {
+		t.Fatalf("send the code = %d, code %q", rec.Code, code)
+	}
+	for _, want := range []string{
+		"<h1 id=\"invite-heading\">Enter the code</h1>",
+		"We have sent a code to k.lee@monash.org. Enter it here to accept your invitation to Fellowship enquiries.",
+		"<b>Fellowship enquiries</b>As an administrator, until 31 January 2099",
+		`action="/verify-code"`, ">Accept the invitation</button>",
+		"If the code has not arrived after a few minutes, check your junk folder, then send a new code.",
+		`action="/invite/send"`, `name="token" value="` + token + `"`, ">Send a new code</button>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("code page lacks %q:\n%s", want, body)
+		}
+	}
+	for _, not := range []string{"Use a different email", "Check your email", "can sign in, we've sent you a code"} {
+		if strings.Contains(body, not) {
+			t.Errorf("code page shows %q", not)
+		}
+	}
+
+	// A wrong code: the same page, with the sentence, and the code still works.
+	wrong := "000000"
+	if code == wrong {
+		wrong = "111111"
+	}
+	rec = p.postForm("/verify-code", url.Values{"code": {wrong}, "token": {token}, "rd": {"https://auth.example.com/invite/done?i=1"}})
+	body = html.UnescapeString(rec.Body.String())
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(body, `<div class="err">That code is not right. Check the latest email from us, then try again.</div>`) ||
+		!strings.Contains(body, "Enter the code") || !strings.Contains(body, ">Send a new code</button>") || !strings.Contains(body, "<b>Fellowship enquiries</b>") ||
+		strings.Contains(body, "Use a different email") || strings.Contains(body, "Incorrect code") {
+		t.Errorf("wrong code = %d:\n%s", rec.Code, body)
+	}
+	// A token that names no invitation is not carried into the page.
+	rec = p.postForm("/verify-code", url.Values{"code": {wrong}, "token": {"made-up"}})
+	if body := rec.Body.String(); !strings.Contains(body, msgInviteWrongCode) || strings.Contains(body, "made-up") || strings.Contains(body, msgInviteNewCode) {
+		t.Errorf("a made-up token:\n%s", body)
+	}
+
+	// Send a new code posts the token again, under the usual limits, and
+	// shows the same page.
+	sender.reset()
+	rec = p.postForm("/invite/send", url.Values{"token": {token}})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), msgInviteCodeTitle) {
+		t.Errorf("send a new code = %d", rec.Code)
+	}
+	if again := sender.code(); again != "" {
+		code = again
+	}
+
+	// The right code accepts the invitation and lands on the accepted page.
+	rec = p.postForm("/verify-code", url.Values{"code": {code}, "token": {token}, "rd": {"https://auth.example.com/invite/done?i=1"}})
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/invite/done?i=1") {
+		t.Fatalf("verify-code = %d to %q", rec.Code, rec.Header().Get("Location"))
+	}
+	done := html.UnescapeString(p.get(rec.Header().Get("Location"), nil).Body.String())
+	if !strings.Contains(done, "Your invitation has been accepted") || !strings.Contains(done, "Open Fellowship enquiries") {
+		t.Errorf("done page:\n%s", done)
+	}
+}
+
+// After too many wrong codes the code step ends: the invitation's page says
+// so, offers a new code and no longer shows the code form.
+func TestInvitationCodeLockedOut(t *testing.T) {
+	srv, sender, ml, c := inviteAdmin(t)
+	invite(t, c, adminInviteForm("k.lee@monash.org"))
+	token := strings.TrimPrefix(inviteLinkIn(t, ml.waitFor(1, invitationsTo("k.lee@monash.org"))[0]), "/invite/")
+	p := newClient(t, srv.Handler())
+	sender.reset()
+	p.postForm("/invite/send", url.Values{"token": {token}})
+	code := sender.code()
+	wrong := "000000"
+	if code == wrong {
+		wrong = "111111"
+	}
+	var body string
+	for i := 0; i < srv.cfg.OTPMaxAttempts+1 && !strings.Contains(body, "Too many"); i++ {
+		body = html.UnescapeString(p.postForm("/verify-code", url.Values{"code": {wrong}, "token": {token}}).Body.String())
+	}
+	if !strings.Contains(body, "Too many incorrect attempts. Please request a new code.") || strings.Contains(body, `action="/verify-code"`) ||
+		!strings.Contains(body, ">Send a new code</button>") || strings.Contains(body, "Use a different email") {
+		t.Errorf("locked out:\n%s", body)
 	}
 }
 
@@ -266,7 +366,7 @@ func TestResendAndWithdrawEndTheOldLink(t *testing.T) {
 	if body := html.UnescapeString(p.get(old, nil).Body.String()); !strings.Contains(body, msgInviteBadTitle) {
 		t.Error("the old link still works after a resend")
 	}
-	if rec := p.postForm("/invite/send", url.Values{"token": {strings.TrimPrefix(old, "/invite/")}}); strings.Contains(rec.Body.String(), "Check your email") {
+	if rec := p.postForm("/invite/send", url.Values{"token": {strings.TrimPrefix(old, "/invite/")}}); strings.Contains(rec.Body.String(), msgInviteCodeTitle) {
 		t.Error("the old link still sends a code")
 	}
 	if body := p.get(fresh, nil).Body.String(); !strings.Contains(body, "Send the code") {
@@ -280,7 +380,7 @@ func TestResendAndWithdrawEndTheOldLink(t *testing.T) {
 	if body := html.UnescapeString(p.get(fresh, nil).Body.String()); !strings.Contains(body, "This invitation has been withdrawn") {
 		t.Errorf("withdrawn link shows:\n%s", body)
 	}
-	if rec := p.postForm("/invite/send", url.Values{"token": {strings.TrimPrefix(fresh, "/invite/")}}); strings.Contains(rec.Body.String(), "Check your email") {
+	if rec := p.postForm("/invite/send", url.Values{"token": {strings.TrimPrefix(fresh, "/invite/")}}); strings.Contains(rec.Body.String(), msgInviteCodeTitle) {
 		t.Error("a withdrawn invitation still sends a code")
 	}
 	if list := c.get("/admin/invitations", nil).Body.String(); !strings.Contains(list, ">Withdrawn<") {

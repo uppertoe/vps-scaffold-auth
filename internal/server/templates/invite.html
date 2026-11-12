@@ -2,13 +2,28 @@
 {{define "content"}}
 {{/* An invitation's page. Opening the link grants nothing: the code is
      sent by the button's POST, so a mail scanner fetching the link has no
-     effect. The token travels in the form body. */}}
+     effect. The token travels in the form body. The code page posts the
+     code to /verify-code, with the token so that a refused code shows this
+     page again, and "Send a new code" posts the token to /invite/send. */}}
 {{with .Invite}}
-<h1>{{.Heading}}</h1>
+<h1 id="invite-heading">{{.Heading}}</h1>
 {{if .App}}<div class="box"><b>{{.App}}</b>{{.Access}}</div>{{end}}
 {{range .Lines}}<p class="sub">{{.}}</p>{{end}}
+{{if .Code}}
+{{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+{{if .CodeForm}}<form method="post" action="/verify-code" autocomplete="one-time-code">
+  <input type="hidden" name="rd" value="{{.Redirect}}">
+  {{if .Token}}<input type="hidden" name="token" value="{{.Token}}">{{end}}
+  <input id="code" name="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*" aria-labelledby="invite-heading"
+         autocomplete="one-time-code" autofocus required placeholder="{{$.CodePlaceholder}}">
+  <button type="submit">{{.CodeButton}}</button>
+</form>{{end}}
+{{if .Token}}<p class="hint">{{.Late}}</p>
+<form class="secondary" method="post" action="/invite/send"><input type="hidden" name="token" value="{{.Token}}"><button type="submit" class="secondary">{{.NewCode}}</button></form>{{end}}
+{{else}}
 {{if .Token}}<form method="post" action="/invite/send"><input type="hidden" name="token" value="{{.Token}}"><button type="submit">{{.SendCode}}</button></form>{{end}}
 {{if .SignOut}}<form method="post" action="/logout"><button type="submit">{{.Button}}</button></form>
 {{else if .Href}}<a class="btn" href="{{.Href}}">{{.Button}}</a>{{end}}
+{{end}}
 {{end}}
 {{end}}

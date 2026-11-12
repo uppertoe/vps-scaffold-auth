@@ -24,6 +24,16 @@ var orgNameText = orgNameCopy{Label: msgOrgLabel, Hint: msgOrgHint, Button: msgO
 // which closes it.
 const msgInviteUndelivered = "The invitation to %s could not be delivered, so its link no longer works. Check the address, then send it again or withdraw it."
 
+// The invitation's own code page, after Send the code.
+const (
+	msgInviteCodeTitle  = "Enter the code"
+	msgInviteCodeBody   = "We have sent a code to %s. Enter it here to accept your invitation to %s."
+	msgInviteCodeButton = "Accept the invitation"
+	msgInviteCodeLate   = "If the code has not arrived after a few minutes, check your junk folder, then send a new code."
+	msgInviteNewCode    = "Send a new code"
+	msgInviteWrongCode  = "That code is not right. Check the latest email from us, then try again."
+)
+
 func init() {
 	adminNotices["org-saved"] = msgOrgSaved
 	adminActionLabels[store.AdminActionGroupOrg] = msgOrgAudit

@@ -927,6 +927,9 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	// pass the check; a correct code is refunded below, so people signing in
 	// behind one hospital NAT spend nothing.
 	if !s.wrongCodes.Allow(clientIP(r)) {
+		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusTooManyRequests, st, rd, "Too many attempts. Please wait and try again.", false) {
+			return
+		}
 		s.render(w, http.StatusTooManyRequests, "code", pageData{
 			Error: "Too many attempts. Please wait and try again.", Email: st.Email, Redirect: rd,
 		})
@@ -967,6 +970,9 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		s.completeLogin(w, r, st.Email, role, rd, st.Remember, false, 0, now)
 	case store.ConsumeMismatch:
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeWrongCode)
+		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusUnauthorized, st, rd, msgInviteWrongCode, false) {
+			return
+		}
 		s.render(w, http.StatusUnauthorized, "code", pageData{
 			Error: "Incorrect code. Please try again.", Email: st.Email, Redirect: rd,
 		})
@@ -976,12 +982,18 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeLockedOut)
 		s.sessions.ClearState(w)
+		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusUnauthorized, st, rd, "Too many incorrect attempts. Please request a new code.", true) {
+			return
+		}
 		s.render(w, http.StatusUnauthorized, "login", pageData{
 			Error: "Too many incorrect attempts. Please request a new code.", Redirect: rd,
 		})
 	default: // ConsumeExpired, ConsumeNoCode
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeExpired)
 		s.sessions.ClearState(w)
+		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusUnauthorized, st, rd, "Your code has expired. Please request a new one.", true) {
+			return
+		}
 		s.render(w, http.StatusUnauthorized, "login", pageData{
 			Error: "Your code has expired. Please request a new one.", Redirect: rd,
 		})
