@@ -56,6 +56,15 @@ type adminData struct {
 	Passkeys        []passkeyRow
 	PasskeyRenew    string
 	PasskeysRemoved bool
+	// App roles: the Apps overview, one app's page, and whether the model is
+	// on (which shows the Apps menu item). Script is a page's inline script,
+	// allowed by its hash (see rolesScript).
+	RolesOn bool
+	Apps    *appsView
+	App     *appView
+	Script  template.JS
+	// New group page.
+	NewGroup *newGroupView
 	// Access log, one person chosen: offer to sign them out everywhere.
 	EndSessionsFor string
 	SessionsEnded  bool
@@ -146,6 +155,15 @@ type groupView struct {
 	// NotYetCreated: the feed is configured but has never answered, so the
 	// group row does not exist yet; the first successful sync creates it.
 	NotYetCreated bool
+	// App roles (fillGroupRoles): the kind, a domain group's domains, whom
+	// the group admits, and the app roles it holds.
+	Kind      string
+	Domains   []string
+	Who       string
+	Roles     []appRoleRef
+	RoleCount int
+	AppCount  int
+	UsedBy    string
 }
 
 // feedView is a feed-filled group's source and last sync, for the Groups page.
@@ -155,7 +173,9 @@ type feedView struct {
 	Detail      string
 	LastAttempt string
 	LastSuccess string
-	Pending     bool
+	// Since is the day of the last successful sync, as "9 November".
+	Since   string
+	Pending bool
 	// The held change, exactly as it would be applied, and its hash (sent
 	// back with Accept so only the change on screen can be accepted).
 	PendingAdd    []string
@@ -180,6 +200,7 @@ type feedRetryView struct {
 // administrator's attention. Break-glass target groups are left out of
 // MissingGroups, because a card needs no group to exist.
 type overviewView struct {
+	Apps              int // apps in the app-roles manifest
 	Groups            int
 	Members           int
 	ActiveCards       int
@@ -290,6 +311,10 @@ var adminActionLabels = map[string]string{
 	store.AdminActionSessionsEnd:        "Signed out on every device",
 	store.AdminActionSettingsUpdate:     "Settings changed",
 	store.AdminActionBrandingUpdate:     "Branding changed",
+	store.AdminActionRoleGive:           "App role given",
+	store.AdminActionRoleTake:           "App role taken away",
+	store.AdminActionGroupDomainAdd:     "Domain added to a group",
+	store.AdminActionGroupDomainRemove:  "Domain removed from a group",
 }
 
 func adminActionLabel(action string) string {
@@ -323,12 +348,12 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 	funcs := template.FuncMap{
 		"fmtTime": func(t time.Time) string { return t.In(loc).Format("2006-01-02 15:04:05 MST") },
 	}
-	base, err := template.New("admin_base.html").Funcs(funcs).ParseFS(templatesFS, "templates/admin_base.html")
+	base, err := template.New("admin_base.html").Funcs(funcs).ParseFS(templatesFS, "templates/admin_base.html", "templates/admin_roles_parts.html", "templates/admin_groups_css.html")
 	if err != nil {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
+	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit", "admin_apps", "admin_app", "admin_group_new"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err
@@ -359,7 +384,12 @@ func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, status int,
 	if data.Notice == "" && data.Warning == "" {
 		data.Notice, data.Warning = s.takeNotice(w, r)
 	}
-	w.Header().Set("Content-Security-Policy", s.csp)
+	data.RolesOn = s.rolesOn()
+	csp := s.csp
+	if data.Script != "" {
+		csp += "; script-src " + scriptHash(string(data.Script))
+	}
+	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := t.ExecuteTemplate(w, "base", data); err != nil {

@@ -25,7 +25,15 @@ import (
 // wrapped by requireAdmin in routes(); handlers here can assume an admin caller.
 func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/{$}", s.handleAdminHome)
+	mux.HandleFunc("GET /admin/apps", s.handleAdminApps)
+	mux.HandleFunc("GET /admin/apps/{app}", s.handleAdminApp)
+	mux.HandleFunc("POST /admin/apps/{app}/review", s.handleAdminAppReview)
+	mux.HandleFunc("POST /admin/apps/{app}/edit", s.handleAdminAppEdit)
+	mux.HandleFunc("POST /admin/apps/{app}/save", s.handleAdminAppSave)
 	mux.HandleFunc("GET /admin/groups", s.handleAdminGroups)
+	mux.HandleFunc("GET /admin/groups/new", s.handleAdminNewGroup)
+	mux.HandleFunc("POST /admin/groups/{name}/domains", s.handleAdminAddDomain)
+	mux.HandleFunc("POST /admin/groups/{name}/domains/delete", s.handleAdminRemoveDomain)
 	mux.HandleFunc("POST /admin/groups", s.handleAdminCreateGroup)
 	mux.HandleFunc("GET /admin/groups/{name}", s.handleAdminGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/delete", s.handleAdminDeleteGroup)
@@ -727,7 +735,7 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
-	ov := &overviewView{Groups: len(groups), TOTPEnabled: s.cfg.TOTPEnabled}
+	ov := &overviewView{Apps: len(s.appRoles.Apps), Groups: len(groups), TOTPEnabled: s.cfg.TOTPEnabled}
 	cardTargets := map[string]bool{}
 	for _, c := range codes {
 		cardTargets[normalizeGroupName(c.TargetGroup)] = true
@@ -816,6 +824,9 @@ func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
 // pages (?open=name) goes to that group's page.
 func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 	view, missing, routeGroupsOn, err := s.groupViews(r)
+	if err == nil {
+		err = s.fillGroupRoles(r, view)
+	}
 	if err != nil {
 		s.adminError(w, r)
 		return
@@ -834,23 +845,10 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAdminGroup shows one group: its source, members, includes and label.
+// handleAdminGroup shows one group: its source, members, includes and label,
+// or a domain group's domains, and the app roles it holds.
 func (s *Server) handleAdminGroup(w http.ResponseWriter, r *http.Request) {
-	view, _, _, err := s.groupViews(r)
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	name := normalizeGroupName(r.PathValue("name"))
-	for i := range view {
-		if view[i].Name == name {
-			s.renderAdmin(w, r, http.StatusOK, "admin_group", adminData{
-				Title: name, Group: &view[i], OpenGroup: name,
-			})
-			return
-		}
-	}
-	http.Redirect(w, r, "/admin/groups", http.StatusFound)
+	s.renderGroup(w, r, http.StatusOK, normalizeGroupName(r.PathValue("name")), "")
 }
 
 // groupViews builds every group's view, the groups the routes require that
@@ -968,6 +966,7 @@ func (s *Server) feedViewFor(group string, syncStates map[string]store.GroupSync
 		fv.LastAttempt = s.stampMin(st.LastAttempt)
 		if !st.LastSuccess.IsZero() {
 			fv.LastSuccess = s.stampMin(st.LastSuccess)
+			fv.Since = st.LastSuccess.In(s.tzloc()).Format("2 January")
 		}
 		fv.Pending = st.Status == store.GroupSyncHeld
 		if fv.Pending {
@@ -991,7 +990,15 @@ func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) 
 	if !s.checkCSRF(w, r) {
 		return
 	}
+	if r.PostFormValue("from") == "new" {
+		s.createGroupFromNewPage(w, r)
+		return
+	}
 	name := normalizeGroupName(r.PostFormValue("name"))
+	if name == "new" {
+		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{Title: "Invalid group name", Message: msgGroupNameNew})
+		return
+	}
 	if authz.IsReservedGroup(name) {
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title:   "Reserved group name",
@@ -1023,7 +1030,23 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	name := normalizeGroupName(r.PathValue("name"))
-	if err := s.store.DeleteGroup(r.Context(), name); err != nil {
+	if err := s.store.DeleteGroup(r.Context(), name); errors.Is(err, store.ErrGroupHoldsRoles) {
+		n, err := s.store.GroupRoleCount(r.Context(), name)
+		if err != nil {
+			s.adminError(w, r)
+			return
+		}
+		label := name
+		if gs, err := s.store.ListGroups(r.Context()); err == nil {
+			for _, g := range gs {
+				if g.Name == name && g.Label != "" {
+					label = g.Label
+				}
+			}
+		}
+		s.renderGroup(w, r, http.StatusConflict, name, fmt.Sprintf(msgGroupHolds, label, countWords(n, "role", "roles")))
+		return
+	} else if err != nil {
 		s.adminError(w, r)
 		return
 	}

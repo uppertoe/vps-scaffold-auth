@@ -21,7 +21,7 @@ func adminWithGroups(t *testing.T, groups ...string) (*Server, *client, string) 
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	return srv, c, extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	return srv, c, extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 }
 
 func TestBulkAddShowsConfirmationThenAddsTicked(t *testing.T) {

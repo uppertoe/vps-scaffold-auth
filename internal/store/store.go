@@ -106,6 +106,13 @@ const (
 	AdminActionBrandingUpdate     = "branding_update"
 	AdminActionCodeBranding       = "break_glass_branding"
 	AdminActionPasskeysRemove     = "passkeys_remove"
+	// App roles: an app role given to or taken from a holder (target
+	// "app:role", detail "kind ref"), and a domain rule added to or removed
+	// from a domain group (target the group, detail the domain).
+	AdminActionRoleGive          = "role_give"
+	AdminActionRoleTake          = "role_take"
+	AdminActionGroupDomainAdd    = "group_domain_add"
+	AdminActionGroupDomainRemove = "group_domain_remove"
 )
 
 // GroupSyncState is the outcome of the last sync of a feed-filled group.

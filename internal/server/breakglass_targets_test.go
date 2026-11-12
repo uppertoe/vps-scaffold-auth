@@ -239,7 +239,7 @@ func TestGuestMembershipRefusedForAppRoleGroup(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 
 	// Pasting a stranger and a colleague: the page lists the stranger as not
 	// addable and offers only the colleague.
@@ -298,7 +298,7 @@ func TestFeedGroupTakesNoHandAddedMember(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 
 	c.postForm("/admin/groups/rch-consultants/members", url.Values{"csrf": {tok}, "emails": {strangerAddr}})
 	c.postForm("/admin/groups/rch-consultants/members/confirm", url.Values{"csrf": {tok}, "add": {strangerAddr}})
@@ -374,7 +374,7 @@ func TestIncludeBringingOutsidersIntoAppRoleRefused(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 	include := func(group, included string) string {
 		c.postForm("/admin/groups/"+group+"/includes", url.Values{"csrf": {tok}, "included": {included}})
 		ck := c.cookies[srv.noticeCookieName()]

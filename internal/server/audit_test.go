@@ -85,7 +85,7 @@ func TestReservedGroupNameRejected(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 
 	c.postForm("/admin/groups", url.Values{"csrf": {tok}, "name": {"admin"}, "label": {"x"}})
 	groups, _ := srv.store.ListGroups(context.Background())
@@ -105,7 +105,7 @@ func TestGroupNameWithSeparatorRejected(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 
-	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 	c.postForm("/admin/groups", url.Values{"csrf": {tok}, "name": {"x,admin"}, "label": {"x"}})
 	if groups, _ := srv.store.ListGroups(context.Background()); len(groups) != 0 {
 		t.Fatalf("a group with a comma in its name was created: %+v (would smuggle 'admin' into Remote-Groups)", groups)

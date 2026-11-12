@@ -177,7 +177,7 @@ func TestGroupGateAdmitsNewMemberWithoutRelogin(t *testing.T) {
 	// remembered "unchanged" result from the refusal just above.
 	admin := newClient(t, srv.Handler())
 	loginAs(t, admin, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, admin.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, admin.get("/admin/groups/new", nil).Body.String())
 	if rec := admin.postForm("/admin/groups/planka-users/members", url.Values{"csrf": {tok}, "email": {"user@example.com"}}); rec.Code != http.StatusFound {
 		t.Fatalf("admin add member = %d", rec.Code)
 	}

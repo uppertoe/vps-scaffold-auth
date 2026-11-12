@@ -1,18 +1,62 @@
 {{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "groups_css"}}{{end}}
 {{define "content"}}
 {{$csrf := .CSRF}}
 {{with .Group}}
 {{$group := .Name}}
-<a class="back" href="/admin/groups">&larr; Groups</a>
-<h1><code class="mono" style="font-size:inherit">{{.Name}}</code></h1>
-<p class="sub">{{if .Label}}{{.Label}}{{else}}This group has no label.{{end}}</p>
+<a class="back" href="/admin/groups">&larr; All groups</a>
+<h1>{{if .Label}}{{.Label}}{{else}}<code class="mono" style="font-size:inherit">{{.Name}}</code>{{end}}</h1>
+<p class="sub">{{if eq .Kind "domain"}}Domain group{{else if .Feed}}List, filled from a feed{{else}}List, kept by hand{{end}}{{if .Label}} · <code class="mono">{{.Name}}</code>{{end}}</p>
 
+{{if $.RolesOn}}
+<section class="fsec">
+  <h2>Roles this group holds</h2>
+  {{if .Roles}}<div class="roleset">{{range .Roles}}<a class="apptok" href="/admin/apps/{{.App}}">{{template "app_icon"}}<span>{{.Label}}</span></a>{{end}}</div>
+  {{else}}<p class="muted" style="margin:0">No app gives this group a role yet.</p>{{end}}
+  <p class="hint">Roles are given on each app's page. A change to this group affects every role listed here.</p>
+</section>
+{{end}}
+
+{{if eq .Kind "domain"}}
+<section class="fsec">
+  <h2>Domains</h2>
+  <p class="hint">Everyone whose email address ends with one of these domains belongs to the group.</p>
+  {{if .Domains}}
+  <div class="tablewrap">
+  <table>
+    <tbody>
+    {{range .Domains}}
+    <tr>
+      <td><code class="mono">@{{.}}</code></td>
+      <td class="actions">
+        <form class="inline" method="post" action="/admin/groups/{{$group}}/domains/delete">
+          <input type="hidden" name="csrf" value="{{$csrf}}">
+          <input type="hidden" name="domain" value="{{.}}">
+          <button type="submit" class="ghost" aria-label="Remove @{{.}} from the group">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}<p class="muted" style="margin:0">The group has no domains yet, so it admits nobody.</p>{{end}}
+  <form class="inlineform" method="post" action="/admin/groups/{{$group}}/domains">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input type="text" name="domain" class="mono" required placeholder="example.org.au" aria-label="Domain to add">
+    <button type="submit" class="ghost">Add the domain</button>
+  </form>
+</section>
+{{end}}
+
+{{if ne .Kind "domain"}}
 <dl class="facts">
   <div><dt>Members</dt><dd>{{if .NotYetCreated}}<span class="pill tag" title="The feed has not answered yet. The group is created by its first successful sync.">not created yet</span>{{else}}{{len .Members}}{{end}}</dd></div>
   <div><dt>Membership</dt><dd>{{if .Feed}}Filled from a feed{{else}}Managed here{{end}}</dd></div>
   <div><dt>Used by</dt>{{if .Hosts}}<dd>{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}</dd>{{else if .Unused}}<dd><span class="pill tag" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">Not used by any app</span></dd>{{else}}<dd class="none">No app</dd>{{end}}</div>
   <div><dt>Also admitted by</dt>{{if .IncludedIn}}<dd>{{range $i, $g := .IncludedIn}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}</dd>{{else}}<dd class="none">No other group</dd>{{end}}</div>
 </dl>
+{{end}}
 
 {{with .Feed}}
 <div class="panel">
@@ -59,6 +103,7 @@
 {{end}}
 
 {{if not .NotYetCreated}}
+{{if ne .Kind "domain"}}
 <div class="panel">
   <h2>Members</h2>
   {{if not .Feed}}
@@ -137,6 +182,7 @@
   {{end}}
 </div>
 {{end}}
+{{end}}
 
 <div class="panel">
   <h2>Label</h2>
@@ -152,7 +198,8 @@
   <details class="confirm">
     <summary>Delete this group</summary>
     <div class="confirmbody">
-      <p>Deleting <code class="mono">{{.Name}}</code> removes {{if eq (len .Members) 1}}its member{{else}}all {{len .Members}} of its members{{end}} from it. Apps that require this group will then refuse {{if eq (len .Members) 1}}that person{{else}}them{{end}}.</p>
+      {{if eq .Kind "domain"}}<p>Deleting <code class="mono">{{.Name}}</code> removes its domains. Nobody is admitted through it afterwards.</p>
+      {{else}}<p>Deleting <code class="mono">{{.Name}}</code> removes {{if eq (len .Members) 1}}its member{{else}}all {{len .Members}} of its members{{end}} from it. Apps that require this group will then refuse {{if eq (len .Members) 1}}that person{{else}}them{{end}}.</p>{{end}}
       <form class="inline" method="post" action="/admin/groups/{{.Name}}/delete">
         <input type="hidden" name="csrf" value="{{$csrf}}">
         <button type="submit" class="danger">Delete {{.Name}}</button>

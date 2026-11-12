@@ -5,6 +5,7 @@
 
 {{with .Overview}}
 <div class="stats">
+  {{if $.RolesOn}}<a class="stat" href="/admin/apps"><span class="n">{{.Apps}}</span><span class="l">Apps, with each one's roles and who holds them</span></a>{{end}}
   <a class="stat" href="/admin/groups"><span class="n">{{.Groups}}</span><span class="l">Groups</span></a>
   <a class="stat" href="/admin/groups"><span class="n">{{.Members}}</span><span class="l">Group memberships</span></a>
   <a class="stat" href="/admin/break"><span class="n">{{.ActiveCards}}</span><span class="l">Active break-glass codes</span></a>

@@ -1,0 +1,40 @@
+{{define "groups_css"}}<style>
+  .subtabs { display: flex; border-bottom: 1px solid var(--border); margin: -8px 0 24px; height: 40px; }
+  .subtabs a { display: flex; align-items: center; padding: 0 12px; font-size: 14px; color: var(--muted); text-decoration: none; }
+  .subtabs a[aria-current] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  .ptitle .btnlink { display: inline-flex; align-items: center; height: 36px; padding: 0 16px; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; font-size: 14px; white-space: nowrap; text-decoration: none; }
+  .ptitle .btnlink:hover { background: var(--accent-hover); }
+  .fsec { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; display: grid; gap: 8px; }
+  .fsec h2 { margin: 0 0 4px; font-size: 15px; display: flex; gap: 10px; align-items: center; }
+  .fsec h2 span.step { width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 13px; flex: none; }
+  .fsec .hint { margin: 0; }
+  .fsec input[type=text] { max-width: 520px; }
+  .choice { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 12px; align-items: center; min-height: 52px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--surface); margin: 0; font-weight: 400; }
+  .choice input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+  .choice .r { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--input-border); }
+  .choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  .choice:has(input:checked) .r { border: 5px solid var(--accent); }
+  .choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .choice .cl { display: grid; min-width: 0; }
+  .choice .cl b { font-size: 14px; }
+  .choice .cl small { color: var(--muted); font-size: 12px; }
+  .segs { display: inline-flex; border: 1px solid var(--input-border); border-radius: 8px; overflow: hidden; width: fit-content; }
+  .segs span { height: 34px; display: flex; align-items: center; padding: 0 14px; font-size: 13px; white-space: nowrap; }
+  .segs span + span { border-left: 1px solid var(--input-border); }
+  .segs span.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .segs span.off { color: var(--faint); }
+  form.newgroup:has(input[name=kind][value=domain]:checked) .for-list { display: none; }
+  form.newgroup:has(input[name=kind][value=list]:checked) .for-domain { display: none; }
+  .btnrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .btnrow button { margin: 0; }
+  .roleset { display: flex; flex-wrap: wrap; gap: 8px; }
+  .apptok { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--tag-line); background: var(--tag-bg); color: var(--tag-fg); font-size: 13px; white-space: nowrap; text-decoration: none; max-width: 100%; }
+  .apptok span { overflow: hidden; text-overflow: ellipsis; }
+  a.apptok:hover { text-decoration: none; border-color: var(--accent); }
+  .apptok svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .gattn { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 24px; }
+  .gattn div { display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 14px; }
+  .gattn div:first-child { border-top: 0; }
+  .gattn i { width: 8px; height: 8px; border-radius: 50%; background: var(--warn-fg); flex: none; }
+</style>{{end}}
+{{define "app_icon"}}<svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg>{{end}}

@@ -1,7 +1,17 @@
 {{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "groups_css"}}{{end}}
 {{define "content"}}
-<h1>Groups</h1>
-<p class="sub">Group membership decides who can open the apps that require a group. Apps see the group name; the label is for administrators only.</p>
+<div class="ptitle"><div><h1>Groups</h1><p>{{if .RolesOn}}A group is given roles in apps, on each app's page.{{else}}Group membership decides who can open the apps that require a group. Apps see the group name; the label is for administrators only.{{end}}</p></div><a class="btnlink" href="/admin/groups/new">New group</a></div>
+<nav class="subtabs" aria-label="Groups"><a href="/admin/groups" aria-current="page">All groups</a><a href="/admin/groups/new">New group</a></nav>
+
+{{$attn := 0}}{{range .Groups}}{{with .Feed}}{{if and .Status (ne .Status "ok") (ne .Status "held")}}{{$attn = 1}}{{end}}{{end}}{{end}}
+{{if $attn}}
+<div class="gattn">
+  {{range .Groups}}{{$g := .}}{{with .Feed}}{{if and .Status (ne .Status "ok") (ne .Status "held")}}
+  <div><i></i><span>{{if .Since}}The feed for <a href="/admin/groups/{{$g.Name}}">{{if $g.Label}}{{$g.Label}}{{else}}{{$g.Name}}{{end}}</a> has not answered since {{.Since}}.{{else}}The feed for <a href="/admin/groups/{{$g.Name}}">{{if $g.Label}}{{$g.Label}}{{else}}{{$g.Name}}{{end}}</a> has not answered yet.{{end}} The members have been kept as they were.</span></div>
+  {{end}}{{end}}{{end}}
+</div>
+{{end}}
 
 {{$csrf := .CSRF}}
 {{if .MissingGroups}}
@@ -32,75 +42,61 @@
 </div>
 {{end}}
 
-{{$feeds := 0}}{{$managed := 0}}
-{{range .Groups}}{{if .Feed}}{{$feeds = 1}}{{else}}{{$managed = 1}}{{end}}{{end}}
-
-{{if $feeds}}
+{{$domains := 0}}{{range .Groups}}{{if eq .Kind "domain"}}{{$domains = 1}}{{end}}{{end}}
+{{$rolesOn := .RolesOn}}
+{{if or $rolesOn $domains}}
 <div class="panel">
-  <h2>Filled from a feed</h2>
+  <h2>Domain groups</h2>
+  <p class="muted">Everyone at these email domains belongs, and can sign in.</p>
+  {{if $domains}}
   <div class="tablewrap">
   <table class="stack">
-    <thead><tr><th>Group</th><th class="num">Members</th><th>Used by</th><th>Feed</th></tr></thead>
+    <thead><tr><th>Group</th><th>Who it admits</th><th>Used by</th><th>Feed</th></tr></thead>
     <tbody>
-    {{range .Groups}}{{if .Feed}}
+    {{range .Groups}}{{if eq .Kind "domain"}}
     <tr>
-      <td><a href="/admin/groups/{{.Name}}"><code class="mono"><strong>{{.Name}}</strong></code></a>{{if .Label}}<span class="sub2">{{.Label}}</span>{{end}}</td>
-      <td class="num" data-label="Members">{{if .NotYetCreated}}<span class="pill tag" title="The feed has not answered yet. The group is created by its first successful sync.">not created yet</span>{{else}}{{len .Members}}{{end}}</td>
-      <td data-label="Used by">{{if .Hosts}}{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}{{else}}<span class="muted">No app</span>{{end}}</td>
-      <td data-label="Feed">{{with .Feed}}
-        {{if .Pending}}{{if .Kept}}<span class="pill warn">Change held, members kept</span>{{else}}<span class="pill warn">Change held</span>{{end}}{{if .AutoAt}}<span class="sub2">To be applied at the first sync after {{.AutoAt}}</span>{{end}}
-        {{else if eq .Status "ok"}}<span class="pill ok">Up to date</span><span class="sub2">Synced {{.LastSuccess}}</span>
-        {{else if .Status}}<span class="pill off">Sync did not succeed</span><span class="sub2">{{.LastAttempt}}</span>
-        {{else}}<span class="pill tag">Not fetched yet</span>{{end}}
-      {{end}}</td>
-    </tr>
-    {{end}}{{end}}
-    </tbody>
-  </table>
-  </div>
-</div>
-{{end}}
-
-<div class="panel">
-  <h2>Managed here</h2>
-  {{if $managed}}
-  <div class="tablewrap">
-  <table class="stack">
-    <thead><tr><th>Group</th><th class="num">Members</th><th>Used by</th><th>Also admits</th></tr></thead>
-    <tbody>
-    {{range .Groups}}{{if not .Feed}}
-    <tr>
-      <td><a href="/admin/groups/{{.Name}}"><code class="mono"><strong>{{.Name}}</strong></code></a>{{if .Label}}<span class="sub2">{{.Label}}</span>{{end}}</td>
-      <td class="num" data-label="Members">{{len .Members}}</td>
-      <td data-label="Used by">{{if .Hosts}}{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}{{else if .Unused}}<span class="pill tag" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">Not used by any app</span>{{else}}<span class="muted">No app</span>{{end}}</td>
-      <td data-label="Also admits">{{if .Includes}}{{range $i, $g := .Includes}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}{{else}}<span class="muted">No other group</span>{{end}}</td>
+      <td><a href="/admin/groups/{{.Name}}">{{if .Label}}{{.Label}}{{else}}<code class="mono">{{.Name}}</code>{{end}}</a></td>
+      <td data-label="Who it admits" class="mono">{{.Who}}</td>
+      <td data-label="Used by">{{if .UsedBy}}{{.UsedBy}}{{else}}<span class="muted">No roles</span>{{end}}</td>
+      <td data-label="Feed"><span class="muted">Not applicable</span></td>
     </tr>
     {{end}}{{end}}
     </tbody>
   </table>
   </div>
   {{else}}
-  <p class="muted" style="margin:0">No groups yet.</p>
+  <p class="muted" style="margin:0">No domain groups yet.</p>
   {{end}}
 </div>
+{{end}}
 
 <div class="panel">
-  <h2>New group</h2>
-  <p class="muted">Use this for a group no app's sign-in rule names yet, such as one an app reads to decide what a person may do inside it.</p>
-  <form method="post" action="/admin/groups">
-    <input type="hidden" name="csrf" value="{{$csrf}}">
-    <div class="row">
-      <div>
-        <label for="name">Group name</label>
-        <input id="name" name="name" type="text" required pattern="[a-z0-9_\-]+" placeholder="reports_team">
-        <p class="hint">Lowercase letters, numbers, hyphens and underscores only.</p>
-      </div>
-      <div>
-        <label for="label">Label (optional)</label>
-        <input id="label" name="label" type="text" maxlength="200" placeholder="Reports team">
-      </div>
-    </div>
-    <button type="submit">Create group</button>
-  </form>
+  <h2>Lists</h2>
+  <p class="muted">A list is kept by hand, or filled from a feed such as the roster.</p>
+  {{$lists := 0}}{{range .Groups}}{{if ne .Kind "domain"}}{{$lists = 1}}{{end}}{{end}}
+  {{if $lists}}
+  <div class="tablewrap">
+  <table class="stack">
+    <thead><tr><th>Group</th><th>Who it admits</th><th>Used by</th><th>Feed</th></tr></thead>
+    <tbody>
+    {{range .Groups}}{{if ne .Kind "domain"}}
+    <tr>
+      <td><a href="/admin/groups/{{.Name}}"><code class="mono"><strong>{{.Name}}</strong></code></a>{{if .Label}}<span class="sub2">{{.Label}}</span>{{end}}</td>
+      <td data-label="Who it admits">{{if .NotYetCreated}}<span class="pill tag" title="The feed has not answered yet. The group is created by its first successful sync.">not created yet</span>{{else}}{{.Who}}{{end}}{{if .Includes}}<span class="sub2">Also admits {{range $i, $g := .Includes}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}</span>{{end}}</td>
+      <td data-label="Used by">{{if .UsedBy}}{{.UsedBy}}{{end}}{{if .Hosts}}{{if .UsedBy}}<span class="sub2">{{end}}{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}{{if .UsedBy}}</span>{{end}}{{else if .Unused}}<span class="pill tag" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">Not used by any app</span>{{else if not .UsedBy}}<span class="muted">{{if $rolesOn}}No roles{{else}}No app{{end}}</span>{{end}}</td>
+      <td data-label="Feed">{{with .Feed}}
+        {{if .Pending}}{{if .Kept}}<span class="pill warn">Change held, members kept</span>{{else}}<span class="pill warn">Change held</span>{{end}}{{if .AutoAt}}<span class="sub2">To be applied at the first sync after {{.AutoAt}}</span>{{end}}
+        {{else if eq .Status "ok"}}<span class="pill ok">Feed up to date</span><span class="sub2">Synced {{.LastSuccess}}</span>
+        {{else if .Status}}<span class="pill off">Feed not answering</span><span class="sub2">{{.LastAttempt}}</span>
+        {{else}}<span class="pill tag">Not fetched yet</span>{{end}}
+      {{else}}<span class="muted">Not applicable</span>{{end}}</td>
+    </tr>
+    {{end}}{{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <p class="muted" style="margin:0">No lists yet.</p>
+  {{end}}
 </div>
 {{end}}

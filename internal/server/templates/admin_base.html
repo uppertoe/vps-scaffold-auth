@@ -270,13 +270,15 @@
   details.howto[open] > summary { margin-bottom: 14px; }
   .pendinglist { max-height: 12em; overflow-y: auto; font-size: 13px; }
 </style>
+{{block "head" .}}{{end}}
 </head>
 <body>
   <header class="bar">
     <strong>Auth admin</strong>
     <nav aria-label="Admin pages">
+      {{if .RolesOn}}<a href="/admin/apps"{{if or (eq .Active "admin_apps") (eq .Active "admin_app")}} aria-current="page"{{end}}>Apps</a>{{end}}
       <a href="/admin/"{{if eq .Active "admin_home"}} aria-current="page"{{end}}>Overview</a>
-      <a href="/admin/groups"{{if or (eq .Active "admin_groups") (eq .Active "admin_group") (eq .Active "admin_bulk_add")}} aria-current="page"{{end}}>Groups</a>
+      <a href="/admin/groups"{{if or (eq .Active "admin_groups") (eq .Active "admin_group") (eq .Active "admin_bulk_add") (eq .Active "admin_group_new")}} aria-current="page"{{end}}>Groups</a>
       <a href="/admin/break"{{if or (eq .Active "admin_codes") (eq .Active "admin_code_detail")}} aria-current="page"{{end}}>Break-glass codes</a>
       <a href="/admin/access"{{if eq .Active "admin_access"}} aria-current="page"{{end}}>Access log</a>
       <a href="/admin/audit"{{if eq .Active "admin_audit"}} aria-current="page"{{end}}>Admin audit</a>
@@ -291,5 +293,6 @@
     {{if .Warning}}<div class="notice warn" role="alert">{{.Warning}}</div>{{end}}
     {{template "content" .}}
   </main>
+  {{if .Script}}<script>{{.Script}}</script>{{end}}
 </body>
 </html>{{end}}

@@ -1,0 +1,114 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{end}}
+{{define "content"}}
+{{template "role_icons"}}
+{{$csrf := .CSRF}}
+{{with .App}}
+{{$app := .Name}}
+<a class="back" href="/admin/apps">&larr; All apps</a>
+<div class="ptitle"><div><h1>{{.Label}}</h1><p class="mono">{{.Host}}</p></div></div>
+<dl class="meta">
+  <div><dt>Roles</dt><dd>{{.RolesText}}</dd></div>
+  <div><dt>Declared in</dt><dd class="mono" title="{{.Source}}">{{if .Source}}{{.Source}}{{else}}Not given{{end}}</dd></div>
+  <div><dt>Open by design</dt><dd>{{.OpenText}}</dd></div>
+</dl>
+
+<form id="roles-form" method="post" action="/admin/apps/{{$app}}/review">
+  <input type="hidden" name="csrf" value="{{$csrf}}">
+  {{range .Block.Rows}}<input type="hidden" name="roles" value="{{.Role}}">{{end}}
+  {{template "rolelist" .Blocks}}
+  <div class="changes {{if .Pending}}some{{else}}none{{end}}">
+    <span data-none>Give a role to a group or setting with the plus token, or take it away with a token's cross. Nothing is saved until you review the changes.</span>
+    <span data-some hidden></span>
+    <a class="ghostlink" data-discard href="/admin/apps/{{$app}}"{{if not .Pending}} hidden{{end}}>Discard</a>
+    <button type="submit">Review and save</button>
+  </div>
+  {{range .Block.Rows}}{{with .Picker}}
+  <div class="pickwrap" id="{{.ID}}" role="dialog" aria-label="Who holds {{.Title}}">
+    <a class="away" href="#roles" aria-label="Close"></a>
+    <div class="pop">
+      <div class="phead">Who holds <b>{{.Title}}</b></div>
+      {{range .Sections}}
+      <div class="kind">{{.Heading}}</div>
+      {{range .Options}}<label class="opt"><input type="checkbox" class="tick" name="{{.Field}}" value="{{.Value}}" data-held="0"><span class="box"></span><span class="oline">{{template "token" .Token}}<small>{{.Who}}</small></span></label>{{end}}
+      {{end}}
+      <div class="kind">People and cards</div>
+      <div class="jump"><a href="{{.PeopleHref}}">Add or invite a person</a></div>
+    </div>
+  </div>
+  {{end}}{{end}}
+</form>
+
+<h2 class="sec" id="people">People given a role directly</h2>
+<p class="secnote">People added here, or by invitation, hold the role in this app only.</p>
+<div class="rlist tbl people">
+  <div class="rrow colhead"><div>Person</div><div>Role</div><div>How</div><div>Until</div><div></div></div>
+  {{range .People}}
+  <div class="rrow{{if .Ended}} ended{{end}}">
+    <div title="{{.Email}}">{{.Email}}</div>
+    <div>{{.RoleLabel}}</div>
+    <div class="muted" title="{{if .HowTitle}}{{.HowTitle}}{{else}}{{.How}}{{end}}">{{.How}}</div>
+    <div class="num">{{if eq .Until "No end date"}}<span class="muted">No end date</span>{{else}}{{.Until}}{{end}}</div>
+    <div><form method="post" action="/admin/apps/{{$app}}/review"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="take" value="{{.Role}}|person|{{.Email}}"><button type="submit" class="link">Remove</button></form></div>
+  </div>
+  {{else}}
+  <div class="rrow"><div class="muted">Nobody has been given a role here directly.</div></div>
+  {{end}}
+  {{/* Invitations add their button to this line. */}}
+  <form class="addline" method="post" action="/admin/apps/{{$app}}/review">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input type="email" name="person" required placeholder="name@example.org" aria-label="Address to add">
+    <select name="person_role" aria-label="Role">{{range .Roles}}<option value="{{.Role}}">{{.Label}}</option>{{end}}</select>
+    <input type="date" name="until" aria-label="End date (optional)" title="End date (optional)">
+    <button type="submit" class="ghost">Add</button>
+  </form>
+</div>
+
+<h2 class="sec">Groups and settings</h2>
+<p class="secnote">A change to a group's members affects every app that uses it.</p>
+<div class="rlist tbl ghere">
+  <div class="rrow colhead"><div>Group or setting</div><div>Who it admits</div><div>Roles here</div><div>Other apps</div></div>
+  {{range .Groups}}
+  <div class="rrow"><div>{{template "token" .Token}}</div><div title="{{.Who}}">{{.Who}}</div><div>{{.Here}}</div><div class="num">{{.Other}}</div></div>
+  {{else}}
+  <div class="rrow"><div class="muted">No group or setting holds a role here.</div></div>
+  {{end}}
+</div>
+
+{{if .Orphans}}
+<h2 class="sec">Roles no longer in the snippet</h2>
+<p class="secnote">{{.OrphanNote}}</p>
+<div class="rlist tbl orphans">
+  <div class="rrow colhead"><div>Role</div><div>Held by</div><div></div></div>
+  {{range .Orphans}}
+  <div class="rrow"><div class="mono">{{.Role}}</div><div>{{if .Person}}{{.Person}}{{else}}{{template "token" .Token}}{{end}}</div><div><form method="post" action="/admin/apps/{{$app}}/review"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="take" value="{{.Value}}"><button type="submit" class="link">Remove</button></form></div></div>
+  {{end}}
+</div>
+{{end}}
+
+{{if .Paths}}
+<h2 class="sec">Paths</h2>
+<p class="secnote">The paths and what each one needs are declared in <span class="mono">{{.Source}}</span>.</p>
+<div class="rlist tbl paths">
+  <div class="rrow colhead"><div>Path</div><div>Needs</div><div>Reason it is open</div></div>
+  {{range .Paths}}
+  <div class="rrow"><div title="{{.Patterns}}"><span class="pathcell">{{if .Open}}{{template "ico" "k-lock"}}{{end}}<span{{if .Mono}} class="mono"{{end}}>{{.Patterns}}</span></span></div><div>{{.Needs}}</div><div title="{{.Reason}}"{{if not .Open}} class="muted"{{end}}>{{.Reason}}</div></div>
+  {{end}}
+</div>
+{{end}}
+
+{{with .Review}}
+<div class="scrim">
+  <form class="dialog" role="dialog" aria-modal="true" aria-labelledby="rv" method="post" action="/admin/apps/{{$app}}/save">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    {{range .Values}}<input type="hidden" name="c" value="{{.}}">{{end}}
+    <h2 id="rv">Save these changes?</h2>
+    <ul>{{range .Items}}<li><span>{{.Role}}</span><span>{{.Op}}</span><span>{{if .Token}}{{template "token" .Token}}{{else}}{{.Person}}{{end}}</span></li>{{end}}</ul>
+    {{range .Warnings}}<p class="warnline">{{.}}</p>{{end}}
+    <p>{{.Note}}</p>
+    <div class="acts"><button type="submit" class="ghost" formaction="/admin/apps/{{$app}}/edit">Keep editing</button><button type="submit">Save the changes</button></div>
+  </form>
+</div>
+{{end}}
+{{end}}
+{{end}}

@@ -1,0 +1,223 @@
+{{/* Shared parts of the app-roles pages: the styles, the icons, a token, the
+     widest-access cell and the list of role rows. One row per app role: the
+     role, tokens for who holds it, and the widest step on the access scale.
+     Icons say what kind of thing holds the role; colour says how well the
+     gateway knows the person. Rows have fixed heights and never wrap. */}}
+{{define "roles_css"}}<style>
+  :root {
+    --accent-line: #b9cdfb; --ink: #475467; --scrim: rgba(16, 20, 26, .35);
+    --wide-bg: #fdf4e3; --wide-fg: #7a4a06; --wide-line: #efd29b;
+    --card-bg: #fcefee; --card-fg: #8a2b22; --card-line: #f1c7c2;
+    --rolecol: 232px; --reachcol: 152px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent-line: #2f4a7d; --ink: #b3bac3; --scrim: rgba(0, 0, 0, .55);
+      --wide-bg: #2b2313; --wide-fg: #f0c97a; --wide-line: #5c4720;
+      --card-bg: #2c1a19; --card-fg: #f4aaa2; --card-line: #5e2c27;
+    }
+  }
+  .ico { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .ptitle { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 24px; }
+  .ptitle > div { min-width: 0; }
+  .ptitle h1 { margin: 0; }
+  .ptitle p { color: var(--muted); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ptitle p.mono { font-size: 13px; }
+
+  .attn { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 24px; }
+  .attn div { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 16px; border-top: 1px solid var(--line); font-size: 14px; white-space: nowrap; overflow: hidden; }
+  .attn div:first-child { border-top: 0; }
+  .attn i { width: 8px; height: 8px; border-radius: 50%; background: var(--warn-fg); flex: none; }
+  .attn i.bad { background: var(--off-fg); }
+  .attn span { overflow: hidden; text-overflow: ellipsis; }
+  form.toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 320px) auto; gap: 8px; margin: 0 0 8px; }
+  form.toolbar input { height: 36px; padding: 0 12px; font-size: 14px; }
+  form.toolbar button { margin: 0; height: 36px; padding: 0 16px; white-space: nowrap; }
+  .focus { height: 40px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-radius: 8px; font-size: 14px; margin-bottom: 16px; white-space: nowrap; overflow: hidden; }
+  .focus.on { background: var(--accent-soft); border: 1px solid var(--accent-line); }
+  .focus.off { color: var(--faint); border: 1px dashed var(--border); }
+  .focus span { overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; }
+
+  .rlist { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+  .rrow { display: grid; grid-template-columns: var(--rolecol) minmax(0, 1fr) var(--reachcol); align-items: center; column-gap: 16px; height: 48px; padding: 0 16px; border-top: 1px solid var(--line); }
+  .rrow.colhead { height: 36px; border-top: 0; background: var(--surface-2); font-size: 12px; font-weight: 600; color: var(--muted); border-radius: 12px 12px 0 0; }
+  .rrow.colhead > div:first-child { padding-left: 16px; }
+  .rrow.app { background: var(--surface-2); height: 40px; }
+  .rrow.app .name { grid-column: 1 / 3; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; min-width: 0; }
+  .rrow.app .name b { font-weight: 600; }
+  .rrow.app .host { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .rrow.app .bydesign { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); flex: none; }
+  .rrow.app .edit { justify-self: end; font-size: 13px; font-weight: 500; }
+  .rrole { display: flex; gap: 8px; align-items: baseline; padding-left: 16px; min-width: 0; white-space: nowrap; }
+  .rrole b { font-weight: 500; font-size: 14px; flex: none; }
+  .rrole span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .rrole span.p { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .rrow.dim .rrole, .rrow.dim .tok, .rrow.dim .reach { opacity: .38; }
+  .rrow.hit { box-shadow: inset 3px 0 0 var(--accent); }
+  .rwho { display: flex; gap: 8px; align-items: center; overflow: hidden; min-width: 0; height: 28px; }
+  .nobody { color: var(--off-fg); font-size: 14px; white-space: nowrap; }
+
+  .tok { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 28px; max-width: 220px; flex: none; padding: 0 8px; border-radius: 6px; border: 1px solid var(--tag-line); background: var(--tag-bg); color: var(--tag-fg); font-size: 13px; font-weight: 400; white-space: nowrap; cursor: pointer; margin: 0; text-decoration: none; }
+  a.tok:hover { text-decoration: none; border-color: var(--accent); }
+  .tok > span.l { overflow: hidden; text-overflow: ellipsis; }
+  .tok .n { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); padding-left: 6px; border-left: 1px solid var(--tag-line); line-height: 16px; }
+  .tok.wide { background: var(--wide-bg); color: var(--wide-fg); border-color: var(--wide-line); }
+  .tok.card { background: var(--card-bg); color: var(--card-fg); border-color: var(--card-line); }
+  .tok.card .n { border-color: var(--card-line); color: inherit; }
+  .tok.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tok.on .n { color: #fff; border-color: rgba(255, 255, 255, .45); }
+  .tok.more { cursor: default; color: var(--muted); background: transparent; }
+  .tok[hidden] { display: none; }
+  .tok.add { background: transparent; border: 1px dashed var(--accent-line); color: var(--accent); }
+  .tok.padd { border: 1.5px dashed var(--accent); }
+  .tok.static { cursor: default; }
+  .tok .tick { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+  .tok:has(.tick:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .tok .x { color: var(--faint); font-size: 15px; line-height: 1; }
+  .tok .x::before { content: "\00d7"; }
+  .tok:has(.tick:not(:checked)) { text-decoration: line-through; opacity: .55; }
+  .tok:has(.tick:not(:checked)) .x::before { content: "\21ba"; }
+
+  .reach { display: grid; grid-template-columns: 16px minmax(0, 1fr) 40px; gap: 8px; align-items: center; font-size: 13px; color: var(--ink); white-space: nowrap; }
+  .reach .w { overflow: hidden; text-overflow: ellipsis; }
+  .meter { display: grid; grid-template-columns: repeat(6, 5px); gap: 2px; height: 14px; align-items: end; }
+  .meter i { display: block; background: var(--line); border-radius: 1px; }
+  .meter i:nth-child(1) { height: 4px; } .meter i:nth-child(2) { height: 6px; } .meter i:nth-child(3) { height: 8px; }
+  .meter i:nth-child(4) { height: 10px; } .meter i:nth-child(5) { height: 12px; } .meter i:nth-child(6) { height: 14px; }
+  .meter i.f { background: var(--ink); }
+  .reach.closed { color: var(--off-fg); }
+
+  .rkey { display: grid; margin-top: 16px; font-size: 13px; color: var(--muted); }
+  .rkey > div { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: center; height: 40px; }
+  .rkey > div > span:first-child { display: flex; gap: 8px; overflow: hidden; }
+  .rkey > div > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rscale { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; margin-top: 16px; }
+  .rscale h4 { margin: 0 0 8px; font-size: 13px; }
+  .ladder { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+  .ladder > div { display: grid; grid-template-rows: 20px 20px 18px; justify-items: start; gap: 2px; font-size: 12px; min-width: 0; }
+  .ladder .reach { grid-template-columns: 16px 40px; }
+  .ladder b { font-weight: 600; color: var(--text); white-space: nowrap; }
+  .ladder small { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+  .meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin: 0 0 24px; }
+  .meta div { padding: 12px 16px; border-left: 1px solid var(--line); min-width: 0; }
+  .meta div:first-child { border-left: 0; }
+  .meta dt { font-size: 12px; color: var(--muted); height: 16px; }
+  .meta dd { margin: 4px 0 0; height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .changes { min-height: 56px; margin-top: 8px; display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 12px; font-size: 14px; }
+  .changes.none { color: var(--faint); border: 1px dashed var(--border); }
+  .changes.some { background: var(--accent-soft); border: 1px solid var(--accent-line); color: var(--text); }
+  .changes span { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .changes span[hidden], .changes a[hidden] { display: none; }
+  .changes button { margin: 0; white-space: nowrap; flex: none; }
+  .changes a.ghostlink { flex: none; font-size: 14px; font-weight: 600; }
+  h2.sec { font-size: 16px; line-height: 24px; margin: 32px 0 4px; }
+  p.secnote { font-size: 14px; color: var(--muted); margin: 0 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tbl .rrow > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; min-width: 0; }
+  .tbl .rrow.colhead > div { font-size: 12px; padding-left: 0; }
+  .tbl.paths .rrow { grid-template-columns: minmax(0, 1fr) 200px minmax(0, 1.4fr); }
+  .tbl.people .rrow { grid-template-columns: minmax(0, 1.3fr) 140px minmax(0, 1fr) 140px 80px; }
+  .tbl.ghere .rrow { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) 120px 96px; }
+  .tbl.orphans .rrow { grid-template-columns: 160px minmax(0, 1fr) 80px; }
+  .tbl .num { font-variant-numeric: tabular-nums; }
+  .tbl .ended { color: var(--faint); }
+  .tbl form { margin: 0; }
+  .tbl button.link, .linkbtn { margin: 0; padding: 0; border: 0; background: none; color: var(--accent); font-weight: 400; font-size: 14px; cursor: pointer; }
+  .tbl button.link:hover { text-decoration: underline; background: none; }
+  .addline { display: grid; grid-template-columns: minmax(0, 1fr) 160px 160px auto; gap: 8px; padding: 8px 16px 12px; border-top: 1px solid var(--line); align-items: center; margin: 0; }
+  .addline input, .addline select { height: 36px; padding: 0 10px; font-size: 14px; }
+  .addline button { margin: 0; height: 36px; }
+  .pathcell { display: inline-flex; gap: 8px; align-items: center; min-width: 0; }
+  .pathcell span { overflow: hidden; text-overflow: ellipsis; }
+
+  /* The picker: a list over the page, shown while its id is the URL's
+     fragment, so it opens and closes without a script. */
+  .pickwrap { display: none; position: fixed; inset: 0; z-index: 20; background: var(--scrim); align-items: flex-start; justify-content: center; padding: 96px 16px 16px; overflow-y: auto; }
+  .pickwrap:target { display: flex; }
+  .pickwrap > a.away { position: fixed; inset: 0; }
+  .pop { position: relative; width: 400px; max-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .16); padding: 8px; }
+  .pop .phead { padding: 8px 8px 4px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pop .kind { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); height: 28px; display: flex; align-items: flex-end; padding: 0 8px 4px; }
+  .opt { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: center; height: 44px; padding: 0 8px; border-radius: 8px; cursor: pointer; margin: 0; font-weight: 400; font-size: 14px; }
+  .opt:hover { background: var(--surface-2); }
+  .opt input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+  .opt .box { width: 16px; height: 16px; border: 1.5px solid var(--input-border); border-radius: 4px; display: grid; place-items: center; }
+  .opt:has(input:focus-visible) .box { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .opt:has(input:checked) .box { background: var(--accent); border-color: var(--accent); }
+  .opt:has(input:checked) .box::after { content: ""; width: 8px; height: 4px; border: 2px solid #fff; border-top: 0; border-right: 0; transform: rotate(-45deg) translate(1px, -1px); }
+  .opt .tok { pointer-events: none; }
+  .opt small { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .opt .oline { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .pop .jump { display: flex; align-items: center; height: 40px; padding: 0 8px; font-size: 14px; gap: 8px; }
+
+  .scrim { position: fixed; inset: 0; background: var(--scrim); display: flex; align-items: flex-start; justify-content: center; padding: 96px 16px 16px; z-index: 30; overflow-y: auto; }
+  .dialog { width: 600px; max-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+  .dialog h2 { margin: 0 0 16px; font-size: 18px; }
+  .dialog ul { margin: 0 0 16px; padding: 0; list-style: none; }
+  .dialog li { display: grid; grid-template-columns: 120px 80px minmax(0, 1fr); gap: 12px; align-items: center; height: 44px; border-top: 1px solid var(--line); font-size: 14px; }
+  .dialog li:last-child { border-bottom: 1px solid var(--line); }
+  .dialog li > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .dialog li .tok { max-width: 100%; }
+  .dialog p { font-size: 14px; color: var(--muted); margin: 0 0 16px; }
+  .dialog p.warnline { color: var(--off-fg); }
+  .dialog .acts { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .dialog .acts button { margin: 0; }
+
+  @media (max-width: 720px) {
+    .ptitle { flex-direction: column; align-items: flex-start; }
+    form.toolbar { grid-template-columns: 1fr; }
+    .meta { grid-template-columns: 1fr; }
+    .meta div { border-left: 0; border-top: 1px solid var(--line); }
+    .meta div:first-child { border-top: 0; }
+    .rrow { grid-template-columns: minmax(0, 1fr) 132px; grid-template-rows: 32px 32px; height: 80px; padding: 8px 16px; }
+    .rrow .rwho { grid-column: 1 / 3; grid-row: 2; }
+    .rrow .reach { grid-column: 2; grid-row: 1; }
+    .rrole { padding-left: 0; }
+    .rrow.colhead { display: none; }
+    .rrow.app { height: 40px; grid-template-rows: 24px; padding: 8px 16px; }
+    .rrow.app .name { grid-column: 1; }
+    .rrow.app .host { display: none; }
+    .tbl .rrow, .tbl.paths .rrow, .tbl.people .rrow, .tbl.ghere .rrow, .tbl.orphans .rrow { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; height: auto; row-gap: 4px; padding: 10px 16px; }
+    .tbl .rrow > div:nth-child(n+3) { color: var(--muted); font-size: 13px; }
+    .addline { grid-template-columns: 1fr; }
+    .rkey > div { grid-template-columns: 1fr; height: auto; gap: 4px; padding-block: 8px; }
+    .rkey > div > span:last-child { white-space: normal; }
+    .ladder { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 12px; }
+    .changes { flex-wrap: wrap; }
+    .changes span { white-space: normal; }
+    p.secnote { white-space: normal; }
+  }
+</style>{{end}}
+
+{{define "role_icons"}}<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="k-domain" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.6 5.7 3.6 9s-1.1 6.3-3.6 9c-2.5-2.7-3.6-5.7-3.6-9S9.5 5.7 12 3z"/></symbol>
+  <symbol id="k-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/></symbol>
+  <symbol id="k-person" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.8"/><path d="M4.5 20.5c.9-4 3.9-6 7.5-6s6.6 2 7.5 6"/></symbol>
+  <symbol id="k-card" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h4v4H7zM14 10h4M14 14h3"/></symbol>
+  <symbol id="k-net" viewBox="0 0 24 24"><path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/></symbol>
+  <symbol id="k-guest" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></symbol>
+  <symbol id="k-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="k-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="k-app" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></symbol>
+  <symbol id="k-none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></symbol>
+</svg>{{end}}
+
+{{define "ico"}}<svg class="ico" aria-hidden="true"><use href="#{{.}}"/></svg>{{end}}
+
+{{define "token"}}{{if .Field}}<label class="tok{{if .Tone}} {{.Tone}}{{end}}{{if eq .Pending "add"}} padd{{end}}" title="{{.Title}}"><input type="checkbox" class="tick" name="{{.Field}}" value="{{.Value}}"{{if .Checked}} checked{{end}} data-held="{{if .Held}}1{{else}}0{{end}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}<span class="x" aria-hidden="true"></span></label>{{else if .Href}}<a class="tok{{if .Tone}} {{.Tone}}{{end}}{{if .On}} on{{end}}" href="{{.Href}}" title="{{.Title}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</a>{{else}}<span class="tok static{{if .Tone}} {{.Tone}}{{end}}{{if .On}} on{{end}}" title="{{.Title}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</span>{{end}}{{end}}
+
+{{define "reach"}}<div class="reach{{if .Closed}} closed{{end}}" title="{{.Title}}">{{if .Closed}}{{template "ico" "k-none"}}<span class="w">Closed</span>{{else}}{{template "ico" .Step.Icon}}<span class="w">{{.Step.Word}}</span>{{end}}<span class="meter">{{range .Bars}}<i{{if .}} class="f"{{end}}></i>{{end}}</span></div>{{end}}
+
+{{define "rolelist"}}<div class="rlist" id="roles">
+  <div class="rrow colhead"><div>Role</div><div>Who holds it</div><div>Widest access</div></div>
+  {{range .}}
+  <div class="rrow app"><div class="name"><b>{{.Label}}</b><span class="host">{{.Host}}</span>{{if .Open}}<span class="bydesign" title="{{.OpenTitle}}">{{template "ico" "k-lock"}}{{.Open}}</span>{{end}}</div>{{if .Editable}}<div></div>{{else}}<a class="edit" href="/admin/apps/{{.Name}}">Edit</a>{{end}}</div>
+  {{range .Rows}}
+  <div class="rrow{{if .Mark}} {{.Mark}}{{end}}">
+    <div class="rrole" title="{{.Label}}{{if .Paths}}: {{.Paths}}{{end}}"><b>{{.Label}}</b><span{{if .PathsMono}} class="p"{{end}}>{{.Paths}}</span></div>
+    <div class="rwho" data-fit>{{range .Tokens}}{{template "token" .}}{{end}}{{if .Tokens}}<span class="tok more" hidden></span>{{end}}{{if and .Nobody (not .Editable)}}<span class="nobody">Nobody holds this role.</span>{{end}}{{if .Editable}}<a class="tok add" href="#{{.PickID}}" title="Give this role to a group, a list or a setting">{{template "ico" "k-plus"}}<span class="l">{{.AddText}}</span></a>{{end}}</div>
+    {{template "reach" .Reach}}
+  </div>
+  {{end}}
+  {{end}}
+</div>{{end}}

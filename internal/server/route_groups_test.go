@@ -76,7 +76,7 @@ func TestGroupsPageShowsRouteGroups(t *testing.T) {
 	loginAs(t, c, sender, "admin@example.com", nil)
 	body := c.get("/admin/groups", nil).Body.String()
 
-	missing := body[strings.Index(body, "do not exist yet"):strings.Index(body, `<h2>Managed here</h2>`)]
+	missing := body[strings.Index(body, "do not exist yet"):strings.Index(body, `<h2>Lists</h2>`)]
 	if !strings.Contains(missing, `value="planka-users"`) {
 		t.Error("missing group planka-users not offered for creation")
 	}
@@ -93,11 +93,11 @@ func TestGroupsPageShowsRouteGroups(t *testing.T) {
 		t.Error("existing group's hosts not shown")
 	}
 	old := body[strings.Index(body, ">old-group<"):]
-	if !strings.Contains(old[:700], "Not used by any app") {
+	if !strings.Contains(old[:min(700, len(old))], "Not used by any app") {
 		t.Error("unused group not flagged")
 	}
 	proto := body[strings.Index(body, ">prototypes<"):]
-	if strings.Contains(proto[:500], "Not used by any app") {
+	if strings.Contains(proto[:min(500, len(proto))], "Not used by any app") {
 		t.Error("used group flagged as unused")
 	}
 }
@@ -123,7 +123,7 @@ func TestGroupLabelEdit(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 
 	rec := c.postForm("/admin/groups/planka-users/label", url.Values{"csrf": {tok}, "label": {"  Planka board users  "}})
 	if rec.Code != http.StatusFound {

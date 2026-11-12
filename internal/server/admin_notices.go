@@ -24,6 +24,9 @@ var adminNotices = map[string]string{
 	"card-branding":   "The card design for this code has been saved.",
 	"branding-saved":  "The branding has been saved.",
 	"settings-saved":  "The settings have been saved.",
+	"roles-saved":     "The changes have been saved.",
+	"domain-added":    "The domain has been added.",
+	"domain-removed":  "The domain has been removed.",
 }
 
 // adminWarnings are notices that report an action was NOT taken, shown in
