@@ -59,6 +59,8 @@ type pageData struct {
 	// address has no dot before the "@": an example firstname.lastname
 	// address at the same domain, shown with a hint to sign in with one.
 	NameAddressExample string
+	// Invite is an invitation's page (invite_public.go).
+	Invite *invitePage
 	// IsAdmin surfaces an Admin link on the signed-in /welcome landing for a
 	// real (non-break-glass) admin session.
 	IsAdmin bool
@@ -112,8 +114,37 @@ func loadTemplates() (pages, error) {
 		}
 		out[name] = t
 	}
+	if err := addPages(out, base, publicInvitePages); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
+
+// addPages parses each page, with the shared files extra, on a clone of
+// base.
+func addPages(out pages, base *template.Template, names []string, extra ...string) error {
+	for _, name := range names {
+		t, err := base.Clone()
+		if err != nil {
+			return err
+		}
+		files := []string{"templates/" + name + ".html"}
+		for _, e := range extra {
+			files = append(files, "templates/"+e)
+		}
+		if _, err := t.ParseFS(templatesFS, files...); err != nil {
+			return err
+		}
+		out[name] = t
+	}
+	return nil
+}
+
+// publicInvitePages and adminInvitePages are the invitation pages.
+var (
+	publicInvitePages = []string{"invite"}
+	adminInvitePages  = []string{"admin_invites", "admin_invite_new"}
+)
 
 // loadEmailTemplate parses the OTP email body. It uses text/template (not
 // html/template) on purpose: html/template strips HTML comments, which would

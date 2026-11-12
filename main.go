@@ -114,6 +114,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	srv.StartFeeds(ctx)
+	srv.StartReminders(ctx)
 
 	errCh := make(chan error, 8)
 	// The members endpoint has its own listener, on a port Caddy never

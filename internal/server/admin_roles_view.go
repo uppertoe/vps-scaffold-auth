@@ -98,6 +98,7 @@ type rolesWorld struct {
 	members map[string]int
 	feeds   map[string]bool
 	cards   []store.BreakGlassCode // active cards that name an app role
+	invites []store.Invitation     // every invitation, newest sent first
 	now     time.Time
 }
 
@@ -126,6 +127,9 @@ func (s *Server) loadRolesWorld(ctx context.Context) (*rolesWorld, error) {
 		if _, fed := s.feedFor(g.Name); fed {
 			w.feeds[g.Name] = true
 		}
+	}
+	if w.invites, err = s.store.ListInvitations(ctx); err != nil {
+		return nil, err
 	}
 	codes, err := s.store.ListBreakGlassCodes(ctx)
 	if err != nil {

@@ -65,6 +65,9 @@ type adminData struct {
 	Script  template.JS
 	// New group page.
 	NewGroup *newGroupView
+	// Invitations pages.
+	Invites   *invitesView
+	NewInvite *newInviteView
 	// Access log, one person chosen: offer to sign them out everywhere.
 	EndSessionsFor string
 	SessionsEnded  bool
@@ -362,6 +365,9 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 			return nil, err
 		}
 		out[name] = t
+	}
+	if err := addPages(out, base, adminInvitePages, "admin_invites_css.html"); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

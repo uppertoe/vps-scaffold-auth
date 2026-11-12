@@ -33,6 +33,7 @@ const (
 	msgSaveNote      = "Saving these changes emails the other administrators, and each change is recorded in the admin log."
 	msgChangeSubject = "Access to %s has changed."
 	msgChangeBody    = "%s made these changes on %s:\n\n%s\nEach change is recorded in the admin log.\n"
+	msgCheckInvited  = "%s holds no role yet. An invitation to %s has not been accepted."
 )
 
 // appsView is the Apps overview.
@@ -97,6 +98,7 @@ func (s *Server) handleAdminApps(w http.ResponseWriter, r *http.Request) {
 		}
 		v.Apps = append(v.Apps, block)
 	}
+	v.Attention = append(v.Attention, s.inviteAttention(world)...)
 	v.Key = s.key(world)
 	s.renderAdmin(w, r, http.StatusOK, "admin_apps", adminData{Title: "Apps", Apps: v, Script: rolesScript})
 }
@@ -182,7 +184,16 @@ func (s *Server) checkAddress(ctx context.Context, w *rolesWorld, addr string) (
 	if direct {
 		via = append(via, "a direct assignment")
 	}
+	var waiting []string
+	for _, v := range w.openInvites() {
+		if v.Email == addr && w.m.Has(v.App, v.Role) {
+			a := w.m.Apps[v.App]
+			waiting = append(waiting, a.Label+": "+roleLabel(a, v.Role))
+		}
+	}
 	switch {
+	case len(held) == 0 && len(waiting) > 0:
+		return held, fmt.Sprintf(msgCheckInvited, addr, joinAnd(waiting))
 	case len(held) > 0:
 		return held, fmt.Sprintf("%s holds %s in %s, through %s.", addr, countWords(len(held), "role", "roles"), countWords(len(apps), "app", "apps"), joinAnd(via))
 	case len(guestApps) > 0:
@@ -263,6 +274,8 @@ type appView struct {
 	Paths             []pathRow
 	Orphans           []orphanRow
 	OrphanNote        string
+	// InviteHref opens the Invite people form with this app's user role.
+	InviteHref string
 	// Pending is set while the page shows unsaved changes.
 	Pending bool
 	Review  *reviewView
@@ -273,6 +286,9 @@ type roleOption struct{ Role, Label string }
 type personRow struct {
 	Email, Role, RoleLabel, How, HowTitle, Until string
 	Ended                                        bool
+	// InviteID is set on the row of an invitation not yet accepted, which
+	// gives nobody the role.
+	InviteID int64
 }
 
 type groupHereRow struct {
@@ -377,6 +393,8 @@ func (s *Server) appPage(w *rolesWorld, a *roles.App, p *pending) *appView {
 		used[id][as.Role] = true
 	}
 	sort.SliceStable(v.People, func(i, j int) bool { return v.People[i].Email < v.People[j].Email })
+	v.People = append(v.People, s.invitedRows(w, a)...)
+	v.InviteHref = "/admin/invitations/new?role=" + url.QueryEscape(a.Name+":"+roles.UserRole)
 	sort.Slice(order, func(i, j int) bool {
 		ki, _, _ := parseHolderID(order[i])
 		kj, _, _ := parseHolderID(order[j])

@@ -1,0 +1,28 @@
+{{define "invites_css"}}<style>
+  .tbl.invl .rrow { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.8fr) 132px 72px 168px 120px; }
+  .tbl.invl .tok, .who .tok, .choice .tok { max-width: 100%; }
+  .tbl.invl .acts { display: flex; gap: 6px; align-items: center; }
+  .tbl.checkl { border-radius: 10px; }
+  .tbl.checkl .rrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); border-top: 0; }
+  .tbl.checkl .rrow + .rrow { border-top: 1px solid var(--line); }
+  .tbl.checkl .rrow.out > div { color: var(--muted); }
+  .tbl.checkl .rrow.out > div:first-child { text-decoration: line-through; }
+  .who { display: flex; gap: 8px; align-items: center; min-width: 0; overflow: hidden; }
+  .who .muted { white-space: nowrap; }
+  .fsec textarea { max-width: 520px; min-height: 76px; }
+  .fsec input[type=date] { max-width: 220px; height: 38px; padding: 0 10px; border: 1px solid var(--input-border); border-radius: 8px; background: var(--input-bg); color: var(--text); font: inherit; }
+  form.newinvite:has(input[name=access][value=perm]:checked) .untildate { display: none; }
+  .choice.wr { grid-template-columns: 20px minmax(0, 1fr) var(--reachcol); }
+  .choice .cl.inl { display: flex; gap: 8px; align-items: center; overflow: hidden; }
+  .choice .cl.inl small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .choice .cl.inl .tok { flex: 0 1 auto; }
+  .warnline { margin: 0; font-size: 13px; color: var(--off-fg); }
+  @media (max-width: 720px) {
+    .choice.wr { grid-template-columns: 20px minmax(0, 1fr); }
+    .choice.wr .reach { display: none; }
+    .choice .cl.inl { flex-wrap: wrap; row-gap: 2px; }
+    .choice .cl.inl small { flex-basis: 100%; }
+    .tbl.invl .rrow, .tbl.checkl .rrow { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; height: auto; row-gap: 4px; padding: 10px 16px; }
+    .tbl.invl .rrow.colhead { display: none; }
+  }
+</style>{{end}}

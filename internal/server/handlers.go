@@ -645,6 +645,19 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// next wrong guess differently, and that difference is allow-list
 	// membership.
 	permitted := s.loginRole(r.Context(), emailAddr, s.isOpenHost(rd)) != authz.RoleDeny
+	s.issueCode(r, emailAddr, permitted, now)
+
+	if err := s.sessions.SetState(w, session.State{Email: emailAddr, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
+		return
+	}
+	s.render(w, http.StatusOK, "code", pageData{Email: emailAddr, Redirect: rd, Remember: remember})
+}
+
+// issueCode sends a sign-in code to a permitted address, or stores a decoy
+// for any other, under the cooldown and the send limits (see handleRequest).
+// An invitation's page sends its code through here too.
+func (s *Server) issueCode(r *http.Request, emailAddr string, permitted bool, now time.Time) {
 	// Suppress a re-request while the last code is still fresh: a code minted
 	// within the cooldown window has expires_at > now + OTPTTL - cooldown.
 	// Deriving issue time from expiry is exact because SaveCode sets
@@ -691,12 +704,6 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			log.Printf("store decoy code for %s: %v", emailAddr, err)
 		}
 	}
-
-	if err := s.sessions.SetState(w, session.State{Email: emailAddr, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
-		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
-		return
-	}
-	s.render(w, http.StatusOK, "code", pageData{Email: emailAddr, Redirect: rd, Remember: remember})
 }
 
 // knownDeviceWindow is how far back a successful sign-in from the same client
@@ -931,6 +938,9 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	switch res {
 	case store.ConsumeOK:
 		s.wrongCodes.Refund(clientIP(r))
+		if st.Invite != 0 {
+			s.acceptInvite(r, st.Invite, st.Email, now)
+		}
 		// Re-derive "open host" from the destination exactly as /request did. rd
 		// is client-influenced (the posted copy wins), so this is not what keeps
 		// strangers out: a guest session is the same whichever host minted it,

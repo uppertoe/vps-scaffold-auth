@@ -1,0 +1,14 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+{{/* An invitation's page. Opening the link grants nothing: the code is
+     sent by the button's POST, so a mail scanner fetching the link has no
+     effect. The token travels in the form body. */}}
+{{with .Invite}}
+<h1>{{.Heading}}</h1>
+{{if .App}}<div class="box"><b>{{.App}}</b>{{.Access}}</div>{{end}}
+{{range .Lines}}<p class="sub">{{.}}</p>{{end}}
+{{if .Token}}<form method="post" action="/invite/send"><input type="hidden" name="token" value="{{.Token}}"><button type="submit">{{.SendCode}}</button></form>{{end}}
+{{if .SignOut}}<form method="post" action="/logout"><button type="submit">{{.Button}}</button></form>
+{{else if .Href}}<a class="btn" href="{{.Href}}">{{.Button}}</a>{{end}}
+{{end}}
+{{end}}

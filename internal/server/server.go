@@ -40,6 +40,7 @@ type Server struct {
 	wrongCodes     *ratelimit.Limiter // wrong email or TOTP codes, per client IP
 	breakLimiter   *ratelimit.Limiter // per-IP limiter for break-glass grants
 	viewLimiter    *ratelimit.Limiter // per-IP limiter for the scan's page, so one use spends one grant token
+	inviteLimiter  *ratelimit.Limiter // per-IP limiter for an invitation's page (invite_public.go)
 	refusedNotices hourlyOnce         // notifications of a refused (retargeted) card
 	totpReplay     *totpReplay
 	// passkeyChallenges makes each passkey challenge single-use (passkeys.go).
@@ -90,34 +91,35 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		return nil, err
 	}
 	s := &Server{
-		cfg:          cfg,
-		store:        st,
-		sender:       sender,
-		sessions:     session.NewManager(cfg.SessionSecret, cfg.SessionTTL, cfg.SessionRenew, cfg.CookieDomain, !cfg.CookieInsecure),
-		policy:       authz.NewPolicy(cfg.AllowedDomains, cfg.AdminEmails),
-		secrets:      secrets,
-		emailLimiter: ratelimit.New(cfg.RateLimitPerEmail.Count, cfg.RateLimitPerEmail.Window),
-		emailCeiling: limiterOr(cfg.RateLimitPerEmailCeiling, config.RateLimit{Count: 12, Window: time.Hour}),
-		emailDaily:   limiterOr(cfg.RateLimitPerEmailDaily, config.RateLimit{Count: 20, Window: 24 * time.Hour}),
-		sendsPerIP:   limiterOr(cfg.RateLimitSendsPerIP, config.RateLimit{Count: 60, Window: time.Hour}),
-		ipLimiter:    ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
-		wrongCodes:   limiterOr(cfg.RateLimitWrongCodesPerIP, cfg.RateLimitPerIP),
-		breakLimiter: newBreakLimiter(cfg),
-		viewLimiter:  newBreakLimiter(cfg),
-		access:       newAccessAudit(st, cfg.AuditRetention),
-		members:      newMembersAPI(cfg.MemberReaders),
-		groupRecheck: newGroupRecheck(),
-		cutoffs:      cutoffs,
-		mailSlots:    make(chan struct{}, maxMailSends),
-		noticeSlots:  make(chan struct{}, maxMailSends),
-		feeds:        newFeedSyncer(cfg.GroupFeeds),
-		csp:          cspPolicy(cfg.Domain, cfg.AllowApexRedirect),
-		pages:        tmpls,
-		adminPages:   adminTmpls,
-		emailTmpl:    emailTmpl,
-		now:          time.Now,
-		loc:          loc,
-		appRoles:     loadAppRoles(cfg.AppRolesFile, cfg.Domain),
+		cfg:           cfg,
+		store:         st,
+		sender:        sender,
+		sessions:      session.NewManager(cfg.SessionSecret, cfg.SessionTTL, cfg.SessionRenew, cfg.CookieDomain, !cfg.CookieInsecure),
+		policy:        authz.NewPolicy(cfg.AllowedDomains, cfg.AdminEmails),
+		secrets:       secrets,
+		emailLimiter:  ratelimit.New(cfg.RateLimitPerEmail.Count, cfg.RateLimitPerEmail.Window),
+		emailCeiling:  limiterOr(cfg.RateLimitPerEmailCeiling, config.RateLimit{Count: 12, Window: time.Hour}),
+		emailDaily:    limiterOr(cfg.RateLimitPerEmailDaily, config.RateLimit{Count: 20, Window: 24 * time.Hour}),
+		sendsPerIP:    limiterOr(cfg.RateLimitSendsPerIP, config.RateLimit{Count: 60, Window: time.Hour}),
+		ipLimiter:     ratelimit.New(cfg.RateLimitPerIP.Count, cfg.RateLimitPerIP.Window),
+		wrongCodes:    limiterOr(cfg.RateLimitWrongCodesPerIP, cfg.RateLimitPerIP),
+		breakLimiter:  newBreakLimiter(cfg),
+		viewLimiter:   newBreakLimiter(cfg),
+		inviteLimiter: limiterOr(cfg.RateLimitPerIP, config.RateLimit{Count: 30, Window: time.Minute}),
+		access:        newAccessAudit(st, cfg.AuditRetention),
+		members:       newMembersAPI(cfg.MemberReaders),
+		groupRecheck:  newGroupRecheck(),
+		cutoffs:       cutoffs,
+		mailSlots:     make(chan struct{}, maxMailSends),
+		noticeSlots:   make(chan struct{}, maxMailSends),
+		feeds:         newFeedSyncer(cfg.GroupFeeds),
+		csp:           cspPolicy(cfg.Domain, cfg.AllowApexRedirect),
+		pages:         tmpls,
+		adminPages:    adminTmpls,
+		emailTmpl:     emailTmpl,
+		now:           time.Now,
+		loc:           loc,
+		appRoles:      loadAppRoles(cfg.AppRolesFile, cfg.Domain),
 	}
 	// Anti-replay reads the clock through s.now so tests sharing a fake clock stay
 	// consistent with the rest of the server.
@@ -180,6 +182,9 @@ func (s *Server) routes() http.Handler {
 	// before a page), and accept any image type there.
 	mux.HandleFunc("GET /favicon.ico", s.handleLogo)
 	// Passkeys (passkeys.go). Each handler answers 404 unless PASSKEYS_ENABLED.
+	mux.HandleFunc("GET /invite/{token}", s.handleInviteLink)
+	mux.HandleFunc("POST /invite/send", s.handleInviteSend)
+	mux.HandleFunc("GET /invite/done", s.handleInviteDone)
 	mux.HandleFunc("GET /passkey.js", s.handlePasskeyScript)
 	mux.HandleFunc("POST /passkey/login", s.handlePasskeyLogin)
 	mux.HandleFunc("GET /passkeys", s.handlePasskeys)

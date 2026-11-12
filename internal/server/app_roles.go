@@ -38,6 +38,8 @@ type roleState struct {
 	assignments []store.RoleAssignment
 	domains     map[string][]string
 	cards       map[int64]store.BreakGlassCode
+	// invited are the addresses with an open invitation, who may sign in.
+	invited map[string]bool
 }
 
 type roleCache struct {
@@ -102,7 +104,18 @@ func (s *Server) roleData(ctx context.Context) roleState {
 	for _, c := range codes {
 		cards[c.ID] = store.BreakGlassCode{ID: c.ID, App: c.App, Role: c.Role, Status: c.Status}
 	}
-	s.roleCache.state = roleState{assignments: as, domains: domains, cards: cards}
+	invites, err := s.store.ListInvitations(ctx)
+	if err != nil {
+		log.Printf("app roles: reading invitations: %v", err)
+		return s.roleCache.state
+	}
+	invited := map[string]bool{}
+	for _, v := range invites {
+		if v.Open(now) {
+			invited[v.Email] = true
+		}
+	}
+	s.roleCache.state = roleState{assignments: as, domains: domains, cards: cards, invited: invited}
 	s.roleCache.at = now
 	s.roleCache.ok = true
 	return s.roleCache.state
@@ -250,8 +263,9 @@ func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // mayHoldRoleNow reports whether email holds a role through a domain group,
-// a list or a current person assignment, reading its lists from the store.
-// It is used when a person signs in.
+// a list or a current person assignment, or has an open invitation, reading
+// its lists from the store. It is used when a person signs in. Signing in
+// does not accept an invitation: only its link and code do.
 func (s *Server) mayHoldRoleNow(ctx context.Context, email string) bool {
 	if !s.rolesOn() {
 		return false
@@ -266,7 +280,7 @@ func (s *Server) mayHoldRoleNow(ctx context.Context, email string) bool {
 		set[l] = true
 	}
 	st := s.roleData(ctx)
-	return roles.MaySignIn(email, set, st.assignments, s.roleEnv(st))
+	return st.invited[email] || roles.MaySignIn(email, set, st.assignments, s.roleEnv(st))
 }
 
 // mayHoldRoleSnapshot is mayHoldRoleNow from the session's own groups, with
@@ -276,7 +290,7 @@ func (s *Server) mayHoldRoleSnapshot(ctx context.Context, id *session.Identity) 
 		return false
 	}
 	st := s.roleData(ctx)
-	return roles.MaySignIn(id.Email, listSet(id.Groups), st.assignments, s.roleEnv(st))
+	return st.invited[id.Email] || roles.MaySignIn(id.Email, listSet(id.Groups), st.assignments, s.roleEnv(st))
 }
 
 // loginRole is the sign-in decision: the allow-list and administrators as

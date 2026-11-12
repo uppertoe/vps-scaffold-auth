@@ -182,6 +182,9 @@ type State struct {
 	Email    string `json:"email"`
 	Redirect string `json:"rd"`
 	Remember bool   `json:"rem,omitempty"`
+	// Invite names the invitation a code accepts, when the code was sent from
+	// an invitation's page.
+	Invite int64 `json:"inv,omitempty"`
 }
 
 // Pending marks an admin who has passed the email step but still owes TOTP.

@@ -49,18 +49,18 @@
     <div>{{.RoleLabel}}</div>
     <div class="muted" title="{{if .HowTitle}}{{.HowTitle}}{{else}}{{.How}}{{end}}">{{.How}}</div>
     <div class="num">{{if eq .Until "No end date"}}<span class="muted">No end date</span>{{else}}{{.Until}}{{end}}</div>
-    <div><form method="post" action="/admin/apps/{{$app}}/review"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="take" value="{{.Role}}|person|{{.Email}}"><button type="submit" class="link">Remove</button></form></div>
+    <div>{{if .InviteID}}<form method="post" action="/admin/invitations/{{.InviteID}}/withdraw"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="from_app" value="{{$app}}"><button type="submit" class="link">Withdraw</button></form>{{else}}<form method="post" action="/admin/apps/{{$app}}/review"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="take" value="{{.Role}}|person|{{.Email}}"><button type="submit" class="link">Remove</button></form>{{end}}</div>
   </div>
   {{else}}
   <div class="rrow"><div class="muted">Nobody has been given a role here directly.</div></div>
   {{end}}
-  {{/* Invitations add their button to this line. */}}
   <form class="addline" method="post" action="/admin/apps/{{$app}}/review">
     <input type="hidden" name="csrf" value="{{$csrf}}">
     <input type="email" name="person" required placeholder="name@example.org" aria-label="Address to add">
     <select name="person_role" aria-label="Role">{{range .Roles}}<option value="{{.Role}}">{{.Label}}</option>{{end}}</select>
     <input type="date" name="until" aria-label="End date (optional)" title="End date (optional)">
     <button type="submit" class="ghost">Add</button>
+    {{if $.RolesOn}}<a class="ghostbtn" href="{{.InviteHref}}">Invite with an end date</a>{{end}}
   </form>
 </div>
 

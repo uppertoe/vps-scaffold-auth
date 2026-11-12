@@ -1,0 +1,33 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "groups_css"}}{{template "invites_css"}}{{end}}
+{{define "content"}}
+{{template "role_icons"}}
+{{$csrf := .CSRF}}
+{{with .Invites}}
+<div class="ptitle"><div><h1>Invitations</h1><p>An invitation gives one person a role in one app, until a date or permanently.</p></div><a class="btnlink" href="/admin/invitations/new">Invite people</a></div>
+{{if .Attention}}
+<div class="attn">
+  {{range .Attention}}<div><i{{if .Bad}} class="bad"{{end}}></i><span title="{{.Before}}">{{.Before}}</span></div>{{end}}
+</div>
+{{end}}
+<div class="rlist tbl invl">
+  <div class="rrow colhead"><div>Address</div><div>Role</div><div>Access</div><div>Sent</div><div>State</div><div></div></div>
+  {{range .Rows}}
+  <div class="rrow">
+    <div title="{{.Email}}">{{.Email}}</div>
+    <div>{{template "token" .Token}}</div>
+    <div class="num">{{.Access}}</div>
+    <div class="muted" title="{{.SentTitle}}">{{.Sent}}</div>
+    <div><span class="pill {{.Tone}}">{{.State}}</span></div>
+    <div class="acts">
+      {{if .Resend}}<form method="post" action="/admin/invitations/{{.ID}}/resend"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="link">Resend</button></form><span class="muted">&middot;</span>{{end}}
+      {{if .Withdraw}}<form method="post" action="/admin/invitations/{{.ID}}/withdraw"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="link">Withdraw</button></form>{{end}}
+      {{if .SendAgain}}<form method="post" action="/admin/invitations/{{.ID}}/resend"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="link">Send again</button></form>{{end}}
+    </div>
+  </div>
+  {{else}}
+  <div class="rrow"><div class="muted">{{.Empty}}</div></div>
+  {{end}}
+</div>
+{{end}}
+{{end}}
