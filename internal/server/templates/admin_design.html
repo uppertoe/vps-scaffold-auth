@@ -1,0 +1,53 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "cards_css"}}{{end}}
+{{define "content"}}
+{{$csrf := .CSRF}}
+{{with .DesignEd}}
+<a class="back" href="/admin/break/designs">&larr; All designs</a>
+<div class="ptitle"><div><h1>{{if .Name}}{{.Name}}{{else}}New design{{end}}</h1><p>{{.Sub}}</p></div></div>
+<form id="de" method="post" action="{{.Action}}" enctype="multipart/form-data" data-id="{{.ID}}" data-sample="{{.Sample}}" data-app="{{.SampleApp}}" data-ink-site="{{.InkSite}}" data-ink-own="{{.InkOwn}}" data-accent-warn="The accent colour is hard to see on white. Choose a darker accent." data-logo-warn-white="The logo is hard to see on this header colour. Choose In white, or On a white panel." data-logo-warn-asis="The logo is hard to see on this header colour. Choose As uploaded, or On a white panel.">
+<input type="hidden" name="csrf" value="{{$csrf}}">
+<div class="cardlayout reverse">
+  <div>
+    <section class="fsec"><h2>Name</h2><input type="text" name="name" value="{{.Name}}" maxlength="60" aria-label="Name"></section>
+    <section class="fsec"><h2>Colours</h2>
+      <div class="presets">{{range $i, $p := .Presets}}<button type="submit" class="preset" name="preset" value="{{$i}}" formnovalidate data-header="{{.Header}}" data-accent="{{.Accent}}" data-stripe="{{if .Stripe}}1{{else}}0{{end}}" title="{{.Name}}"><i style="background:{{.Header}}"></i><i style="background:{{.Accent}}"></i><span>{{.Name}}</span></button>{{end}}</div>
+      <div class="cgrid">{{template "colour_field" .Header}}{{template "colour_field" .Accent}}</div>
+      <label class="check"><input type="checkbox" name="stripe" value="1"{{if .Stripe}} checked{{end}}> Show a three-colour stripe under the header</label>
+      <div class="cgrid three stripebars">{{range .Bars}}{{template "colour_field" .}}{{end}}</div>
+      <p class="warnline" id="accentWarn">{{.AccentWarn}}</p>
+    </section>
+    <section class="fsec"><h2>Logo</h2>
+      <div class="seg2" role="radiogroup" aria-label="Logo">{{range .Sources}}<label><input type="radio" name="logo_source" value="{{.Value}}"{{if .Checked}} checked{{end}}>{{.Title}}</label>{{end}}</div>
+      <p class="hint srchint site">The site logo is set on the <a href="/admin/settings#logo">Settings page</a> and is also shown on the sign-in pages.</p>
+      <p class="hint srchint own">Upload a logo used on cards only. PNG, JPEG or SVG, under 2 MB.{{if .HasOwnLogo}} A logo has been uploaded, and a new file replaces it.{{end}}</p>
+      <p class="hint srchint none">The card's title is centred in the header.</p>
+      <div class="ownfile"><input type="file" name="logo" accept="image/png,image/jpeg,image/svg+xml" aria-label="Logo for cards"></div>
+      <div class="modes">{{range .Modes}}<label class="choice slim"><input type="radio" name="logo_mode" value="{{.Value}}"{{if .Checked}} checked{{end}}><span class="r"></span><span class="stack"><span class="cl"><b>{{.Title}}</b><span class="rec" data-rec="{{.Value}}"{{if not .Rec}} hidden{{end}}>Easiest to read</span></span><small>{{.Detail}}</small></span></label>{{end}}</div>
+      <p class="warnline" id="logoWarn">{{.LogoWarn}}</p>
+    </section>
+    <section class="fsec"><h2>Wording</h2>
+      <label class="l" for="d-title">Title</label><input type="text" id="d-title" name="title" value="{{.Title}}" maxlength="40">
+      <label class="l" for="d-steps">Steps</label><textarea id="d-steps" name="steps" rows="4">{{.Steps}}</textarea>
+      <p class="hint">Each line is a numbered step on the card. The location, the app's name and the line about recording each use are added to every card.</p>
+    </section>
+    <section class="fsec"><h2>Printed size</h2>
+      {{range .Sizes}}<label class="choice slim"><input type="radio" name="size" value="{{.Value}}" data-caption="{{.Caption}}"{{if .Checked}} checked{{end}}><span class="r"></span><span class="stack"><b>{{.Title}}</b><small>{{.Detail}}</small></span></label>{{end}}
+      <p class="hint">The three sizes share one layout, so the preview is exact at each size.</p>
+    </section>
+    <div class="savebar"><span>{{.SaveNote}}</span><button type="submit" class="quietbtn" name="preview" value="1" data-nojs>Update the preview</button><a class="btnlink quiet" href="/admin/break/designs">Discard</a><button type="submit">Save the design</button></div>
+  </div>
+  <div class="previewcol sticky"><img id="dprev" class="cardimg" src="{{.PreviewURL}}" alt="Preview of the design"><div class="caption" id="dcap">{{.Caption}}</div></div>
+</div>
+</form>
+{{if not .New}}
+<div class="dangerpanel">
+  <h2>Delete the design</h2>
+  {{if .CanDelete}}<form method="post" action="/admin/break/designs/{{.ID}}/delete"><input type="hidden" name="csrf" value="{{$csrf}}"><p class="muted">No active card uses this design, so it can be deleted.</p><button type="submit" class="danger">Delete the design</button></form>
+  {{else}}<p class="muted">{{.DeleteNote}}</p>{{end}}
+</div>
+{{end}}
+{{end}}
+{{end}}
+
+{{define "colour_field"}}<div class="cfield"><label for="d-{{.Key}}">{{.Label}}</label><span class="cinput"><input type="color" id="d-{{.Key}}" name="{{.Key}}" value="{{.Value}}"><input type="text" name="{{.Key}}_hex" value="{{.Value}}" data-hex="{{.Key}}" maxlength="7" aria-label="{{.Label}} as a hex value"><input type="hidden" name="{{.Key}}_was" value="{{.Value}}"></span></div>{{end}}

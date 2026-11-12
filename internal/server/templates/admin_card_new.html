@@ -1,0 +1,54 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "cards_css"}}{{with .NewCard}}<style>{{range .Apps}}
+  #nc:has(input[name=app][value="{{.Name}}"]:checked) .pages[data-for="{{.Name}}"] { display: grid; }{{end}}
+  #nc:not(:has(input[name=app]:checked)) .nopage { display: block; }
+  .nopage { display: none; }
+</style>{{end}}{{end}}
+{{define "content"}}
+{{template "role_icons"}}
+{{$csrf := .CSRF}}
+{{with .NewCard}}
+<a class="back" href="/admin/break">&larr; All cards</a>
+<div class="ptitle"><div><h1>New card</h1><p>The preview shows the printed card as you fill in the form.</p></div></div>
+<form id="nc" method="post" action="/admin/break">
+<input type="hidden" name="csrf" value="{{$csrf}}">
+<div class="cardlayout reverse">
+  <div>
+    <section class="fsec"><h2><span>1</span>Where will the card live?</h2>
+      <input type="text" name="label" id="nc-label" value="{{.Label}}" placeholder="For example, PICU bed 7" maxlength="64" aria-label="Location">
+      <p class="hint">The location is printed on the card, so a person can tell one card from another.</p></section>
+    {{if .RolesOn}}
+    <section class="fsec"><h2><span>2</span>Which app does the card open?</h2>
+      <p class="hint">The holder of a card is not identified, so a card opens an app as an ordinary user and never as an administrator. The right-hand column shows each app's widest access today.</p>
+      {{range .Apps}}<label class="choice"><input type="radio" name="app" value="{{.Name}}" data-label="{{.Label}}"{{if .Checked}} checked{{end}}{{if .Disabled}} disabled{{end}}><span class="r"></span><span class="cl">{{template "token" .Token}}<small>{{.Cards}}</small></span>{{template "reach" .Reach}}</label>
+      {{else}}<p class="hint">The app-roles manifest names no app yet.</p>{{end}}
+    </section>
+    <section class="fsec"><h2><span>3</span>Which page should a scan open?</h2>
+      <p class="hint nopage">Choose an app first. Its snippet names the pages a card may open.</p>
+      {{range .Apps}}{{$app := .}}<div class="pages" data-for="{{.Name}}">
+        <p class="hint">The app's snippet names the pages a card may open. Each one is inside {{.Label}} and needs only the User role, so a card can never land on an administrator's page or another app.</p>
+        {{range .Pages}}<label class="choice slim"><input type="radio" name="page.{{$app.Name}}" value="{{.Path}}"{{if .Checked}} checked{{end}}><span class="r"></span><span class="stack"><b>{{.Label}}</b><small class="mono">{{.URL}}</small></span></label>{{end}}
+      </div>{{end}}
+    </section>
+    {{else}}
+    <section class="fsec"><h2><span>2</span>Which group does the card open?</h2>
+      <select name="group" aria-label="Group">{{range .Targets}}<option value="{{.Name}}"{{if .Refused}} disabled{{end}}{{if eq .Name $.NewCard.Group}} selected{{end}}>{{.Name}}{{if .Refused}} ({{.Refused}}){{end}}</option>{{end}}</select>
+      <input type="text" name="group_new" placeholder="Or a new group, such as ward-b" aria-label="A new group">
+      <p class="hint">Without app roles, a card opens the sites of one group.</p></section>
+    <section class="fsec"><h2><span>3</span>Which address should a scan open?</h2>
+      <input type="text" name="redirect" value="{{.Redirect}}" placeholder="https://app.example.org/" aria-label="Address">
+      <p class="hint">Leave it empty to open the gateway's default page.</p></section>
+    {{end}}
+    <section class="fsec"><h2><span>4</span>Which design?</h2>
+      <div class="dgrid">{{range .Designs}}<label class="dchoice"><input type="radio" name="design" value="{{.ID}}" data-caption="Printed at {{.Size}}: {{.Caption}}"{{if .Checked}} checked{{end}}><img class="cardimg mini" src="{{.ThumbURL}}" data-design="{{.ID}}" alt="" width="48" height="68"><span><b>{{.Name}}</b><small>{{.Caption}}</small></span></label>{{end}}</div>
+      <p class="hint">A design sets the colours, logo, wording and printed size. <a href="/admin/break/designs">Manage the designs</a>.</p></section>
+    <section class="fsec"><h2><span>5</span>Note for administrators</h2>
+      <input type="text" name="note" value="{{.Note}}" placeholder="For example, where the card is kept" maxlength="200" aria-label="Note for administrators">
+      <p class="hint">The note is shown on the card's page and is never printed.</p></section>
+    <div class="formbtns"><button type="submit">Create the card</button><button type="submit" class="quietbtn" name="preview" value="1" data-nojs>Show the preview</button><a class="btnlink quiet" href="/admin/break">Cancel</a></div>
+  </div>
+  <div class="previewcol sticky"><img id="ncprev" class="cardimg" src="{{.PreviewURL}}" alt="Preview of the printed card"><div class="caption" id="nccap">{{.Caption}}</div></div>
+</div>
+</form>
+{{end}}
+{{end}}

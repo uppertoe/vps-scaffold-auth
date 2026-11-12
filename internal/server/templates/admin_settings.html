@@ -27,5 +27,20 @@
 
   <button type="submit">Save settings</button>
 </form>
+
+<form method="post" action="/admin/branding" enctype="multipart/form-data" id="logo">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <div class="panel" style="margin-top:24px">
+    <h2>Site logo</h2>
+    <p class="muted">The site logo is shown on the sign-in pages and as the site's icon, and on every card whose design uses the site logo. PNG, JPEG or SVG, under 2 MB.</p>
+    {{if .HasLogo}}
+      <p><img src="/admin/branding/logo/img" alt="The current site logo" style="max-height:64px;max-width:100%;padding:8px;border:1px solid var(--border);border-radius:8px"></p>
+      <label class="ck"><input type="checkbox" name="remove_logo" value="1"> Remove the site logo</label>
+    {{end}}
+    <label for="sitelogo">Upload a site logo</label>
+    <input id="sitelogo" name="logo" type="file" accept="image/png,image/jpeg,image/svg+xml">
+    <button type="submit">Save the site logo</button>
+  </div>
+</form>
 {{end}}
 {{end}}

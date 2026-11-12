@@ -1,87 +1,27 @@
 {{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "cards_css"}}{{end}}
 {{define "content"}}
-<h1>Break-glass codes</h1>
-<p class="sub">Physical QR cards that grant temporary, group-scoped emergency access. Every scan is logged.</p>
-
-<div class="panel">
-  <h2>Codes</h2>
-  {{if .Codes}}
-  <div class="tablewrap"><table class="stack">
-    <thead><tr><th>Label</th><th>Group</th><th>Status</th><th>Created</th><th></th></tr></thead>
-    <tbody>
-    {{range .Codes}}
-      <tr>
-        <td><a href="/admin/break/{{.ID}}">{{.Label}}</a>{{if .Note}}<div class="muted">{{.Note}}</div>{{end}}</td>
-        <td data-label="Group"><code class="mono">{{.TargetGroup}}</code>{{if .Refused}} <span class="pill guest" title="This group is now {{.Refused}}. The card still works; consider revoking it and issuing one for a group that only grants entry.">{{.Refused}}</span>{{end}}</td>
-        <td data-label="Status">{{if .Active}}<span class="pill ok">active</span>{{else}}<span class="pill off">revoked</span>{{end}}</td>
-        <td class="when" data-label="Created">{{.Created}}</td>
-        <td class="actions"><a href="/admin/break/{{.ID}}">Manage →</a></td>
-      </tr>
-    {{end}}
-    </tbody>
-  </table></div>
-  {{else}}
-  <p class="muted">No codes yet. Create one below.</p>
+{{with .Cards}}
+<div class="ptitle"><div><h1>Break-glass cards</h1><p>A card opens one app for whoever holds it, without signing in.</p></div><a class="btnlink" href="/admin/break/new">New card</a></div>
+{{template "cards_tabs" "cards"}}
+{{if .Attention}}<div class="attn">{{range .Attention}}<div><i{{if .Bad}} class="bad"{{end}}></i><span>The card for <a href="/admin/break/{{.ID}}">{{.Label}}</a> {{.Sentence}}</span></div>{{end}}</div>{{end}}
+{{if .Empty}}<p class="muted">No card has been made yet. Use New card to make the first one.</p>{{end}}
+{{if .Apps}}
+<div class="rlist clist">
+  <div class="rrow colhead"><div></div><div>Location</div><div>Last used</div><div>In 30 days</div><div>Last tested</div><div>State</div></div>
+  {{range .Apps}}
+  <div class="rrow app"><div class="name"><b>{{.Label}}</b><span class="host">{{.Host}}</span></div><a class="edit" href="/admin/break/new?app={{.Name}}">New card for {{.Label}}</a></div>
+  {{range .Rows}}{{template "card_row" .}}{{end}}
   {{end}}
 </div>
-
-<div class="panel">
-  <h2>New code</h2>
-  <form method="post" action="/admin/break">
-    <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <div class="row">
-      <div>
-        <label for="label">Location label</label>
-        <input id="label" name="label" type="text" required placeholder="Angiography Lab 1">
-      </div>
-      <div>
-        <label for="group">Target group</label>
-        {{if .TargetOptions}}
-        <select id="group" name="group">
-          <option value="">Choose a group</option>
-          {{range .TargetOptions}}<option value="{{.Name}}"{{if .Reason}} disabled{{end}}>{{.Name}}{{if .Reason}} ({{.Reason}}){{end}}</option>{{end}}
-        </select>
-        {{else}}
-        <input id="group" name="group" type="text" required placeholder="code_stroke_break_glass">
-        {{end}}
-      </div>
-    </div>
-    {{if .TargetOptions}}
-    <label for="group_new">Or a new group name</label>
-    <input id="group_new" name="group_new" type="text" pattern="[a-z0-9_\-]+" placeholder="code_stroke_break_glass">
-    <p class="muted" style="margin:4px 0 0">A group marked as used as an application role, or as filled from a feed, cannot be a card's target.</p>
-    {{end}}
-    <label for="note">Note (optional)</label>
-    <input id="note" name="note" type="text" placeholder="Laminated card by the workstation">
-    <label for="redirect">Redirect after access (optional)</label>
-    <input id="redirect" name="redirect" type="url" placeholder="https://app.example.com/">
-    <button type="submit">Create code</button>
-  </form>
+{{end}}
+{{if .Legacy}}
+<h2 class="sec">{{.LegacyH}}</h2>
+<p class="legacynote">{{.LegacyN}}</p>
+<div class="rlist clist">
+  <div class="rrow colhead"><div></div><div>Location</div><div>Last used</div><div>In 30 days</div><div>Last tested</div><div>State</div></div>
+  {{range .Legacy}}{{template "card_row" .}}{{end}}
 </div>
-<details class="panel howto">
-  <summary><h2>How break-glass access works</h2></summary>
-  <p class="muted">
-    Scanning a card opens its link and immediately starts a short-lived session &mdash; no
-    email, login, or two-factor step. The scan itself is the credential, so cards must stay
-    physically controlled. Every scan is logged and admins are notified.
-  </p>
-  <p class="muted">
-    A card carries exactly one group &mdash; its <strong>target group</strong> &mdash; and nothing
-    else. It does <strong>not</strong> grant admin access, it can't satisfy an app that allows by
-    email domain, and it can't open a plain <code class="mono">protected</code> route. Emergency
-    access has to be opted into explicitly, per app.
-  </p>
-  <p class="muted">
-    <strong>To scope a card to a particular app:</strong> set its target group to a group that
-    app's Caddy snippet requires (<code class="mono">groups=&hellip;</code>). The card then opens
-    only the apps whose policy lists that group. Give each emergency entry point its own group so
-    one card can't open more than you intend.
-  </p>
-  <p class="muted">
-    A card cannot target a group that an application reads as one of its own roles, such as an
-    editing or administrator role, because the card would admit its holder in that role. Those
-    groups are listed below but cannot be chosen. A group filled from a feed cannot be a target
-    either.
-  </p>
-</details>
+{{end}}
+{{end}}
 {{end}}

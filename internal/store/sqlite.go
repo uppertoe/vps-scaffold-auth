@@ -294,7 +294,7 @@ CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 	}); err != nil {
 		return err
 	}
-	return s.ensureColumns("break_glass_codes", []column{
+	if err := s.ensureColumns("break_glass_codes", []column{
 		{"ov_title", "TEXT NOT NULL DEFAULT ''"},
 		{"ov_body", "TEXT NOT NULL DEFAULT ''"},
 		{"ov_instructions", "TEXT NOT NULL DEFAULT ''"},
@@ -309,7 +309,10 @@ CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 		{"ov_glyph_type", "TEXT NOT NULL DEFAULT ''"},
 		{"app", "TEXT"},
 		{"role", "TEXT"},
-	})
+	}); err != nil {
+		return err
+	}
+	return s.migrateCardDesigns()
 }
 
 type column struct{ name, def string }
@@ -1084,18 +1087,24 @@ func (s *SQLite) GroupsForEmail(ctx context.Context, email string) ([]string, er
 
 // --- Break-the-glass codes ---
 
-const bgColumns = `id, label, note, target_group, COALESCE(app, ''), COALESCE(role, ''), token_enc, token_hash, redirect, status, created_at, updated_at`
+const bgColumns = `id, label, note, target_group, COALESCE(app, ''), COALESCE(role, ''), token_enc, token_hash, redirect, status, created_at, updated_at, COALESCE(design_id, 0), pdf_at, tested_at`
 
 func scanBreakGlass(sc interface{ Scan(...any) error }) (BreakGlassCode, error) {
 	var c BreakGlassCode
-	var created, updated int64
+	var created, updated, pdfAt, testedAt int64
 	err := sc.Scan(&c.ID, &c.Label, &c.Note, &c.TargetGroup, &c.App, &c.Role, &c.TokenEnc, &c.TokenHash,
-		&c.Redirect, &c.Status, &created, &updated)
+		&c.Redirect, &c.Status, &created, &updated, &c.DesignID, &pdfAt, &testedAt)
 	if err != nil {
 		return BreakGlassCode{}, err
 	}
 	c.CreatedAt = time.Unix(created, 0)
 	c.UpdatedAt = time.Unix(updated, 0)
+	if pdfAt > 0 {
+		c.PDFAt = time.Unix(pdfAt, 0)
+	}
+	if testedAt > 0 {
+		c.TestedAt = time.Unix(testedAt, 0)
+	}
 	return c, nil
 }
 
@@ -1107,9 +1116,9 @@ func (s *SQLite) CreateBreakGlassCode(ctx context.Context, c BreakGlassCode) (in
 	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO break_glass_codes
-		 (label, note, target_group, app, role, token_enc, token_hash, redirect, status, created_at, updated_at)
-		 VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?)`,
-		c.Label, c.Note, c.TargetGroup, c.App, c.Role, c.TokenEnc, c.TokenHash, c.Redirect, c.Status, now, now)
+		 (label, note, target_group, app, role, token_enc, token_hash, redirect, status, created_at, updated_at, design_id)
+		 VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, NULLIF(?, 0))`,
+		c.Label, c.Note, c.TargetGroup, c.App, c.Role, c.TokenEnc, c.TokenHash, c.Redirect, c.Status, now, now, c.DesignID)
 	if err != nil {
 		return 0, err
 	}
@@ -1169,12 +1178,27 @@ func (s *SQLite) RevokeBreakGlassCode(ctx context.Context, id int64) error {
 	return err
 }
 
-// RemintBreakGlassCode replaces a code's token and reactivates it.
+// RemintBreakGlassCode replaces a code's token and reactivates it. The old
+// token's hash is kept, so a scan of the old card can say it was replaced,
+// and the new card starts with no PDF downloaded and no test.
 func (s *SQLite) RemintBreakGlassCode(ctx context.Context, id int64, newTokenEnc, newTokenHash string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE break_glass_codes SET token_enc = ?, token_hash = ?, status = ?, updated_at = ? WHERE id = ?`,
-		newTokenEnc, newTokenHash, BreakGlassActive, time.Now().Unix(), id)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR REPLACE INTO break_glass_retired (token_hash, code_id, retired_at)
+		 SELECT token_hash, id, ? FROM break_glass_codes WHERE id = ?`, now, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE break_glass_codes SET token_enc = ?, token_hash = ?, status = ?, updated_at = ?, pdf_at = 0, tested_at = 0 WHERE id = ?`,
+		newTokenEnc, newTokenHash, BreakGlassActive, now, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RecordBreakGlassEvent appends an audit event.

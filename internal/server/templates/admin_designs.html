@@ -1,0 +1,11 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "cards_css"}}{{end}}
+{{define "content"}}
+{{with .Designs}}
+<div class="ptitle"><div><h1>Break-glass cards</h1><p>A design sets the colours, logo, wording and printed size of the cards that use it.</p></div><a class="btnlink" href="/admin/break/designs/new">New design</a></div>
+{{template "cards_tabs" "designs"}}
+<div class="dtiles">
+  {{range .Tiles}}<a class="dtile" href="/admin/break/designs/{{.ID}}"><span class="dt-art"><img class="cardimg mini" src="{{.ThumbURL}}" alt="" width="140" height="197" loading="lazy"></span><b>{{.Name}}</b><small>{{.Uses}}</small></a>{{end}}
+</div>
+{{end}}
+{{end}}

@@ -39,9 +39,14 @@ type adminData struct {
 	// Codes page: the groups offered as a card's target, refused ones marked.
 	TargetOptions []targetOptionView
 	Events        []store.BreakGlassEvent
-	Branding      brandingView
 	Settings      settingsView
-	CodeBranding  codeBrandingView
+	// Break-glass cards: the list, the new-card form, one card's page, the
+	// designs and the design editor (admin_cards.go, admin_designs.go).
+	Cards    *cardsView
+	NewCard  *newCardView
+	CardPage *cardPageView
+	Designs  *designsView
+	DesignEd *designEditView
 	// Admin two-factor page.
 	TOTPEnabled bool
 	TOTPAdmins  []totpAdminView
@@ -96,43 +101,12 @@ type newTOTPView struct {
 	Key   string
 }
 
-type codeBrandingView struct {
-	Title        string
-	Body         string
-	Instructions string
-	InhTitle     string // inherited/global value, shown as placeholder
-	InhBody      string
-	InhInstr     string
-	CustomColors bool
-	HeaderColor  string
-	AccentColor  string
-	Bar1Color    string
-	Bar2Color    string
-	Bar3Color    string
-	HasLogo      bool
-	HasGlyph     bool
-}
-
-type brandingView struct {
-	Title        string
-	Body         string
-	Instructions string
-	Placeholder  store.Branding // resolved defaults, shown as input placeholders
-	HasLogo      bool
-	HasPDFLogo   bool
-	HasGlyph     bool
-	HeaderColor  string
-	AccentColor  string
-	Bar1Color    string
-	Bar2Color    string
-	Bar3Color    string
-}
-
 type settingsView struct {
 	BreakGlassHours string
 	NotifyEmails    string
 	WebhookURL      string
 	WebhookTimeout  string
+	HasLogo         bool
 }
 
 type groupView struct {
@@ -295,9 +269,13 @@ type adminEventView struct {
 // missing here (from a newer build) is shown by its code.
 var adminActionLabels = map[string]string{
 	store.AdminActionBreakCreate:        "Card created",
-	store.AdminActionBreakRevoke:        "Card revoked",
-	store.AdminActionBreakRemint:        "Card re-minted",
+	store.AdminActionBreakRevoke:        "Card withdrawn",
+	store.AdminActionBreakRemint:        "Card replaced",
 	store.AdminActionCodeBranding:       "Card design changed",
+	store.AdminActionCardDesign:         "Card given another design",
+	store.AdminActionDesignCreate:       "Card design created",
+	store.AdminActionDesignSave:         "Card design saved",
+	store.AdminActionDesignDelete:       "Card design deleted",
 	store.AdminActionGroupCreate:        "Group created",
 	store.AdminActionGroupDelete:        "Group deleted",
 	store.AdminActionGroupLabel:         "Group label changed",
@@ -348,12 +326,12 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 	funcs := template.FuncMap{
 		"fmtTime": func(t time.Time) string { return t.In(loc).Format("2006-01-02 15:04:05 MST") },
 	}
-	base, err := template.New("admin_base.html").Funcs(funcs).ParseFS(templatesFS, "templates/admin_base.html", "templates/admin_roles_parts.html", "templates/admin_groups_css.html")
+	base, err := template.New("admin_base.html").Funcs(funcs).ParseFS(templatesFS, "templates/admin_base.html", "templates/admin_roles_parts.html", "templates/admin_groups_css.html", "templates/admin_cards_parts.html")
 	if err != nil {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit", "admin_apps", "admin_app", "admin_group_new"} {
+	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_card_new", "admin_designs", "admin_design", "admin_settings", "admin_totp", "admin_access", "admin_audit", "admin_apps", "admin_app", "admin_group_new"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err
