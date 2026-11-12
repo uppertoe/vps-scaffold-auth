@@ -468,6 +468,31 @@ type Store interface {
 	// be given to a card (ErrCardRole), because its holder is not identified.
 	SetBreakGlassRole(ctx context.Context, id int64, app, role string) error
 
+	// --- Invitations (see invitations.go) ---
+
+	// CreateInvitations inserts invitations and their admin-log records in
+	// one transaction, returning their IDs.
+	CreateInvitations(ctx context.Context, invs []Invitation, events []AdminEvent) ([]int64, error)
+	// ListInvitations returns every invitation, newest sent first.
+	ListInvitations(ctx context.Context) ([]Invitation, error)
+	GetInvitation(ctx context.Context, id int64) (Invitation, bool, error)
+	// InvitationByTokenHash finds the invitation a link names, in any state.
+	InvitationByTokenHash(ctx context.Context, tokenHash string) (Invitation, bool, error)
+	// ResendInvitation replaces the token and the expiry, so the old link
+	// stops working; WithdrawInvitation withdraws. Both refuse an accepted or
+	// withdrawn invitation with ErrInvitationClosed, and record e.
+	ResendInvitation(ctx context.Context, id int64, tokenHash string, sentAt, expiresAt time.Time, e AdminEvent) error
+	WithdrawInvitation(ctx context.Context, id int64, at time.Time, e AdminEvent) error
+	// MarkInvitationUndelivered records a refused email, unless the
+	// invitation has been resent since.
+	MarkInvitationUndelivered(ctx context.Context, id int64, tokenHash string) error
+	// AcceptInvitation marks an open invitation for email accepted and gives
+	// the person its role, in one transaction with e.
+	AcceptInvitation(ctx context.Context, id int64, email string, now time.Time, e AdminEvent) (Invitation, error)
+	// MarkReminderSent records the reminder before an assignment's end, and
+	// reports false when it had been recorded already.
+	MarkReminderSent(ctx context.Context, app, role, ref string, until, at time.Time) (bool, error)
+
 	// --- Break-the-glass codes ---
 
 	// CreateBreakGlassCode inserts a code and returns its id. CreatedAt/UpdatedAt
