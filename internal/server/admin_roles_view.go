@@ -403,8 +403,9 @@ type pending struct {
 	give, take map[string]map[string]bool
 }
 
-func (p *pending) has(m map[string]map[string]bool, role, id string) bool {
-	return p != nil && m[role] != nil && m[role][id]
+// taking reports whether the holder is about to be taken from the role.
+func (p *pending) taking(role, id string) bool {
+	return p != nil && p.take[role][id]
 }
 
 // appBlock builds an app's rows. editable adds the toggles and pickers of the
@@ -464,7 +465,7 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 	for _, h := range hs {
 		id := holderID(h.kind, h.ref)
 		t := s.holderToken(w, h.kind, h.ref)
-		removing := p.has(p.take, role, id)
+		removing := p.taking(role, id)
 		if editable {
 			t.Field, t.Value, t.Held = "r."+role, id, !h.isNew
 			t.Checked = !removing

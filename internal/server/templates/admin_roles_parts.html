@@ -107,7 +107,7 @@
   .changes { min-height: 56px; margin-top: 8px; display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 12px; font-size: 14px; }
   .changes.none { color: var(--faint); border: 1px dashed var(--border); }
   .changes.some { background: var(--accent-soft); border: 1px solid var(--accent-line); color: var(--text); }
-  .changes span { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .changes span { flex: 1 1 auto; min-width: 0; }
   .changes span[hidden], .changes a[hidden] { display: none; }
   .changes button { margin: 0; white-space: nowrap; flex: none; }
   .changes a.ghostlink { flex: none; font-size: 14px; font-weight: 600; }
@@ -165,6 +165,8 @@
 
   @media (max-width: 720px) {
     .ptitle { flex-direction: column; align-items: flex-start; }
+    .ptitle > div { max-width: 100%; }
+    .ptitle p { white-space: normal; }
     form.toolbar { grid-template-columns: 1fr; }
     .meta { grid-template-columns: 1fr; }
     .meta div { border-left: 0; border-top: 1px solid var(--line); }
@@ -184,7 +186,6 @@
     .rkey > div > span:last-child { white-space: normal; }
     .ladder { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 12px; }
     .changes { flex-wrap: wrap; }
-    .changes span { white-space: normal; }
     p.secnote { white-space: normal; }
   }
 </style>{{end}}
