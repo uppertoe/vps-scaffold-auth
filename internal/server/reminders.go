@@ -23,7 +23,7 @@ const (
 	reminderEvery = time.Hour
 )
 
-// The reminders' strings. PROPOSED: not yet approved.
+// The reminders' strings, approved on 13 November 2026.
 const (
 	msgEndsPersonSubject = "Your access to %s ends on %s."
 	msgEndsPersonBody    = "Your access to %s as %s ends on %s. If you still need it after that date, you can ask %s to extend it.\n"

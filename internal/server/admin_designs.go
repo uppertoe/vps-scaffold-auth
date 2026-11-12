@@ -16,8 +16,8 @@ import (
 // Card designs: the list of designs and the design editor. A design sets the
 // colours, logo, title, steps and printed size of every card that uses it.
 
-// Drafted wording of the design pages (the prototype's wording is used
-// wherever it has some).
+// Wording of the design pages, approved on 13 November 2026 (the
+// prototype's wording is used wherever it has some).
 const (
 	msgDesignNoName     = "Enter a name for the design."
 	msgDesignNameTaken  = "A design called %s already exists. Choose another name."

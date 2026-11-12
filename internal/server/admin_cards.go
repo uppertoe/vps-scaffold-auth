@@ -22,8 +22,8 @@ import (
 // come from breakglass.Card.Layout.
 
 // Wording of the cards pages that the code builds. The prototype's wording is
-// used where it has some; the rest is drafted and listed in the phase 2c
-// report.
+// used where it has some; the rest was written in phase 2c and approved on
+// 13 November 2026.
 const (
 	msgCardUntested    = "has never been tested. Scan it while you are signed in to confirm it works."
 	msgCardBusy        = "has been used %s times in the last 30 days."

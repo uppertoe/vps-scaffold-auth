@@ -40,11 +40,10 @@ const (
 	maxInviteMessage = 500
 )
 
-// The strings of the Invitations pages. Those marked DRAFT are not yet
-// approved.
+// The strings of the Invitations pages, approved on 13 November 2026.
 const (
 	msgInviteWaiting = "The invitation to %s for %s has not been accepted after a week."
-	// The check step. DRAFT.
+	// The check step.
 	msgCheckSend        = "A personal link, sent by email"
 	msgCheckWebmail     = "A personal link, sent by email. A webmail address can be invited."
 	msgCheckInvalid     = "Left out, because it is not an email address."
@@ -52,7 +51,7 @@ const (
 	msgCheckHoldsDirect = "Left out, because the address already holds this role directly."
 	msgCheckHoldsVia    = "Left out, because the address already holds this role through %s."
 	msgCheckNobody      = "Nobody will be invited, because every address has been left out."
-	// The form's refusals. DRAFT.
+	// The form's refusals.
 	msgInviteNoAddress   = "Nothing has been checked, because no address has been entered."
 	msgInviteTooMany     = "Nothing has been checked, because more than 100 addresses have been entered. Invite them in smaller batches."
 	msgInviteNoRole      = "Nothing has been checked, because no role has been chosen."
@@ -63,7 +62,7 @@ const (
 )
 
 func init() {
-	// DRAFT notices for the invitation actions.
+	// The notices for the invitation actions.
 	adminNotices["invite-sent"] = "The invitation has been sent."
 	adminNotices["invites-sent"] = "The invitations have been sent."
 	adminNotices["invite-resent"] = "The invitation has been sent again with a new link. The earlier link no longer works."

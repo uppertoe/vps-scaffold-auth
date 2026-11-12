@@ -293,8 +293,8 @@ type reachView struct {
 }
 
 // msgNobodyHolds and msgOnlyOtherRoles are the empty user row's wording. The
-// second is PROPOSED: a user role with no holders of its own is still reached
-// by the holders of the app's other roles.
+// second, approved on 13 November 2026, says that a user role with no holders
+// of its own is still reached by the holders of the app's other roles.
 const (
 	msgNobodyHolds    = "Nobody holds this role."
 	msgOnlyOtherRoles = "Only the holders of %s reach these paths."

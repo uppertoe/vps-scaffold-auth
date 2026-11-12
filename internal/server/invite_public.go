@@ -28,8 +28,8 @@ import (
 // new code" posts the token to /invite/send again. /verify-code then accepts
 // the invitation and signs the person in, and /invite/done shows the result.
 
-// The strings of the invitation's pages and email. Those marked DRAFT are not
-// yet approved.
+// The strings of the invitation's pages and email, approved on 13 November
+// 2026.
 const (
 	msgInviteSubject    = "An invitation to %s"
 	msgInviteBody       = "%s has invited you %s."
@@ -45,18 +45,18 @@ const (
 	msgInviteExpTitle   = "This invitation has expired"
 	msgInviteExpBody    = "The invitation for %s expired on %s."
 	msgInviteAskAgain   = "If you still need access, you can ask %s to send a new invitation."
-	msgInviteUsedTitle  = "This invitation has already been accepted"                                                  // DRAFT
-	msgInviteUsedBody   = "The invitation for %s was accepted on %s."                                                  // DRAFT
-	msgInviteUsedNext   = "If this is your invitation, you can open %s and sign in with %s."                           // DRAFT
-	msgInviteGoneTitle  = "This invitation has been withdrawn"                                                         // DRAFT
-	msgInviteGoneBody   = "The invitation for %s was withdrawn on %s."                                                 // DRAFT
-	msgInviteOtherTitle = "You are signed in with a different address"                                                 // DRAFT
-	msgInviteOtherBody  = "This invitation is for %s, and you are signed in as %s."                                    // DRAFT
-	msgInviteOtherNext  = "To accept the invitation, sign out, then open the link in the email again."                 // DRAFT
-	msgInviteSignOut    = "Sign out"                                                                                   // DRAFT
-	msgInviteBadTitle   = "We do not recognise this invitation link"                                                   // DRAFT
-	msgInviteBadBody    = "If the invitation was sent again, only the link in the newest email works."                 // DRAFT
-	msgInviteBadNext    = "If you still need access, you can ask the person who invited you to send a new invitation." // DRAFT
+	msgInviteUsedTitle  = "This invitation has already been accepted"
+	msgInviteUsedBody   = "The invitation for %s was accepted on %s."
+	msgInviteUsedNext   = "If this is your invitation, you can open %s and sign in with %s."
+	msgInviteGoneTitle  = "This invitation has been withdrawn"
+	msgInviteGoneBody   = "The invitation for %s was withdrawn on %s."
+	msgInviteOtherTitle = "You are signed in with a different address"
+	msgInviteOtherBody  = "This invitation is for %s, and you are signed in as %s."
+	msgInviteOtherNext  = "To accept the invitation, sign out, then open the link in the email again."
+	msgInviteSignOut    = "Sign out"
+	msgInviteBadTitle   = "We do not recognise this invitation link"
+	msgInviteBadBody    = "If the invitation was sent again, only the link in the newest email works."
+	msgInviteBadNext    = "If you still need access, you can ask the person who invited you to send a new invitation."
 )
 
 // inviteDonePath is where the code step of an invitation lands.

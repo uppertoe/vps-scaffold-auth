@@ -2,8 +2,8 @@ package server
 
 import "github.com/uppertoe/vps-scaffold-auth/internal/store"
 
-// The strings added in phase 2d, kept together here until they are
-// approved. PROPOSED: every string in this file.
+// The strings added in phase 2d. Every string in this file was approved on
+// 13 November 2026.
 
 // A domain group's organisation name, on the group page and the new-group
 // form, and in the audit log.
