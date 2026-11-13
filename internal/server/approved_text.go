@@ -41,7 +41,20 @@ const (
 // withArticle is "an rch.org.au" or "a gosh.nhs.uk": the article as the
 // first letter of a domain is read aloud, by its letter name.
 func withArticle(domain string) string {
-	if domain != "" && strings.ContainsRune("aefhilmnorsx", rune(strings.ToLower(domain)[0])) {
+	label := strings.ToLower(domain)
+	if i := strings.IndexByte(label, '.'); i >= 0 {
+		label = label[:i]
+	}
+	if label == "" {
+		return "a " + domain
+	}
+	// A first label of four letters or fewer, such as rch, mcri or svha, is
+	// read letter by letter, so its article follows the first letter's name
+	// ("an rch.org.au", "a uq.edu.au"). A longer one is read as a word: "an"
+	// before a vowel sound, which a leading u rarely is ("a unimelb.edu.au").
+	initialism := len(label) <= 4
+	if initialism && strings.ContainsRune("aefhilmnorsx", rune(label[0])) ||
+		!initialism && strings.ContainsRune("aeio", rune(label[0])) {
 		return "an " + domain
 	}
 	return "a " + domain
