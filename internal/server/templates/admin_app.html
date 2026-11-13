@@ -91,6 +91,17 @@
 </div>
 {{end}}
 
+{{if .Ignored}}
+<h2 class="sec">{{.IgnoredHead}}</h2>
+<p class="secnote">{{.IgnoredNote}}</p>
+<div class="rlist tbl orphans">
+  <div class="rrow colhead"><div>Role</div><div>Held by</div><div></div></div>
+  {{range .Ignored}}
+  <div class="rrow"><div>{{.Role}}</div><div data-label="Held by">{{template "token" .Token}}</div><div><form method="post" action="/admin/apps/{{$app}}/review"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="take" value="{{.Value}}"><button type="submit" class="link">Remove</button></form></div></div>
+  {{end}}
+</div>
+{{end}}
+
 {{if .Paths}}
 <h2 class="sec">Paths</h2>
 <p class="secnote">The paths and what each one needs are declared in <span class="mono">{{.Source}}</span>.</p>

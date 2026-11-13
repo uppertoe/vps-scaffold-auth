@@ -276,7 +276,8 @@ func TestSaveRefusesForgedChanges(t *testing.T) {
 func TestAppPageListsPeopleGroupsPathsAndOrphans(t *testing.T) {
 	srv, _, c := appsAdmin(t)
 	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignPerson, Ref: "p@example.org", How: store.AssignedByAdmin, CreatedBy: "upperteam@example.com"})
-	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "editor", Kind: store.AssignGuests})
+	mustDomainGroup(t, srv, "staff", "example.com")
+	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "editor", Kind: store.AssignDomainGroup, Ref: "staff"})
 	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignNetwork, Ref: "rch"})
 	body := html.UnescapeString(c.get("/admin/apps/enquiries", nil).Body.String())
 	for _, want := range []string{
@@ -293,8 +294,8 @@ func TestAppPageListsPeopleGroupsPathsAndOrphans(t *testing.T) {
 		}
 	}
 	// The orphaned assignment can be taken away through the review.
-	page := reviewOf(t, c, "enquiries", url.Values{"take": {"editor|guests|"}})
-	if got := changeValues(page); len(got) != 1 || got[0] != "take|editor|guests||0" {
+	page := reviewOf(t, c, "enquiries", url.Values{"take": {"editor|" + store.AssignDomainGroup + "|staff"}})
+	if got := changeValues(page); len(got) != 1 || got[0] != "take|editor|"+store.AssignDomainGroup+"|staff|0" {
 		t.Errorf("orphan take = %q", got)
 	}
 }

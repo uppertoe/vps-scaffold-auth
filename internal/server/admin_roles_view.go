@@ -158,8 +158,12 @@ func (w *rolesWorld) groupLabel(name string) string {
 }
 
 // current reports whether an assignment gives its role now: a person's
-// assignment ends at its Until.
+// assignment ends at its Until, and a network or guests holding a role
+// other than User give nothing (see roles.Honoured).
 func (w *rolesWorld) current(a store.RoleAssignment) bool {
+	if !roles.Honoured(a) {
+		return false
+	}
 	return a.Kind != store.AssignPerson || a.Until.IsZero() || w.now.Before(a.Until)
 }
 
@@ -676,11 +680,15 @@ func (s *Server) picker(w *rolesWorld, a *roles.App, role string, inRow map[stri
 	if role == roles.UserRole && len(a.CardPages) > 0 {
 		pv.CardHref = "/admin/break/new?app=" + a.Name
 	}
+	// A network or guests identify nobody, so they are offered for the user
+	// role only.
 	settings := pickerSection{Heading: "Settings"}
-	for _, n := range s.networkNames() {
-		settings.Options = append(settings.Options, s.pickerOption(w, role, store.AssignNetwork, n, inRow))
+	if role == roles.UserRole {
+		for _, n := range s.networkNames() {
+			settings.Options = append(settings.Options, s.pickerOption(w, role, store.AssignNetwork, n, inRow))
+		}
+		settings.Options = append(settings.Options, s.pickerOption(w, role, store.AssignGuests, "", inRow))
 	}
-	settings.Options = append(settings.Options, s.pickerOption(w, role, store.AssignGuests, "", inRow))
 	domains := pickerSection{Heading: "Domain groups"}
 	lists := pickerSection{Heading: "Lists"}
 	names := make([]string, 0, len(w.groups))

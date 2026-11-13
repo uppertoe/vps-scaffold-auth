@@ -190,3 +190,41 @@ func TestListMemberWithRoleIsNotMarkedGuest(t *testing.T) {
 		t.Error("the facts' Used by does not name the list's roles")
 	}
 }
+
+// A network or guests are offered and accepted for the User role only; an
+// older assignment to another role is listed apart and gives nothing.
+func TestNetworkAndGuestsOnlyForUser(t *testing.T) {
+	srv, _, c := appsAdmin(t)
+	page := c.get("/admin/apps/enquiries", nil).Body.String()
+	admin := page[strings.Index(page, `id="pick-admin"`):]
+	admin = admin[:strings.Index(admin, "</form>")]
+	if strings.Contains(admin, `value="network:rch"`) || strings.Contains(admin, `value="guests:"`) {
+		t.Error("the Administrator picker offers the network or guests")
+	}
+	form := map[string][]string{"roles": {"user", "admin"}, "r.admin": {"network:rch"}, "csrf": {csrfOf(t, c, "/admin/apps/enquiries")}}
+	rec := c.postForm("/admin/apps/enquiries/review", form)
+	if body := html.UnescapeString(rec.Body.String()); rec.Code != 400 || !strings.Contains(body, msgNetworkUserOnly) {
+		t.Errorf("giving the admin role to a network = %d, without the refusal", rec.Code)
+	}
+	rec = c.postForm("/admin/apps/enquiries/save", map[string][]string{"c": {"give|admin|network|rch|0"}, "csrf": {csrfOf(t, c, "/admin/apps/enquiries")}})
+	if as, _ := srv.store.ListRoleAssignments(context.Background(), "enquiries"); len(as) != 0 {
+		t.Errorf("the save stored %+v", as)
+	}
+
+	// An assignment stored before the rule is listed apart, with Remove,
+	// and does not count as a holder.
+	w, err := srv.loadRolesWorld(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.as = append(w.as, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignNetwork, Ref: "rch"})
+	v := srv.appPage(w, srv.appRoles.Apps["enquiries"], nil)
+	if len(v.Ignored) != 1 || len(v.Groups) != 0 {
+		t.Errorf("ignored = %+v, groups = %+v", v.Ignored, v.Groups)
+	}
+	for _, row := range v.Block.Rows {
+		if len(row.Tokens) != 0 || !row.Reach.Closed {
+			t.Errorf("row %s counts the ignored assignment", row.Role)
+		}
+	}
+}

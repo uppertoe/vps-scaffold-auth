@@ -266,11 +266,13 @@ func checkAssignment(ctx context.Context, q querier, a *RoleAssignment) error {
 			return ErrInvalidAssignment
 		}
 	case AssignNetwork:
-		if a.Ref == "" || !a.Until.IsZero() || a.How != "" {
+		// A network or guests identify nobody, so, like a card, they may
+		// hold only an app's user role.
+		if a.Ref == "" || !a.Until.IsZero() || a.How != "" || a.Role != RoleUser {
 			return ErrInvalidAssignment
 		}
 	case AssignGuests:
-		if a.Ref != "" || !a.Until.IsZero() || a.How != "" {
+		if a.Ref != "" || !a.Until.IsZero() || a.How != "" || a.Role != RoleUser {
 			return ErrInvalidAssignment
 		}
 	default:

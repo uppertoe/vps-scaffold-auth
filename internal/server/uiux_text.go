@@ -59,3 +59,13 @@ func init() {
 	adminNotices["label-saved"] = msgNameSaved
 	orgNameText.Button = msgOrgButtonFull
 }
+
+// A network or guests may hold only an app's User role (decided on
+// 13 November 2026). The refusal is the UI/UX review's sentence; the
+// heading and note head the app page's table of older assignments that
+// break the rule, which the gateway ignores.
+const (
+	msgNetworkUserOnly = "A role other than User needs a person the gateway can identify, so it cannot be given to a network or to guests."
+	msgIgnoredHeading  = "Roles a network or guests cannot hold"
+	msgIgnoredNote     = "The gateway ignores these assignments, because a role other than User needs a person the gateway can identify. You can remove them here."
+)

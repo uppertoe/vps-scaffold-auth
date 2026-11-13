@@ -148,3 +148,26 @@ func TestMaySignIn(t *testing.T) {
 		}
 	}
 }
+
+// An older assignment of a network or guests to a role other than user
+// gives nothing, and does not count against a sign-in hint's domains.
+func TestNetworkAndGuestsIgnoredOnOtherRoles(t *testing.T) {
+	env := Env{Networks: map[string][]netip.Prefix{"rch": {netip.MustParsePrefix("10.40.0.0/16")}},
+		Domains: map[string][]string{"staff": {"rch.org.au"}}, Now: time.Unix(1_800_000_000, 0)}
+	as := []store.RoleAssignment{
+		{App: "enq", Role: "admin", Kind: store.AssignNetwork, Ref: "rch"},
+		{App: "enq", Role: "admin", Kind: store.AssignGuests},
+		{App: "enq", Role: "admin", Kind: store.AssignDomainGroup, Ref: "staff"},
+	}
+	inside := Subject{Addr: netip.MustParseAddr("10.40.1.1")}
+	if got := Held("enq", inside, as, env); len(got) != 0 {
+		t.Errorf("a network on the admin role gave %v", got)
+	}
+	guest := Subject{Session: true, Guest: true, Email: "x@gmail.com"}
+	if got := Held("enq", guest, as, env); len(got) != 0 {
+		t.Errorf("guests on the admin role gave %v", got)
+	}
+	if ds, only := SignInDomains("enq", "admin", as, env); !only || len(ds) != 1 {
+		t.Errorf("SignInDomains = %v, %v; want the domain group alone", ds, only)
+	}
+}

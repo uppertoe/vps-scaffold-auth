@@ -246,3 +246,25 @@ func TestAssignmentRefusesReservedGroupNames(t *testing.T) {
 		}
 	}
 }
+
+// A network or guests identify nobody, so, like a card, they may hold only
+// an app's user role.
+func TestNetworkAndGuestsHoldOnlyTheUserRole(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, a := range []RoleAssignment{
+		{App: "enquiries", Role: "admin", Kind: AssignNetwork, Ref: "rch"},
+		{App: "enquiries", Role: "admin", Kind: AssignGuests},
+	} {
+		if err := s.AddRoleAssignment(ctx, a); !errors.Is(err, ErrInvalidAssignment) {
+			t.Errorf("assign %s to admin: err = %v, want ErrInvalidAssignment", a.Kind, err)
+		}
+		if err := s.ApplyRoleChanges(ctx, []RoleAssignment{a}, nil, nil); err == nil {
+			t.Errorf("ApplyRoleChanges gave %s the admin role", a.Kind)
+		}
+		a.Role = RoleUser
+		if err := s.AddRoleAssignment(ctx, a); err != nil {
+			t.Errorf("assign %s to user: %v", a.Kind, err)
+		}
+	}
+}

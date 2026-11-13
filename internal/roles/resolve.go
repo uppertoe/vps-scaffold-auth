@@ -40,11 +40,20 @@ type Env struct {
 	Now      time.Time
 }
 
+// Honoured reports whether an assignment can give its role. A network or
+// guests identify nobody, so, like a card, they hold only the user role; an
+// older assignment of a network or guests to any other role (the store has
+// refused one since) is ignored.
+func Honoured(a store.RoleAssignment) bool {
+	return (a.Kind != store.AssignNetwork && a.Kind != store.AssignGuests) || a.Role == UserRole
+}
+
 // Held returns the roles subject holds in app, sorted, from that app's
 // assignments (assignments for other apps are ignored).
 //
 // The rules, which keep the old guards' invariants:
-//   - a network assignment admits anyone inside the network, signed in or not;
+//   - a network assignment admits anyone inside the network, signed in or not,
+//     to the user role only, as a guests assignment does;
 //   - a request with no session holds nothing else;
 //   - a break-glass session holds only the user role of the app its card
 //     names, and nothing through groups, people, guests or domains;
@@ -62,7 +71,7 @@ func Held(app string, s Subject, as []store.RoleAssignment, env Env) []string {
 		held[UserRole] = true
 	}
 	for _, a := range as {
-		if a.App != app || held[a.Role] {
+		if a.App != app || held[a.Role] || !Honoured(a) {
 			continue
 		}
 		switch a.Kind {
@@ -150,7 +159,7 @@ func SignInDomains(app, role string, as []store.RoleAssignment, env Env) (domain
 	onlyDomains = true
 	seen := map[string]bool{}
 	for _, a := range as {
-		if a.App != app || (a.Role != role && role != UserRole) {
+		if a.App != app || (a.Role != role && role != UserRole) || !Honoured(a) {
 			continue
 		}
 		switch a.Kind {

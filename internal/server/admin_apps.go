@@ -170,6 +170,9 @@ func (s *Server) checkAddress(ctx context.Context, w *rolesWorld, addr string) (
 		guests := false
 		for _, role := range a.RoleOrder {
 			for _, as := range w.assigned(a.Name, role) {
+				if !roles.Honoured(as) {
+					continue
+				}
 				if as.Kind == store.AssignGuests {
 					guests = true
 					continue
@@ -219,7 +222,7 @@ func (s *Server) checkAddress(ctx context.Context, w *rolesWorld, addr string) (
 func (s *Server) holderFocus(w *rolesWorld, kind, ref string) string {
 	n, apps := 0, map[string]bool{}
 	for _, a := range w.as {
-		if a.Kind == kind && a.Ref == ref && w.m.Has(a.App, a.Role) {
+		if a.Kind == kind && a.Ref == ref && w.m.Has(a.App, a.Role) && roles.Honoured(a) {
 			n++
 			apps[a.App] = true
 		}
@@ -287,6 +290,11 @@ type appView struct {
 	Paths             []pathRow
 	Orphans           []orphanRow
 	OrphanNote        string
+	// Ignored are assignments of a network or guests to a role other than
+	// User, which the gateway does not honour; IgnoredHead and IgnoredNote
+	// head their table.
+	Ignored                  []orphanRow
+	IgnoredHead, IgnoredNote string
 	// InviteHref opens the Invite people form with this app's user role.
 	InviteHref string
 	// Pending is set while the page shows unsaved changes.
@@ -381,7 +389,8 @@ func (s *Server) renderApp(w http.ResponseWriter, r *http.Request, status int, a
 }
 
 func (s *Server) appPage(w *rolesWorld, a *roles.App, p *pending) *appView {
-	v := &appView{Name: a.Name, Label: a.Label, Source: a.Source, OrphanNote: msgOrphanRole, Pending: p != nil && (len(p.give)+len(p.take) > 0)}
+	v := &appView{Name: a.Name, Label: a.Label, Source: a.Source, OrphanNote: msgOrphanRole, Pending: p != nil && (len(p.give)+len(p.take) > 0),
+		IgnoredHead: msgIgnoredHeading, IgnoredNote: msgIgnoredNote}
 	if len(a.Hosts) > 0 {
 		v.Host = a.Hosts[0]
 	}
@@ -416,6 +425,10 @@ func (s *Server) appPage(w *rolesWorld, a *roles.App, p *pending) *appView {
 		}
 		if as.Kind == store.AssignPerson {
 			v.People = append(v.People, s.personRow(a, as))
+			continue
+		}
+		if !roles.Honoured(as) {
+			v.Ignored = append(v.Ignored, orphanRow{Role: roleLabel(a, as.Role), Token: s.holderToken(w, as.Kind, as.Ref), Value: as.Role + "|" + as.Kind + "|" + as.Ref})
 			continue
 		}
 		id := holderID(as.Kind, as.Ref)
@@ -643,11 +656,16 @@ func (s *Server) changesFromForm(r *http.Request, w *rolesWorld, a *roles.App) (
 			if !ok || kind == store.AssignPerson || !s.validHolder(w, kind, ref) {
 				continue
 			}
+			if !roles.Honoured(store.RoleAssignment{Kind: kind, Role: role}) {
+				return nil, msgNetworkUserOnly
+			}
 			want[holderID(kind, ref)] = true
 		}
 		for _, as := range w.assigned(a.Name, role) {
 			id := holderID(as.Kind, as.Ref)
-			if as.Kind == store.AssignPerson {
+			// People are changed in their own table, and an assignment the
+			// gateway ignores only by its own Remove.
+			if as.Kind == store.AssignPerson || !roles.Honoured(as) {
 				continue
 			}
 			if !want[id] {
@@ -859,7 +877,7 @@ func (s *Server) handleAdminAppSave(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				c.A.How = store.AssignedByAdmin
-			} else if !s.validHolder(world, c.A.Kind, c.A.Ref) {
+			} else if !s.validHolder(world, c.A.Kind, c.A.Ref) || !roles.Honoured(c.A) {
 				continue
 			}
 			c.A.CreatedBy = actor
