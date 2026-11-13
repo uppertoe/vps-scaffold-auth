@@ -15,6 +15,7 @@
     color-scheme: light dark;
     --accent: #2563eb;        /* brand / primary action */
     --accent-hover: #1d4ed8;
+    --link: #2563eb;          /* links and secondary buttons */
     --bg: #f6f7f9;            /* page background */
     --surface: #fff;         /* card */
     --card-border: transparent;
@@ -30,6 +31,10 @@
   }
   @media (prefers-color-scheme: dark) {
     :root {
+      /* The accent stays the primary button's fill (white text on it is
+         5:1); on the dark card, links and secondary buttons use a lighter
+         blue, as the accent there is about 3:1. */
+      --link: #7aa2ff;
       --bg: #16181c;
       --surface: #1f2228;
       --card-border: #2c2f36;
@@ -60,11 +65,10 @@
   @media (prefers-color-scheme: dark) { .card { box-shadow: none; } }
   .brand { text-align: center; margin: 0 0 18px; }
   .brand img { max-height: 52px; max-width: 70%; }
-  /* The default logo is a monochrome black-on-transparent mark, which would
-     vanish on the dark card; invert it to white in dark mode. This assumes a
-     monochrome logo — a full-colour logo would instead need a dedicated reversed
-     asset. */
-  @media (prefers-color-scheme: dark) { .brand img { filter: invert(1); } }
+  /* The logo is uploaded on the Settings page, in its own colours. On the
+     dark card it sits on a white panel, which keeps a dark or full-colour
+     logo readable without changing its colours. */
+  @media (prefers-color-scheme: dark) { .brand img { background: #fff; border-radius: 8px; padding: 6px 10px; } }
   h1 { font-size: 20px; margin: 0 0 4px; }
   p.sub { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
   /* The operator-set notice (LOGIN_NOTICE) is an instruction the person must
@@ -103,10 +107,10 @@
   }
   a.btn:hover { background: var(--accent-hover); }
   form.secondary { margin-top: 10px; }
-  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  button.secondary { background: transparent; color: var(--link); border: 1px solid var(--link); }
   button.secondary:hover { background: var(--accent); color: #fff; }
   p.hint { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
-  .linkbtn { width: auto; margin: 0; padding: 0; background: none; border: 0; color: var(--accent); font: inherit; cursor: pointer; }
+  .linkbtn { width: auto; margin: 0; padding: 0; background: none; border: 0; color: var(--link); font: inherit; cursor: pointer; }
   .linkbtn:hover { text-decoration: underline; }
   .err { background: var(--err-bg); color: var(--err-text); border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-bottom: 16px; }
   /* Success confirmation (e.g. "email verified" before the second factor), so a
@@ -115,9 +119,10 @@
   label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: -4px 0 16px; cursor: pointer; }
   label.check input { width: auto; margin: 0; }
   .links { margin-top: 18px; text-align: center; font-size: 14px; }
-  .links a { color: var(--accent); text-decoration: none; }
+  .links a { color: var(--link); text-decoration: none; }
+  .card a:not(.btn) { color: var(--link); }
   /* Passkeys. */
-  .pk-icon { width: 52px; height: 52px; border-radius: 26px; background: var(--soft-bg); color: var(--accent);
+  .pk-icon { width: 52px; height: 52px; border-radius: 26px; background: var(--soft-bg); color: var(--link);
     display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
   p.lead { margin: 0 0 12px; font-size: 15px; }
   .pk-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
@@ -139,7 +144,7 @@
   .band b { font-size: 16px; }
   .cardbox { background: var(--soft-bg); border-radius: 12px; padding: 12px 14px; margin: 4px 0 16px; font-size: 15px; }
   .cardbox b { display: block; font-size: 16px; }
-  a.btn.quiet { background: transparent; color: var(--accent); border: 1px solid var(--input-border); margin-top: 10px; }
+  a.btn.quiet { background: transparent; color: var(--link); border: 1px solid var(--input-border); margin-top: 10px; }
   a.btn.quiet:hover { background: var(--soft-bg); }
   .qr { word-break: break-all; font-size: 12px; color: var(--muted); background: var(--soft-bg); padding: 10px; border-radius: 8px; margin-bottom: 16px; }
 </style>

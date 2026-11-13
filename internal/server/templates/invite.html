@@ -14,7 +14,8 @@
 {{if .CodeForm}}<form method="post" action="/verify-code" autocomplete="one-time-code">
   <input type="hidden" name="rd" value="{{.Redirect}}">
   {{if .Token}}<input type="hidden" name="token" value="{{.Token}}">{{end}}
-  <input id="code" name="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*" aria-labelledby="invite-heading"
+  <label for="code">Sign-in code</label>
+  <input id="code" name="code" class="code" type="text" inputmode="numeric" pattern="[0-9]*"
          autocomplete="one-time-code" autofocus required placeholder="{{$.CodePlaceholder}}">
   <button type="submit">{{.CodeButton}}</button>
 </form>{{end}}
