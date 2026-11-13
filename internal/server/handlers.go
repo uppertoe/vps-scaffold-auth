@@ -53,9 +53,18 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 		groups = &g
 	}
 	// id.Kind is passed through, so a guest stays a guest across renewals (and
-	// so stays confined to guests=allow routes). The passkey and the time of
-	// sign-in pass through too.
-	grant := session.Grant{Kind: id.Kind, TOTP: id.TOTP, PK: id.PK, Auth: id.Auth, Card: id.Card, Step: id.Step}
+	// so stays confined to guests=allow routes). The one change is between a
+	// person's own kinds: an address that now holds a role but is off the
+	// allow-list becomes a member, and a member the allow-list now admits
+	// becomes an ordinary session. The passkey and the time of sign-in pass
+	// through too.
+	kind := id.Kind
+	if role == authz.RoleMember {
+		kind = session.KindMember
+	} else if kind == session.KindMember {
+		kind = ""
+	}
+	grant := session.Grant{Kind: kind, TOTP: id.TOTP, PK: id.PK, Auth: id.Auth, Card: id.Card, Step: id.Step}
 	if grant.Auth == 0 {
 		// A session from before the sign-in time was recorded. Its sign-in
 		// time is unknown, so it is recorded as long ago, never as now: a
@@ -70,6 +79,7 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 	// Reflect the freshly computed set in this response too, not just the
 	// renewed cookie, so a demotion takes effect immediately.
 	id.Groups = *groups
+	id.Kind = kind
 	return true
 }
 
@@ -149,11 +159,14 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		// A guest's groups are filtered again on each request, so a group
 		// that has become an application role since sign-in is not honoured.
-		if id.Kind == session.KindGuest {
+		// A member (signed in by an app role) is no more than a guest here:
+		// it is admitted only where guests are, or by a group it is in.
+		if id.Kind == session.KindGuest || id.Kind == session.KindMember {
 			id.Groups = s.guestGroupsNow(id)
 		}
 		allowed := func(id *session.Identity) bool {
-			return authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass, id.Kind == session.KindGuest,
+			return authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass,
+				id.Kind == session.KindGuest || id.Kind == session.KindMember,
 				reqDomains, reqGroups, allowGuests)
 		}
 		if !allowed(id) && s.wantsAdminStep(id, reqGroups) {
@@ -172,10 +185,10 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			// does not slide their session forward, and the "unchanged" result
 			// is remembered briefly (groupRecheck) so repeated refusals stay in
 			// memory.
-			// Only normal and guest sessions are re-read: any other kind
-			// (break-glass, or one a later build adds) stays refused, so the
-			// exclusion does not hang on a single check.
-			if renewed || (id.Kind != "" && id.Kind != session.KindGuest) || strings.TrimSpace(reqGroups) == "" ||
+			// Only normal, member and guest sessions are re-read: any other
+			// kind (break-glass, or one a later build adds) stays refused, so
+			// the exclusion does not hang on a single check.
+			if renewed || (!personSession(id) && id.Kind != session.KindGuest) || strings.TrimSpace(reqGroups) == "" ||
 				s.groupRecheck.fresh(id.Email, id.Groups, now) {
 				s.redirectToDenied(w, r)
 				return
@@ -1271,10 +1284,15 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	}
 	groups := s.computeGroups(r.Context(), emailAddr, s.tierRole(&session.Identity{TOTP: grant.TOTP, Step: grant.Step}, role))
 	// The kind follows the role: a guest login is marked so /verify confines it
-	// to routes that opt in, and renewal keeps it a guest.
+	// to routes that opt in, and renewal keeps it a guest. A member (signed in
+	// by an app role) is marked so an older guard treats it as a guest would
+	// be treated, while a role guard decides it by its roles.
 	kind := ""
-	if role == authz.RoleGuest {
+	switch role {
+	case authz.RoleGuest:
 		kind = session.KindGuest
+	case authz.RoleMember:
+		kind = session.KindMember
 	}
 	// A guest never gets the remember-me lifetime. Sessions are stateless, so
 	// the only ways to end one guest's access are emptying
@@ -1333,9 +1351,16 @@ func (s *Server) adminStepFresh(id *session.Identity) bool {
 // who has not passed the second step recently is an ordinary user: every
 // site that admits staff admits them at once, and only the admin pages and
 // admin-only routes send them to the admin door.
+//
+// A member's groups carry the guest tier token: an app behind an older guard
+// that admits guests reads the leading "guest" as someone outside the
+// department, which a member is.
 func (s *Server) tierRole(id *session.Identity, role string) string {
 	if role == authz.RoleAdmin && !s.adminStepFresh(id) {
 		return authz.RoleUser
+	}
+	if role == authz.RoleMember {
+		return authz.RoleGuest
 	}
 	return role
 }
@@ -1346,11 +1371,23 @@ func (s *Server) tierRole(id *session.Identity, role string) string {
 // with a recent second step lacks the admin group it should carry). Each
 // renews the session at once, so the admin group leaves or reaches the apps'
 // headers at the next request rather than at the next scheduled renewal.
+//
+// A person's sign-in whose kind no longer matches the allow-list is stale
+// too: a normal session whose address has left the allow-list but holds an
+// app role becomes a member at once, and a member whose address the
+// allow-list now admits becomes an ordinary session at once.
 func (s *Server) tierStale(id *session.Identity) bool {
-	if id.Kind != "" {
-		return false
+	switch id.Kind {
+	case "":
+		role := s.renewalRole(id)
+		if role == authz.RoleMember {
+			return true
+		}
+		return authz.HasGroup(id.Groups, authz.RoleAdmin) != (s.tierRole(id, role) == authz.RoleAdmin)
+	case session.KindMember:
+		return s.policy.Role(id.Email) != authz.RoleDeny
 	}
-	return authz.HasGroup(id.Groups, authz.RoleAdmin) != (s.tierRole(id, s.renewalRole(id)) == authz.RoleAdmin)
+	return false
 }
 
 // policyWithdrawn reports whether the current policy refuses a normal or
@@ -1360,7 +1397,7 @@ func (s *Server) tierStale(id *session.Identity) bool {
 // lookup in memory. Break-glass sessions are not policy logins and end at
 // their own short lifetime or when their card is revoked.
 func (s *Server) policyWithdrawn(id *session.Identity) bool {
-	if id.Kind != "" && id.Kind != session.KindGuest {
+	if !personSession(id) && id.Kind != session.KindGuest {
 		return false
 	}
 	return s.renewalRole(id) == authz.RoleDeny
@@ -1402,7 +1439,7 @@ func (s *Server) stepUpURL(rd string) string {
 // normal login, a break-glass grant, or a guest. /verify refuses any other.
 func knownSessionKind(kind string) bool {
 	switch kind {
-	case "", session.KindBreakGlass, session.KindGuest:
+	case "", session.KindBreakGlass, session.KindGuest, session.KindMember:
 		return true
 	}
 	return false
@@ -1435,11 +1472,13 @@ func (s *Server) renewalRole(id *session.Identity) string {
 		}
 		return authz.RoleDeny
 	}
+	// A member whom the allow-list now admits renews as an ordinary user or
+	// administrator (renewSessionWith changes its kind).
 	role := s.policy.Role(id.Email)
-	if role == authz.RoleDeny && id.Kind == "" && s.mayHoldRoleSnapshot(context.Background(), id) {
+	if role == authz.RoleDeny && personSession(id) && s.mayHoldRoleSnapshot(context.Background(), id) {
 		// Not on the allow-list, but holds an app role through a domain group,
-		// a list or a current person assignment (app_roles.go).
-		return authz.RoleUser
+		// a list or a current person assignment (app_roles.go): a member.
+		return authz.RoleMember
 	}
 	return role
 }

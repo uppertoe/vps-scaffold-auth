@@ -225,7 +225,7 @@ func (s *Server) handleInviteLink(w http.ResponseWriter, r *http.Request) {
 func (s *Server) closedInvitePage(r *http.Request, a *roles.App, v store.Invitation) *invitePage {
 	switch {
 	case !v.AcceptedAt.IsZero():
-		if id, ok := s.readSession(r, s.now()); ok && id.Email == v.Email && id.Kind == "" {
+		if id, ok := s.readSession(r, s.now()); ok && id.Email == v.Email && personSession(id) {
 			return &invitePage{Heading: msgInviteDoneTitle, App: a.Label, Access: s.inviteBoxLine(a, v),
 				Href: appURL(a), Button: fmt.Sprintf(msgInviteOpenApp, a.Label)}
 		}
@@ -282,8 +282,9 @@ func (s *Server) handleInviteSend(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteExpiredCodes(r.Context(), now); err != nil {
 		log.Printf("prune expired codes: %v", err)
 	}
-	// The address is permitted while the invitation is open (see
-	// mayHoldRoleNow), so this sends a real code under the usual limits.
+	// The address may sign in here, and only here, while the invitation is
+	// open: the code step accepts the invitation before the session is made
+	// (see loginRole), so this sends a real code under the usual limits.
 	s.issueCode(r, v.Email, true, now)
 	rd := s.cfg.PublicURL + inviteDonePath + strconv.FormatInt(v.ID, 10)
 	if err := s.sessions.SetState(w, session.State{Email: v.Email, Redirect: rd, Invite: v.ID}, s.cfg.OTPTTL, now); err != nil {

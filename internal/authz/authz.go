@@ -20,6 +20,11 @@ const (
 	// LoginRole confers it, and only a route whose policy says guests=allow (or
 	// names a DB group the guest was explicitly placed in) admits it.
 	RoleGuest = "guest"
+	// RoleMember is the base role of an address the allow-list does not
+	// permit but that holds an app role (or has accepted an invitation). It
+	// is never sent to an app: such a session's groups carry the guest tier
+	// token, and an older guard admits it only where it would admit a guest.
+	RoleMember = "member"
 )
 
 // Wildcard is the ALLOWED_EMAIL_DOMAINS entry that opts the WHOLE instance into

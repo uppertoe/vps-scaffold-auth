@@ -313,22 +313,23 @@ func withHost(h map[string]string, host string) map[string]string {
 	return h
 }
 
-func TestOpenInvitationMaySignInWithoutAccepting(t *testing.T) {
+// An open invitation lets its address sign in only through the invitation's
+// own code step, which accepts it. The ordinary sign-in sends the address no
+// code (a decoy, as for any address that may not sign in), so an invitation
+// alone never makes a session.
+func TestOpenInvitationSignsInOnlyThroughItsCodeStep(t *testing.T) {
 	srv, sender, _, c := inviteAdmin(t)
-	// Before the invitation, the address is not sent a code.
+	invite(t, c, adminInviteForm("k.lee@monash.org"))
 	sender.reset()
 	newClient(t, srv.Handler()).postForm("/request", url.Values{"email": {"k.lee@monash.org"}})
 	if code := sender.code(); code != "" {
-		t.Fatal("an address with no role was sent a code")
+		t.Fatal("the ordinary sign-in sent a code to an address with only an open invitation")
 	}
-	invite(t, c, adminInviteForm("k.lee@monash.org"))
-	p := newClient(t, srv.Handler())
-	loginAs(t, p, sender, "k.lee@monash.org", nil)
+	if got := srv.loginRole(context.Background(), "k.lee@monash.org", false); got != "" {
+		t.Errorf("loginRole for an open invitation = %q, want deny", got)
+	}
 	if as, _ := srv.store.ListRoleAssignments(context.Background(), "enquiries"); len(as) != 0 {
-		t.Fatalf("signing in accepted the invitation: %+v", as)
-	}
-	if rec := p.get("/verify", withHost(roleGuard("enquiries", "admin"), "enquiries.example.com")); rec.Code == http.StatusOK {
-		t.Error("an unaccepted invitation admitted the person")
+		t.Fatalf("asking for a code accepted the invitation: %+v", as)
 	}
 }
 
@@ -391,9 +392,9 @@ func TestResendAndWithdrawEndTheOldLink(t *testing.T) {
 	if body := html.UnescapeString(c.get("/admin/invitations", nil).Body.String()); !strings.Contains(body, adminWarnings["invite-closed"]) {
 		t.Error("a second withdrawal was not refused")
 	}
-	// Signing in is no longer allowed once the invitation is withdrawn.
-	if srv.mayHoldRoleNow(context.Background(), "k.lee@monash.org") {
-		t.Error("a withdrawn invitation still lets the address sign in")
+	// A withdrawn invitation no longer counts for the address at all.
+	if srv.mayHoldRoleNow(context.Background(), "k.lee@monash.org", true) {
+		t.Error("a withdrawn invitation still counts for the address")
 	}
 }
 
@@ -408,8 +409,8 @@ func TestExpiredInvitation(t *testing.T) {
 	if !strings.Contains(body, "This invitation has expired") || !strings.Contains(body, "If you still need access, you can ask admin@example.com to send a new invitation.") {
 		t.Errorf("expired page:\n%s", body)
 	}
-	if srv.mayHoldRoleNow(context.Background(), "k.lee@monash.org") {
-		t.Error("an expired invitation still lets the address sign in")
+	if srv.mayHoldRoleNow(context.Background(), "k.lee@monash.org", true) {
+		t.Error("an expired invitation still counts for the address")
 	}
 	srv.now = time.Now
 	inv, _, _ := srv.store.GetInvitation(context.Background(), 1)
@@ -483,21 +484,15 @@ func TestUndeliveredInvitation(t *testing.T) {
 }
 
 // A failed delivery closes the invitation: its link no longer works, no code
-// is sent through it, and the address may no longer sign in through it, at
-// once. Send again gives a new link and a new fortnight, and reopens the
+// is sent through it, and it no longer counts for the address, at once. Send again gives a new link and a new fortnight, and reopens the
 // invitation once the email is delivered.
 func TestFailedDeliveryClosesTheInvitation(t *testing.T) {
 	srv, sender, ml, c := inviteAdmin(t)
 	ctx := context.Background()
 	invite(t, c, adminInviteForm("k.lee@monash.org"))
 	first := inviteLinkIn(t, ml.waitFor(1, invitationsTo("k.lee@monash.org"))[0])
-	// The open invitation lets the address sign in; the session's check and
-	// the sign-in check both read the cached role data.
-	p := newClient(t, srv.Handler())
-	loginAs(t, p, sender, "k.lee@monash.org", nil)
-	id := sessionOf(t, srv, p)
-	if !srv.mayHoldRoleNow(ctx, "k.lee@monash.org") || !srv.mayHoldRoleSnapshot(ctx, id) {
-		t.Fatal("an open invitation does not let the address sign in")
+	if !srv.mayHoldRoleNow(ctx, "k.lee@monash.org", true) {
+		t.Fatal("an open invitation does not count for the address")
 	}
 
 	// The resend's email is refused.
@@ -513,8 +508,8 @@ func TestFailedDeliveryClosesTheInvitation(t *testing.T) {
 			break
 		}
 	}
-	if srv.mayHoldRoleNow(ctx, "k.lee@monash.org") || srv.mayHoldRoleSnapshot(ctx, id) {
-		t.Error("an undelivered invitation still lets the address sign in")
+	if srv.mayHoldRoleNow(ctx, "k.lee@monash.org", true) {
+		t.Error("an undelivered invitation still counts for the address")
 	}
 	anon := newClient(t, srv.Handler())
 	for _, link := range []string{first, failed} {
@@ -554,8 +549,8 @@ func TestFailedDeliveryClosesTheInvitation(t *testing.T) {
 	if body := html.UnescapeString(anon.get(failed, nil).Body.String()); !strings.Contains(body, msgInviteBadTitle) {
 		t.Error("the undelivered link works again")
 	}
-	if !srv.mayHoldRoleNow(ctx, "k.lee@monash.org") {
-		t.Error("the delivered invitation does not let the address sign in")
+	if !srv.mayHoldRoleNow(ctx, "k.lee@monash.org", true) {
+		t.Error("the delivered invitation does not count for the address")
 	}
 	if list := html.UnescapeString(c.get("/admin/invitations", nil).Body.String()); !strings.Contains(list, ">Waiting for a reply<") || strings.Contains(list, "could not be delivered") {
 		t.Error("the list still shows the invitation as not delivered")

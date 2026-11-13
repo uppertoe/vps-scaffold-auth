@@ -263,7 +263,7 @@ func (s *Server) shouldOfferPasskey(r *http.Request, role string, pk int64) bool
 	if !s.cfg.PasskeysEnabled || pk != 0 || !isPhone(r) {
 		return false
 	}
-	return role == authz.RoleUser || role == authz.RoleAdmin
+	return role == authz.RoleUser || role == authz.RoleAdmin || role == authz.RoleMember
 }
 
 // offerPasskey renders the offer in place of the redirect, once the session
@@ -306,11 +306,11 @@ func (s *Server) offerAdminPasskey(w http.ResponseWriter, r *http.Request, email
 // authenticator code first (mayAddPasskeyNow).
 func (s *Server) passkeySession(r *http.Request) (*session.Identity, string, bool) {
 	id, ok := s.readSession(r, s.now())
-	if !ok || id.Kind != "" {
+	if !ok || !personSession(id) {
 		return nil, "", false
 	}
 	role := s.currentRole(r.Context(), id.Email)
-	if role != authz.RoleUser && role != authz.RoleAdmin {
+	if role != authz.RoleUser && role != authz.RoleAdmin && role != authz.RoleMember {
 		return nil, "", false
 	}
 	// A session started with a removed passkey manages nothing, whether or not
@@ -658,7 +658,7 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	// is never a way in for an address the allow-list no longer permits, and
 	// never makes a guest.
 	role := s.loginRole(r.Context(), pk.Email, s.isOpenHost(rd))
-	if role != authz.RoleUser && role != authz.RoleAdmin {
+	if role != authz.RoleUser && role != authz.RoleAdmin && role != authz.RoleMember {
 		s.recordAuth(r, pk.Email, store.AuthEventPasskey, store.AuthOutcomeDenied)
 		s.render(w, http.StatusForbidden, "login", pageData{Error: "This account is not permitted.", Redirect: rd})
 		return
@@ -668,7 +668,7 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	// A passkey used at the admin door signs the person in afresh. If the
 	// session it replaces was a remembered one of the same person, the new one
 	// is remembered too, so that opening the admin pages does not shorten it.
-	if cur, ok := s.readSession(r, now); ok && cur.Kind == "" && cur.Email == pk.Email && s.sessions.SessionTTL(cur) > s.cfg.SessionTTL {
+	if cur, ok := s.readSession(r, now); ok && personSession(cur) && cur.Email == pk.Email && s.sessions.SessionTTL(cur) > s.cfg.SessionTTL {
 		remember = true
 	}
 	// A passkey that stands in for the second step gives the admin tier at

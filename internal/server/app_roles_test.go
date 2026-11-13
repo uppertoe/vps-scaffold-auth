@@ -226,8 +226,8 @@ func TestSignInByRole(t *testing.T) {
 		want  string
 	}{
 		{"user@example.com", authz.RoleUser},   // the allow-list, as before
-		{"p@partner.org", authz.RoleUser},      // a current person assignment
-		{"x@partner.org", authz.RoleUser},      // a list assigned to a role
+		{"p@partner.org", authz.RoleMember},    // a current person assignment
+		{"x@partner.org", authz.RoleMember},    // a list assigned to a role
 		{"old@partner.org", authz.RoleDeny},    // an ended assignment
 		{"nobody@partner.org", authz.RoleDeny}, // a guests role is not a reason to sign in
 	}

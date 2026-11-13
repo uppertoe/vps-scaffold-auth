@@ -212,7 +212,7 @@ func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *sessio
 	}
 	held := s.heldRoles(r, id, app)
 	if !roles.Admits(held, role) {
-		if renewed || (id.Kind != "" && id.Kind != session.KindGuest) || s.groupRecheck.fresh(id.Email, id.Groups, now) {
+		if renewed || (!personSession(id) && id.Kind != session.KindGuest) || s.groupRecheck.fresh(id.Email, id.Groups, now) {
 			s.redirectToDenied(w, r)
 			return
 		}
@@ -336,10 +336,11 @@ func (s *Server) roleLoginHint(r *http.Request) string {
 }
 
 // mayHoldRoleNow reports whether email holds a role through a domain group,
-// a list or a current person assignment, or has an open invitation, reading
-// its lists from the store. It is used when a person signs in. Signing in
-// does not accept an invitation: only its link and code do.
-func (s *Server) mayHoldRoleNow(ctx context.Context, email string) bool {
+// a list or a current person assignment, reading its lists from the store.
+// With invitations, an open invitation counts too; sign-in never passes it,
+// since an invitation lets its address in only through its own code step,
+// which accepts it (and so gives the role) before the session is made.
+func (s *Server) mayHoldRoleNow(ctx context.Context, email string, invitations bool) bool {
 	if !s.rolesOn() {
 		return false
 	}
@@ -353,41 +354,51 @@ func (s *Server) mayHoldRoleNow(ctx context.Context, email string) bool {
 		set[l] = true
 	}
 	st := s.roleData(ctx)
-	return st.invited[email] || roles.MaySignIn(email, set, st.assignments, s.roleEnv(st))
+	return (invitations && st.invited[email]) || roles.MaySignIn(email, set, st.assignments, s.roleEnv(st))
 }
 
 // mayHoldRoleSnapshot is mayHoldRoleNow from the session's own groups, with
-// no store read, for the check made on every request (policyWithdrawn).
+// no store read and without invitations, for the check made on every request
+// (policyWithdrawn).
 func (s *Server) mayHoldRoleSnapshot(ctx context.Context, id *session.Identity) bool {
 	if !s.rolesOn() {
 		return false
 	}
 	st := s.roleData(ctx)
-	return st.invited[id.Email] || roles.MaySignIn(id.Email, listSet(id.Groups), st.assignments, s.roleEnv(st))
+	return roles.MaySignIn(id.Email, listSet(id.Groups), st.assignments, s.roleEnv(st))
 }
 
 // loginRole is the sign-in decision: the allow-list and administrators as
-// before, and also an address that holds an app role, which signs in as an
-// ordinary user (and not as a guest, even on an open host).
+// before, and also an address that holds an app role, which signs in as a
+// member (and not as a guest, even on an open host). A member is decided by
+// its roles on a role guard, and is admitted by an older guard only where a
+// guest would be (see session.KindMember).
 func (s *Server) loginRole(ctx context.Context, email string, openHost bool) string {
 	role := s.policy.LoginRole(email, openHost)
 	if role == authz.RoleUser || role == authz.RoleAdmin {
 		return role
 	}
-	if s.mayHoldRoleNow(ctx, email) {
-		return authz.RoleUser
+	if s.mayHoldRoleNow(ctx, email, false) {
+		return authz.RoleMember
 	}
 	return role
 }
 
-// currentRole is policy.Role made role-aware the way loginRole is: an address
-// the allow-list refuses but that holds an app role through a domain group, a
-// list or a current person assignment counts as an ordinary user. With the
+// currentRole is policy.Role made role-aware: an address the allow-list
+// refuses but that holds an app role through a domain group, a list or a
+// current person assignment, or has an open invitation, is a member. With the
 // app-roles model off it is exactly policy.Role.
 func (s *Server) currentRole(ctx context.Context, email string) string {
 	role := s.policy.Role(email)
-	if role == authz.RoleDeny && s.mayHoldRoleNow(ctx, email) {
-		return authz.RoleUser
+	if role == authz.RoleDeny && s.mayHoldRoleNow(ctx, email, true) {
+		return authz.RoleMember
 	}
 	return role
+}
+
+// personSession reports whether a session is a person's own sign-in, by the
+// allow-list (kind "") or by an app role (KindMember), rather than a card or
+// a guest.
+func personSession(id *session.Identity) bool {
+	return id.Kind == "" || id.Kind == session.KindMember
 }
