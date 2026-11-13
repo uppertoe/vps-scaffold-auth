@@ -106,7 +106,7 @@ func (s *Server) handleAdminApps(w http.ResponseWriter, r *http.Request) {
 // anyHolder reports whether anything holds a role in the app.
 func anyHolder(w *rolesWorld, a *roles.App) bool {
 	for _, role := range a.RoleOrder {
-		if len(w.assigned(a.Name, role)) > 0 || len(w.cardsFor(a.Name, role)) > 0 {
+		if len(w.live(a.Name, role)) > 0 || len(w.cardsFor(a.Name, role)) > 0 {
 			return true
 		}
 	}
@@ -286,6 +286,9 @@ type roleOption struct{ Role, Label string }
 type personRow struct {
 	Email, Role, RoleLabel, How, HowTitle, Until string
 	Ended                                        bool
+	// NoEnd marks a role held with no end date, which the Until cell shows
+	// in muted text.
+	NoEnd bool
 	// InviteID is set on the row of an invitation not yet accepted, which
 	// gives nobody the role.
 	InviteID int64
@@ -452,7 +455,7 @@ func (s *Server) appPage(w *rolesWorld, a *roles.App, p *pending) *appView {
 // address is in its title. An invitation (another part of the gateway) sets
 // How to AssignedByInvite.
 func (s *Server) personRow(a *roles.App, as store.RoleAssignment) personRow {
-	p := personRow{Email: as.Ref, Role: as.Role, RoleLabel: a.Roles[as.Role], Until: "No end date"}
+	p := personRow{Email: as.Ref, Role: as.Role, RoleLabel: a.Roles[as.Role], Until: "No end date", NoEnd: as.Until.IsZero()}
 	by, _, _ := strings.Cut(as.CreatedBy, "@")
 	switch as.How {
 	case store.AssignedByInvite:
@@ -466,6 +469,9 @@ func (s *Server) personRow(a *roles.App, as store.RoleAssignment) personRow {
 		// last day it is held.
 		p.Until = s.longDate(as.Until.Add(-time.Second))
 		p.Ended = !s.now().Before(as.Until)
+		if p.Ended {
+			p.Until = fmt.Sprintf(msgPersonEnded, p.Until)
+		}
 	}
 	return p
 }
@@ -732,7 +738,9 @@ func (s *Server) reviewWarnings(w *rolesWorld, a *roles.App, changes []roleChang
 		n := map[string]int{}
 		held := map[string]bool{}
 		for _, as := range w.assigned2(a.Name) {
-			held[as.Role+"|"+as.Kind+"|"+as.Ref] = true
+			if w.current(as) {
+				held[as.Role+"|"+as.Kind+"|"+as.Ref] = true
+			}
 		}
 		if after {
 			for _, c := range changes {

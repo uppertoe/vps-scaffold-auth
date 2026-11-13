@@ -49,7 +49,7 @@
     <div title="{{.Email}}">{{.Email}}</div>
     <div>{{.RoleLabel}}</div>
     <div class="muted" title="{{if .HowTitle}}{{.HowTitle}}{{else}}{{.How}}{{end}}">{{.How}}</div>
-    <div class="num">{{if eq .Until "No end date"}}<span class="muted">No end date</span>{{else}}{{.Until}}{{end}}</div>
+    <div class="num">{{if .NoEnd}}<span class="none">{{.Until}}</span>{{else}}{{.Until}}{{end}}</div>
     <div>{{if .InviteID}}<form method="post" action="/admin/invitations/{{.InviteID}}/withdraw"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="from_app" value="{{$app}}"><button type="submit" class="link">Withdraw</button></form>{{else}}<form method="post" action="/admin/apps/{{$app}}/review"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="take" value="{{.Role}}|person|{{.Email}}"><button type="submit" class="link">Remove</button></form>{{end}}</div>
   </div>
   {{else}}

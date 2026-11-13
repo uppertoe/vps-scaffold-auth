@@ -157,7 +157,26 @@ func (w *rolesWorld) groupLabel(name string) string {
 	return name
 }
 
-// assigned returns the assignments of one app role, people included.
+// current reports whether an assignment gives its role now: a person's
+// assignment ends at its Until.
+func (w *rolesWorld) current(a store.RoleAssignment) bool {
+	return a.Kind != store.AssignPerson || a.Until.IsZero() || w.now.Before(a.Until)
+}
+
+// live returns the assignments of one app role that give it now, so a
+// person whose end date has passed is left out.
+func (w *rolesWorld) live(app, role string) []store.RoleAssignment {
+	var out []store.RoleAssignment
+	for _, a := range w.assigned(app, role) {
+		if w.current(a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// assigned returns the assignments of one app role, people included, ended
+// or not.
 func (w *rolesWorld) assigned(app, role string) []store.RoleAssignment {
 	var out []store.RoleAssignment
 	for _, a := range w.as {
@@ -471,7 +490,7 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 	var hs []held
 	var people []store.RoleAssignment
 	inRow := map[string]bool{}
-	for _, as := range w.assigned(a.Name, role) {
+	for _, as := range w.live(a.Name, role) {
 		if as.Kind == store.AssignPerson {
 			people = append(people, as)
 			continue

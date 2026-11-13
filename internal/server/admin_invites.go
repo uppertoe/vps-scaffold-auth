@@ -695,7 +695,7 @@ func (s *Server) invitedRows(w *rolesWorld, a *roles.App) []personRow {
 		if v.App != a.Name {
 			continue
 		}
-		p := personRow{Email: v.Email, Role: v.Role, RoleLabel: roleLabel(a, v.Role), Until: "No end date", InviteID: v.ID,
+		p := personRow{Email: v.Email, Role: v.Role, RoleLabel: roleLabel(a, v.Role), Until: "No end date", NoEnd: v.Until.IsZero(), InviteID: v.ID,
 			How: "Invited " + s.longDate(v.SentAt) + ", not yet accepted"}
 		if !v.Until.IsZero() {
 			p.Until = s.longDate(v.Until.Add(-time.Second))
