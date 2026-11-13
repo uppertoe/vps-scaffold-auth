@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"fmt"
 	"html"
 	"strings"
 	"testing"
@@ -52,5 +54,37 @@ func TestOverviewTokensCappedAndMatched(t *testing.T) {
 	tok := body[strings.LastIndex(body[:i], "<a "):i]
 	if !strings.Contains(tok, " on") || strings.Contains(tok, "capped") {
 		t.Errorf("the matched token is not marked, or is hidden: %s", tok)
+	}
+}
+
+// openInvitation stores an invitation to enquiries, sent at sent.
+func openInvitation(t *testing.T, srv *Server, addr string, sent time.Time) {
+	t.Helper()
+	if _, err := srv.store.CreateInvitations(context.Background(), []store.Invitation{{
+		Email: addr, App: "enquiries", Role: "admin", TokenHash: "h-" + addr, CreatedBy: "admin@example.com",
+		CreatedAt: sent, SentAt: sent, ExpiresAt: sent.Add(inviteTTL),
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	srv.forgetRoles()
+}
+
+// An app page's Withdraw opens a confirmation in the row, which names the
+// address; the page keeps its add line and its pickers' close control.
+func TestAppPageWithdrawIsConfirmed(t *testing.T) {
+	srv, _, c := appsAdmin(t)
+	openInvitation(t, srv, "k.lee@monash.org", srv.now())
+	page := html.UnescapeString(c.get("/admin/apps/enquiries", nil).Body.String())
+	for _, want := range []string{`href="/admin/apps/enquiries?withdraw=1#invite-1"`, `name="person"`, ">" + msgPickerDone + "<", `aria-modal="true"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("app page lacks %q", want)
+		}
+	}
+	if strings.Contains(page, `action="/admin/invitations/1/withdraw"`) {
+		t.Error("Withdraw acts without a confirmation")
+	}
+	page = html.UnescapeString(c.get("/admin/apps/enquiries?withdraw=1", nil).Body.String())
+	if !strings.Contains(page, fmt.Sprintf(msgWithdrawConfirm, "k.lee@monash.org")) || !strings.Contains(page, `action="/admin/invitations/1/withdraw"`) {
+		t.Error("the confirmation does not name the address, or has no button")
 	}
 }

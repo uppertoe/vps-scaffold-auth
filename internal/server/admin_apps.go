@@ -282,6 +282,12 @@ type appView struct {
 	// Pending is set while the page shows unsaved changes.
 	Pending bool
 	Review  *reviewView
+	// Confirm is the invitation whose withdrawal is being confirmed
+	// (?withdraw=id), with the confirmation's wording.
+	Confirm                                 int64
+	ConfirmText, ConfirmButton, ConfirmKeep string
+	// PickerDone closes a picker.
+	PickerDone string
 }
 
 type roleOption struct{ Role, Label string }
@@ -350,6 +356,17 @@ func (s *Server) renderApp(w http.ResponseWriter, r *http.Request, status int, a
 	}
 	v := s.appPage(world, a, p)
 	v.Review = review
+	v.PickerDone = msgPickerDone
+	if r.Method == http.MethodGet {
+		if id, err := strconv.ParseInt(r.URL.Query().Get("withdraw"), 10, 64); err == nil {
+			for _, p := range v.People {
+				if p.InviteID == id {
+					v.Confirm = id
+					v.ConfirmText, v.ConfirmButton, v.ConfirmKeep = fmt.Sprintf(msgWithdrawConfirm, p.Email), msgWithdrawButton, msgWithdrawKeep
+				}
+			}
+		}
+	}
 	s.renderAdmin(w, r, status, "admin_app", adminData{Title: a.Label, App: v, Warning: warning, Script: rolesScript})
 }
 
