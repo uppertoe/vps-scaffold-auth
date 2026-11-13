@@ -20,7 +20,7 @@ const maxBulkAddresses = 1000
 // bulkPlan sorts a pasted list of addresses for the confirmation page.
 type bulkPlan struct {
 	Group   string
-	Label   string // the group's label, or its name when it has none
+	Label   string       // the group's label, or its name when it has none
 	Add     []memberView // valid and not yet members; Permitted false = not on the allow-list
 	Already []string     // already members
 	Invalid []string     // not an email address
