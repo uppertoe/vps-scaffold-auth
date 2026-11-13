@@ -23,3 +23,39 @@ const msgPickerDone = "Done"
 // The Overview's tile that counts the active cards, in the cards' own
 // vocabulary (it read "Active break-glass codes").
 const msgActiveCardsTile = "Active break-glass cards"
+
+// Removing a domain from a domain group is confirmed first (?remove=domain).
+// The first sentence names the roles and apps; the second says what
+// removing the domain does to them.
+const (
+	msgDomainRemoveHolds  = "%s holds %s, in %s."
+	msgDomainRemoveLast   = "Once @%s is removed, the group will admit nobody, and nobody at @%s will hold those roles through %s."
+	msgDomainRemoveSome   = "Once @%s is removed, nobody at @%s will hold those roles through %s."
+	msgDomainRemoveNoRole = "%s holds no role yet, so removing @%s changes nobody's access."
+	msgDomainRemoveButton = "Remove @%s"
+	msgDomainRemoveKeep   = "Keep the domain"
+)
+
+// A domain group without an organisation name, in the Groups list's
+// Organisation name column.
+const msgNoOrgName = "No organisation name"
+
+// The group's display name is called its name on every page: the group
+// page's field and its button, and the notice once it is saved. The
+// organisation name's button names its field, as both sit on one page.
+const (
+	msgNameHeading   = "Name"
+	msgNameButton    = "Save the name"
+	msgNameSaved     = "The name has been saved."
+	msgOrgButtonFull = "Save the organisation name"
+)
+
+// groupNameCopy is the group page's name field's wording, for the template.
+type groupNameCopy struct{ Heading, Button string }
+
+var groupNameText = groupNameCopy{Heading: msgNameHeading, Button: msgNameButton}
+
+func init() {
+	adminNotices["label-saved"] = msgNameSaved
+	orgNameText.Button = msgOrgButtonFull
+}

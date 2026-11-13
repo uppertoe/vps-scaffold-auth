@@ -28,8 +28,11 @@ type adminData struct {
 	// Bulk add confirmation page.
 	Bulk   *bulkPlan
 	Groups []groupView
-	// Group page: the one group shown.
-	Group *groupView
+	// Groups page: the Organisation name cell of a group without one.
+	NoOrgName string
+	// Group page: the one group shown, and the wording of its name field.
+	Group    *groupView
+	NameText groupNameCopy
 	// Groups page: groups the routes require that do not exist yet, and
 	// whether the route manifest (ROUTE_GROUPS_FILE) was read at all.
 	MissingGroups []missingGroupView
@@ -145,7 +148,24 @@ type groupView struct {
 	// wording.
 	Org     string
 	OrgText orgNameCopy
+	// Display is the group's label, or its name when it has none; Token
+	// draws it as the app pages do, linked to its page.
+	Display string
+	Token   tokenView
+	// AppLabels are the apps the group holds a role in.
+	AppLabels []string
+	// The groups of Includes, IncludedIn and IncludeOptions, by label.
+	IncludeRefs, IncludedInRefs, OptionRefs []groupRef
+	// HoldsText says that a group holding roles cannot be deleted.
+	HoldsText string
+	// ConfirmDomain is the domain whose removal is being confirmed
+	// (?remove=domain), with the confirmation's wording.
+	ConfirmDomain                           string
+	ConfirmText, ConfirmButton, ConfirmKeep string
 }
+
+// groupRef is a group named by its label, linked by its name.
+type groupRef struct{ Name, Label string }
 
 // feedView is a feed-filled group's source and last sync, for the Groups page.
 type feedView struct {
@@ -229,6 +249,11 @@ type missingGroupView struct {
 type memberView struct {
 	Email     string
 	Permitted bool
+	// Guest marks an address that can sign in only as a guest: the
+	// allow-list does not admit it, and it holds no app role (an address
+	// that holds one signs in as a member; see session.KindMember). Only
+	// such an address carries the "not on the allow-list" pill.
+	Guest bool
 	// AddedFrom is the address a feed made this one from, if it did.
 	AddedFrom string
 }

@@ -1,6 +1,7 @@
 {{define "title"}}{{.Title}}{{end}}
 {{define "head"}}{{template "roles_css"}}{{template "groups_css"}}{{end}}
 {{define "content"}}
+{{template "role_icons"}}
 <div class="ptitle"><div><h1>Groups</h1><p>{{if .RolesOn}}A group is given roles in apps, on each app's page.{{else}}Group membership decides who can open the apps that require a group. Apps see the group name; the label is for administrators only.{{end}}</p></div><a class="btnlink" href="/admin/groups/new">New group</a></div>
 <nav class="subtabs" aria-label="Groups"><a href="/admin/groups" aria-current="page">All groups</a><a href="/admin/groups/new">New group</a></nav>
 
@@ -50,15 +51,16 @@
   <p class="muted">Everyone at these email domains belongs, and can sign in.</p>
   {{if $domains}}
   <div class="tablewrap">
-  <table class="stack">
-    <thead><tr><th>Group</th><th>Who it admits</th><th>Used by</th><th>Feed</th></tr></thead>
+  <table class="stack gtable">
+    <colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4"></colgroup>
+    <thead><tr><th>Group</th><th>Who it admits</th><th>Used by</th><th>Organisation name</th></tr></thead>
     <tbody>
     {{range .Groups}}{{if eq .Kind "domain"}}
     <tr>
-      <td><a href="/admin/groups/{{.Name}}">{{if .Label}}{{.Label}}{{else}}<code class="mono">{{.Name}}</code>{{end}}</a></td>
+      <td>{{template "token" .Token}}</td>
       <td data-label="Who it admits" class="mono">{{.Who}}</td>
       <td data-label="Used by">{{if .UsedBy}}{{.UsedBy}}{{else}}<span class="muted">No roles</span>{{end}}</td>
-      <td data-label="Feed"><span class="muted">Not applicable</span></td>
+      <td data-label="Organisation name">{{if .Org}}{{.Org}}{{else}}<span class="muted">{{$.NoOrgName}}</span>{{end}}</td>
     </tr>
     {{end}}{{end}}
     </tbody>
@@ -76,13 +78,14 @@
   {{$lists := 0}}{{range .Groups}}{{if ne .Kind "domain"}}{{$lists = 1}}{{end}}{{end}}
   {{if $lists}}
   <div class="tablewrap">
-  <table class="stack">
+  <table class="stack gtable">
+    <colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4"></colgroup>
     <thead><tr><th>Group</th><th>Who it admits</th><th>Used by</th><th>Feed</th></tr></thead>
     <tbody>
     {{range .Groups}}{{if ne .Kind "domain"}}
     <tr>
-      <td><a href="/admin/groups/{{.Name}}"><code class="mono"><strong>{{.Name}}</strong></code></a>{{if .Label}}<span class="sub2">{{.Label}}</span>{{end}}</td>
-      <td data-label="Who it admits">{{if .NotYetCreated}}<span class="pill tag" title="The feed has not answered yet. The group is created by its first successful sync.">not created yet</span>{{else}}{{.Who}}{{end}}{{if .Includes}}<span class="sub2">Also admits {{range $i, $g := .Includes}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}</span>{{end}}</td>
+      <td>{{template "token" .Token}}</td>
+      <td data-label="Who it admits">{{if .NotYetCreated}}<span class="pill tag" title="The feed has not answered yet. The group is created by its first successful sync.">not created yet</span>{{else}}{{.Who}}{{end}}{{if .IncludeRefs}}<span class="sub2">Also admits {{range $i, $g := .IncludeRefs}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g.Name}}">{{$g.Label}}</a>{{end}}</span>{{end}}</td>
       <td data-label="Used by">{{if .UsedBy}}{{.UsedBy}}{{end}}{{if .Hosts}}{{if .UsedBy}}<span class="sub2">{{end}}{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}{{if .UsedBy}}</span>{{end}}{{else if .Unused}}<span class="pill tag" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">Not used by any app</span>{{else if not .UsedBy}}<span class="muted">{{if $rolesOn}}No roles{{else}}No app{{end}}</span>{{end}}</td>
       <td data-label="Feed">{{with .Feed}}
         {{if .Pending}}{{if .Kept}}<span class="pill warn">Change held, members kept</span>{{else}}<span class="pill warn">Change held</span>{{end}}{{if .AutoAt}}<span class="sub2">To be applied at the first sync after {{.AutoAt}}</span>{{end}}

@@ -60,9 +60,22 @@ func (s *Server) fillGroupRoles(r *http.Request, view []groupView) error {
 	}
 	kinds := map[string]string{}
 	orgs := map[string]string{}
+	labels := map[string]string{}
 	for _, g := range groups {
 		kinds[g.Name] = g.Kind
 		orgs[g.Name] = g.Org
+		labels[g.Name] = g.Label
+	}
+	refs := func(names []string) []groupRef {
+		out := make([]groupRef, 0, len(names))
+		for _, n := range names {
+			l := labels[n]
+			if l == "" {
+				l = n
+			}
+			out = append(out, groupRef{Name: n, Label: l})
+		}
+		return out
 	}
 	domains, err := s.store.ListGroupDomains(ctx)
 	if err != nil {
@@ -80,14 +93,23 @@ func (s *Server) fillGroupRoles(r *http.Request, view []groupView) error {
 		}
 		g.Domains = domains[g.Name]
 		g.Org, g.OrgText = orgs[g.Name], orgNameText
+		g.Display = groupDisplayName(*g)
+		g.IncludeRefs, g.IncludedInRefs, g.OptionRefs = refs(g.Includes), refs(g.IncludedIn), refs(g.IncludeOptions)
 		apps := map[string]bool{}
 		for _, a := range as {
 			if (a.Kind != store.AssignDomainGroup && a.Kind != store.AssignList) || a.Ref != g.Name {
 				continue
 			}
 			g.RoleCount++
-			apps[a.App] = true
 			app, role := a.App, a.Role
+			if !apps[a.App] {
+				label := a.App
+				if ap, ok := s.appRoles.Apps[a.App]; ok {
+					label = ap.Label
+				}
+				g.AppLabels = append(g.AppLabels, label)
+			}
+			apps[a.App] = true
 			if ap, ok := s.appRoles.Apps[a.App]; ok {
 				app = ap.Label
 				if l, ok := ap.Roles[a.Role]; ok {
@@ -97,7 +119,15 @@ func (s *Server) fillGroupRoles(r *http.Request, view []groupView) error {
 			g.Roles = append(g.Roles, appRoleRef{App: a.App, Label: app + ": " + role})
 		}
 		sort.Slice(g.Roles, func(i, j int) bool { return g.Roles[i].Label < g.Roles[j].Label })
+		sort.Slice(g.AppLabels, func(i, j int) bool { return strings.ToLower(g.AppLabels[i]) < strings.ToLower(g.AppLabels[j]) })
 		g.AppCount = len(apps)
+		g.Token = tokenView{Icon: iconDomain, Label: g.Display, Title: g.Display, Href: "/admin/groups/" + g.Name}
+		if g.Kind != store.GroupKindDomain {
+			g.Token.Icon, g.Token.Count = iconList, fmt.Sprint(len(g.Members))
+		}
+		if g.RoleCount > 0 {
+			g.HoldsText = fmt.Sprintf(msgGroupHolds, g.Display, countWords(g.RoleCount, "role", "roles"))
+		}
 		if g.Kind == store.GroupKindDomain {
 			at := make([]string, len(g.Domains))
 			for j, d := range g.Domains {
@@ -134,13 +164,41 @@ func (s *Server) renderGroup(w http.ResponseWriter, r *http.Request, status int,
 	}
 	for i := range view {
 		if view[i].Name == name {
+			if r.Method == http.MethodGet {
+				s.confirmDomainRemoval(&view[i], r.URL.Query().Get("remove"))
+			}
 			s.renderAdmin(w, r, status, "admin_group", adminData{
-				Title: groupDisplayName(view[i]), Group: &view[i], OpenGroup: name, Warning: warning,
+				Title: groupDisplayName(view[i]), Group: &view[i], NameText: groupNameText, OpenGroup: name, Warning: warning,
 			})
 			return
 		}
 	}
 	http.Redirect(w, r, "/admin/groups", http.StatusFound)
+}
+
+// confirmDomainRemoval fills the confirmation of removing one of a domain
+// group's domains: the roles the group holds, in which apps, and whether
+// the group will admit anybody afterwards.
+func (s *Server) confirmDomainRemoval(g *groupView, domain string) {
+	found := false
+	for _, d := range g.Domains {
+		found = found || d == domain
+	}
+	if !found || g.Kind != store.GroupKindDomain {
+		return
+	}
+	g.ConfirmDomain = domain
+	g.ConfirmButton, g.ConfirmKeep = fmt.Sprintf(msgDomainRemoveButton, domain), msgDomainRemoveKeep
+	switch {
+	case g.RoleCount == 0:
+		g.ConfirmText = fmt.Sprintf(msgDomainRemoveNoRole, g.Display, domain)
+	case len(g.Domains) == 1:
+		g.ConfirmText = fmt.Sprintf(msgDomainRemoveHolds, g.Display, countWords(g.RoleCount, "role", "roles"), joinAnd(g.AppLabels)) + " " +
+			fmt.Sprintf(msgDomainRemoveLast, domain, domain, g.Display)
+	default:
+		g.ConfirmText = fmt.Sprintf(msgDomainRemoveHolds, g.Display, countWords(g.RoleCount, "role", "roles"), joinAnd(g.AppLabels)) + " " +
+			fmt.Sprintf(msgDomainRemoveSome, domain, domain, g.Display)
+	}
 }
 
 // handleAdminNewGroup is the New group page.

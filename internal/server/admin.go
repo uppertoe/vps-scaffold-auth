@@ -753,7 +753,7 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{
-		Title: "Groups", Groups: view,
+		Title: "Groups", Groups: view, NoOrgName: msgNoOrgName,
 		MissingGroups: missing, RouteGroupsOn: routeGroupsOn,
 	})
 }
@@ -810,7 +810,8 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 		}
 		mv := make([]memberView, 0, len(members))
 		for _, m := range members {
-			mv = append(mv, memberView{Email: m, Permitted: s.policy.Allowed(m), AddedFrom: addedFrom[m]})
+			ok := s.policy.Allowed(m)
+			mv = append(mv, memberView{Email: m, Permitted: ok, Guest: !ok && !s.mayHoldRoleNow(r.Context(), m, false), AddedFrom: addedFrom[m]})
 		}
 		hosts := routeGroups[g.Name]
 		inc := map[string]bool{}

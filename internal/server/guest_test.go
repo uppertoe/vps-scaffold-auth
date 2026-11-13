@@ -473,13 +473,14 @@ func TestGroupPageMarksMemberNotOnAllowList(t *testing.T) {
 	if strings.Count(body, mark) != 1 {
 		t.Fatalf("want exactly one %q mark, got %d in:\n%s", mark, strings.Count(body, mark), body)
 	}
-	// The mark sits in the stranger's cell: the member cell is "<td>email mark</td>".
+	// The mark sits in the stranger's row: the member row is
+	// "<span>email mark</span>" followed by its Remove form.
 	cell := func(email string) string {
-		i := strings.Index(body, "<td>"+email)
+		i := strings.Index(body, "<span>"+email)
 		if i < 0 {
 			t.Fatalf("no member cell for %s", email)
 		}
-		return body[i : i+strings.Index(body[i:], "</td>")]
+		return body[i : i+strings.Index(body[i:], "<form")]
 	}
 	if !strings.Contains(cell(strangerAddr), mark) {
 		t.Errorf("stranger's cell lacks the mark: %q", cell(strangerAddr))

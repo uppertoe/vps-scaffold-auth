@@ -32,6 +32,30 @@
   .apptok span { overflow: hidden; text-overflow: ellipsis; }
   a.apptok:hover { text-decoration: none; border-color: var(--accent); }
   .apptok svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  /* Rows inside a section: a domain, a member or an included group, with
+     its action at the end. */
+  .glist { border-top: 1px solid var(--line); }
+  .glist .grow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .glist .grow > span, .glist .grow > a, .glist .grow > code { min-width: 0; overflow-wrap: anywhere; }
+  .glist .confirmbox { margin: 8px 0; }
+  .fsec form { margin: 0; }
+  .fsec .inlineform { margin-top: 4px; }
+  .fsec .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .fsec .head h2 { margin: 0; }
+  .fsec .head button { margin: 0; }
+  .fsec > p, .fsec .callout { margin: 0; }
+  .fsec.danger-zone { border-color: var(--off-line); }
+  .fsec .addmembers { display: grid; gap: 6px; }
+  .fsec .addmembers label { margin: 0; }
+  .fsec .addmembers .hint { margin: 0; }
+  .btnlink.small { height: 30px; padding: 0 11px; font-size: 13px; }
+  .fsec .tablewrap table { table-layout: fixed; }
+  /* The domain groups and lists tables share one set of column widths. */
+  table.gtable { table-layout: fixed; }
+  table.gtable col.c1 { width: 30%; } table.gtable col.c2 { width: 30%; }
+  table.gtable col.c3 { width: 20%; } table.gtable col.c4 { width: 20%; }
+  table.gtable td { overflow-wrap: anywhere; }
+  table.gtable .tok { max-width: 100%; }
   .gattn { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 24px; }
   .gattn div { display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 14px; }
   .gattn div:first-child { border-top: 0; }

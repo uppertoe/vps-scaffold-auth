@@ -134,3 +134,59 @@ func TestOverviewAgreesWithTheOtherPages(t *testing.T) {
 		t.Error("overview says nothing needs attention, or names ROUTE_GROUPS_FILE with app roles on")
 	}
 }
+
+// Removing a domain is confirmed first, naming the roles and apps the group
+// holds; a group that holds roles says so in place of a Delete button.
+func TestDomainRemovalAndDeleteConfirmations(t *testing.T) {
+	srv, _, c := appsAdmin(t)
+	ctx := context.Background()
+	if err := srv.store.CreateGroupOfKind(ctx, "rch-staff", "RCH staff", store.GroupKindDomain); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.AddGroupDomain(ctx, "rch-staff", "rch.org.au"); err != nil {
+		t.Fatal(err)
+	}
+	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignDomainGroup, Ref: "rch-staff"})
+	mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignDomainGroup, Ref: "rch-staff"})
+	page := html.UnescapeString(c.get("/admin/groups/rch-staff", nil).Body.String())
+	if strings.Contains(page, `action="/admin/groups/rch-staff/domains/delete"`) {
+		t.Error("Remove acts without a confirmation")
+	}
+	if !strings.Contains(page, fmt.Sprintf(msgGroupHolds, "RCH staff", "two roles")) || strings.Contains(page, `action="/admin/groups/rch-staff/delete"`) {
+		t.Error("the delete confirmation does not say the group holds roles, or still offers to delete it")
+	}
+	page = html.UnescapeString(c.get("/admin/groups/rch-staff?remove=rch.org.au", nil).Body.String())
+	want := fmt.Sprintf(msgDomainRemoveHolds, "RCH staff", "two roles", "caffeine and Fellowship enquiries") + " " +
+		fmt.Sprintf(msgDomainRemoveLast, "rch.org.au", "rch.org.au", "RCH staff")
+	if !strings.Contains(page, want) || !strings.Contains(page, `action="/admin/groups/rch-staff/domains/delete"`) {
+		t.Errorf("the removal confirmation lacks %q, or its button", want)
+	}
+}
+
+// A list member outside the allow-list who holds an app role signs in as a
+// member, so carries no "not on the allow-list" pill; the list's facts say
+// which roles it holds.
+func TestListMemberWithRoleIsNotMarkedGuest(t *testing.T) {
+	srv, _, c := appsAdmin(t)
+	ctx := context.Background()
+	if err := srv.store.CreateGroupOfKind(ctx, "registrars", "Registrars", store.GroupKindList); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"jo@outside.example.org"} {
+		if err := srv.store.AddGroupMember(ctx, "registrars", m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := c.get("/admin/groups/registrars", nil).Body.String()
+	if !strings.Contains(page, "not on the allow-list") {
+		t.Error("a member of a list with no role is not marked")
+	}
+	mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignList, Ref: "registrars"})
+	page = c.get("/admin/groups/registrars", nil).Body.String()
+	if strings.Contains(page, "not on the allow-list") {
+		t.Error("a member who holds a role is marked as signing in only as a guest")
+	}
+	if !strings.Contains(page, "One role in one app") {
+		t.Error("the facts' Used by does not name the list's roles")
+	}
+}
