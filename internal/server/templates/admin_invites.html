@@ -7,26 +7,29 @@
 <div class="ptitle"><div><h1>Invitations</h1><p>An invitation gives one person a role in one app, until a date or permanently.</p></div><a class="btnlink" href="/admin/invitations/new">Invite people</a></div>
 {{if .Attention}}
 <div class="attn">
-  {{range .Attention}}<div><i{{if .Bad}} class="bad"{{end}}></i><span title="{{.Before}}">{{.Before}}</span></div>{{end}}
+  {{range .Attention}}<div><i{{if .Bad}} class="bad"{{end}}></i><span>{{.Before}}</span></div>{{end}}
 </div>
 {{end}}
 <div class="rlist tbl invl">
   <div class="rrow colhead"><div>Address</div><div>Role</div><div>Access</div><div>Sent</div><div>State</div><div></div></div>
   {{range .Rows}}
-  <div class="rrow">
+  <div class="rrow" id="inv-{{.ID}}">
     <div title="{{.Email}}">{{.Email}}</div>
     <div>{{template "token" .Token}}</div>
-    <div class="num">{{.Access}}</div>
-    <div class="muted" title="{{.SentTitle}}">{{.Sent}}</div>
-    <div><span class="pill {{.Tone}}">{{.State}}</span></div>
+    <div class="num" data-label="Access">{{.Access}}</div>
+    <div class="muted" data-label="Sent" title="{{.SentTitle}}">{{.Sent}}</div>
+    <div data-label="State"><span class="pill {{.Tone}}">{{.State}}</span></div>
     <div class="acts">
-      {{if .Resend}}<form method="post" action="/admin/invitations/{{.ID}}/resend"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="link">Resend</button></form><span class="muted">&middot;</span>{{end}}
+      {{if .Resend}}<a class="link" href="/admin/invitations?resend={{.ID}}#inv-{{.ID}}">Resend</a><span class="muted">&middot;</span>{{end}}
       {{if .SendAgain}}<form method="post" action="/admin/invitations/{{.ID}}/resend"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="link">Send again</button></form>{{if .Withdraw}}<span class="muted">&middot;</span>{{end}}{{end}}
-      {{if .Withdraw}}<form method="post" action="/admin/invitations/{{.ID}}/withdraw"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="link">Withdraw</button></form>{{end}}
+      {{if .Withdraw}}<a class="link" href="/admin/invitations?withdraw={{.ID}}#inv-{{.ID}}">Withdraw</a>{{end}}
     </div>
   </div>
+  {{if eq $.Invites.Confirm .ID}}
+  <div class="rrow confirmrow"><div class="confirmbox"><p>{{$.Invites.ConfirmText}}</p><div class="acts"><form method="post" action="/admin/invitations/{{.ID}}/{{$.Invites.ConfirmAction}}"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit"{{if eq $.Invites.ConfirmAction "withdraw"}} class="danger"{{end}}>{{$.Invites.ConfirmButton}}</button></form><a class="btnlink quiet" href="/admin/invitations#inv-{{.ID}}">{{$.Invites.Keep}}</a></div></div></div>
+  {{end}}
   {{else}}
-  <div class="rrow"><div class="muted">{{.Empty}}</div></div>
+  <div class="rrow empty"><div class="muted">{{.Empty}}</div></div>
   {{end}}
 </div>
 {{end}}

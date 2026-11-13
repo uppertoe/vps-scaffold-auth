@@ -88,3 +88,29 @@ func TestAppPageWithdrawIsConfirmed(t *testing.T) {
 		t.Error("the confirmation does not name the address, or has no button")
 	}
 }
+
+// The Invitations page shows the same invitation lines as the Apps page,
+// and Resend and Withdraw are confirmed first.
+func TestInvitationsLinesAndConfirmations(t *testing.T) {
+	srv, _, c := appsAdmin(t)
+	openInvitation(t, srv, "k.lee@monash.org", srv.now().Add(-8*24*time.Hour))
+	week := "The invitation to k.lee@monash.org for Fellowship enquiries has not been accepted after a week."
+	for _, page := range []string{"/admin/apps", "/admin/invitations"} {
+		if !strings.Contains(html.UnescapeString(c.get(page, nil).Body.String()), week) {
+			t.Errorf("%s lacks the week-old invitation", page)
+		}
+	}
+	list := html.UnescapeString(c.get("/admin/invitations", nil).Body.String())
+	if strings.Contains(list, `action="/admin/invitations/1/resend"`) || strings.Contains(list, `action="/admin/invitations/1/withdraw"`) {
+		t.Error("Resend or Withdraw acts without a confirmation")
+	}
+	for action, want := range map[string]string{
+		"resend":   fmt.Sprintf(msgResendConfirm, "k.lee@monash.org"),
+		"withdraw": fmt.Sprintf(msgWithdrawConfirm, "k.lee@monash.org"),
+	} {
+		page := html.UnescapeString(c.get("/admin/invitations?"+action+"=1", nil).Body.String())
+		if !strings.Contains(page, want) || !strings.Contains(page, `action="/admin/invitations/1/`+action+`"`) {
+			t.Errorf("the %s confirmation is missing", action)
+		}
+	}
+}

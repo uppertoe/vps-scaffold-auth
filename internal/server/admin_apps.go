@@ -98,7 +98,7 @@ func (s *Server) handleAdminApps(w http.ResponseWriter, r *http.Request) {
 		}
 		v.Apps = append(v.Apps, block)
 	}
-	v.Attention = append(v.Attention, s.inviteAttention(world)...)
+	v.Attention = append(v.Attention, s.invitationLines(world)...)
 	v.Key = s.key(world)
 	s.renderAdmin(w, r, http.StatusOK, "admin_apps", adminData{Title: "Apps", Apps: v, Script: rolesScript})
 }

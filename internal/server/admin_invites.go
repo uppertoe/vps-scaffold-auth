@@ -84,6 +84,11 @@ type invitesView struct {
 	Attention []attentionLine
 	Rows      []inviteRow
 	Empty     string
+	// Confirm is the row whose Resend or Withdraw is being confirmed
+	// (?resend=id or ?withdraw=id), with the confirmation's wording.
+	Confirm                          int64
+	ConfirmAction                    string // "resend" or "withdraw"
+	ConfirmText, ConfirmButton, Keep string
 }
 
 type inviteRow struct {
@@ -157,7 +162,8 @@ func (s *Server) handleAdminInvites(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
-	v := &invitesView{Empty: msgInvitesNone}
+	v := &invitesView{Empty: msgInvitesNone, Attention: s.invitationLines(world)}
+	q := r.URL.Query()
 	for _, inv := range world.invites {
 		state, tone := s.inviteState(world, inv)
 		row := inviteRow{
@@ -170,9 +176,17 @@ func (s *Server) handleAdminInvites(w http.ResponseWriter, r *http.Request) {
 			row.Resend, row.Withdraw = true, true
 		case inviteUndelivered:
 			row.SendAgain, row.Withdraw = true, true
-			v.Attention = append(v.Attention, attentionLine{Bad: true, Before: fmt.Sprintf(msgInviteUndelivered, inv.Email)})
 		case inviteExpired:
 			row.SendAgain = true
+		}
+		id := strconv.FormatInt(inv.ID, 10)
+		switch {
+		case row.Resend && q.Get("resend") == id:
+			v.Confirm, v.ConfirmAction = inv.ID, "resend"
+			v.ConfirmText, v.ConfirmButton, v.Keep = fmt.Sprintf(msgResendConfirm, inv.Email), msgResendButton, "Cancel"
+		case row.Withdraw && q.Get("withdraw") == id:
+			v.Confirm, v.ConfirmAction = inv.ID, "withdraw"
+			v.ConfirmText, v.ConfirmButton, v.Keep = fmt.Sprintf(msgWithdrawConfirm, inv.Email), msgWithdrawButton, msgWithdrawKeep
 		}
 		v.Rows = append(v.Rows, row)
 	}
@@ -190,8 +204,20 @@ func (w *rolesWorld) openInvites() []store.Invitation {
 	return out
 }
 
-// inviteAttention is the overview's line for each invitation that has
-// waited a week.
+// invitationLines are the attention lines about invitations, which the
+// Apps, Invitations and Overview pages all show: each invitation that could
+// not be delivered, then each that has waited a week.
+func (s *Server) invitationLines(w *rolesWorld) []attentionLine {
+	var out []attentionLine
+	for _, v := range w.invites {
+		if state, _ := s.inviteState(w, v); state == inviteUndelivered {
+			out = append(out, attentionLine{Bad: true, Before: fmt.Sprintf(msgInviteUndelivered, v.Email)})
+		}
+	}
+	return append(out, s.inviteAttention(w)...)
+}
+
+// inviteAttention is the line for each invitation that has waited a week.
 func (s *Server) inviteAttention(w *rolesWorld) []attentionLine {
 	var out []attentionLine
 	for _, v := range w.openInvites() {

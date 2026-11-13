@@ -1,5 +1,5 @@
 {{define "invites_css"}}<style>
-  .tbl.invl .rrow { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.6fr) 124px 64px 160px 148px; }
+  .tbl.invl .rrow { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.1fr) 124px 64px 160px 148px; }
   .tbl.invl .tok, .who .tok, .choice .tok { max-width: 100%; }
   .tbl.invl .acts { display: flex; gap: 6px; align-items: center; }
   .tbl.checkl { border-radius: 10px; }
@@ -7,6 +7,9 @@
   .tbl.checkl .rrow + .rrow { border-top: 1px solid var(--line); }
   .tbl.checkl .rrow.out > div { color: var(--muted); }
   .tbl.checkl .rrow.out > div:first-child { text-decoration: line-through; }
+  /* A left-out reason names the group, so it wraps rather than being cut. */
+  .tbl.checkl .rrow { height: auto; min-height: 48px; padding-block: 12px; align-items: start; }
+  .tbl.checkl .rrow > div:last-child { white-space: normal; }
   .who { display: flex; gap: 8px; align-items: center; min-width: 0; overflow: hidden; }
   .who .muted { white-space: nowrap; }
   .fsec textarea { max-width: 520px; min-height: 76px; }
@@ -31,6 +34,11 @@
     .tbl.invl .rrow.colhead { display: none; }
     .tbl.invl .rrow > div:nth-child(2) { justify-self: end; max-width: 100%; }
     .tbl.invl .rrow > div:nth-child(n+3) { color: var(--muted); font-size: 13px; }
+    /* Access, Sent and State are labelled with their headings. */
+    .tbl.invl .rrow > div[data-label] { grid-column: 1 / -1; display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+    .tbl.invl .rrow > div[data-label]::before { content: attr(data-label); font-size: 12px; font-weight: 600; }
+    .tbl.invl .rrow > div[data-label] > * { justify-self: start; }
+    .tbl.invl .rrow > .acts { grid-column: 1 / -1; }
   }
   @media (max-width: 720px) {
     .tbl.invl .rrow { grid-template-columns: minmax(0, 1fr); }
