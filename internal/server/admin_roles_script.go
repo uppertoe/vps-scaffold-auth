@@ -10,9 +10,9 @@ import (
 // tokens to its width, turning those that do not fit into "+N more", which
 // lists them when pressed (without the script the overview shows the first
 // tokens and "+N more" from the server). Tokens are hidden least important
-// first: other holders from the end, then the card token, and last the
-// tokens a check matched; the last token left shrinks rather than being
-// hidden. It also counts the unsaved changes on an app's page, moves focus
+// first: other holders from the end, then the holder that sets the widest
+// access, then the card token, and last the tokens a check matched; the
+// last token left shrinks rather than being hidden. It also counts the unsaved changes on an app's page, moves focus
 // into a picker when it opens and back to its Add token when it closes, and
 // closes a picker on Escape. The page's Content-Security-Policy allows it by
 // its hash and allows no other script.
@@ -26,7 +26,7 @@ const rolesScript template.JS = `(function () {
     m.setAttribute("aria-expanded", "false");
     if (focus) m.focus();
   }
-  function rank(t) { return t.classList.contains("on") ? 3 : t.classList.contains("card") ? 2 : 1; }
+  function rank(t) { return t.classList.contains("on") ? 4 : t.classList.contains("card") ? 3 : t.classList.contains("widest") ? 2 : 1; }
   function fit() {
     closeMore(false);
     document.querySelectorAll("[data-fit]").forEach(function (w) {

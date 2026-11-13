@@ -220,15 +220,21 @@ type tokenView struct {
 	// so that a page without the script shows the first tokens and
 	// "+N more" rather than tokens cut off at the row's edge.
 	Capped bool
+	// Widest marks the holder that sets the row's widest access, so a narrow
+	// row keeps it in view.
+	Widest bool
 }
 
 // rank is how long a token stays when a row is too narrow for all of
-// them: matched tokens longest, then the card token, then the others.
+// them: matched tokens longest, then the card token, then the holder that
+// sets the widest access, then the others.
 func (t tokenView) rank() int {
 	switch {
 	case t.On:
-		return 3
+		return 4
 	case t.Tone == "card":
+		return 3
+	case t.Widest:
 		return 2
 	}
 	return 1
@@ -543,6 +549,7 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 		return strings.ToLower(s.holderToken(w, hs[i].kind, hs[i].ref).Label) < strings.ToLower(s.holderToken(w, hs[j].kind, hs[j].ref).Label)
 	})
 	level := 0
+	tokLevel := map[int]int{} // token index -> its holder's step, when it counts
 	for _, h := range hs {
 		id := holderID(h.kind, h.ref)
 		t := s.holderToken(w, h.kind, h.ref)
@@ -567,6 +574,7 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 		}
 		if !removing {
 			level = max(level, holderLevel[h.kind])
+			tokLevel[len(row.Tokens)] = holderLevel[h.kind]
 		}
 		row.Tokens = append(row.Tokens, t)
 	}
@@ -587,12 +595,18 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 		if editable {
 			t.Href = "#people"
 		}
+		tokLevel[len(row.Tokens)] = holderLevel[store.AssignPerson]
 		row.Tokens = append(row.Tokens, t)
 		level = max(level, holderLevel[store.AssignPerson])
 	}
 	if cards := w.cardsFor(a.Name, role); len(cards) > 0 {
 		row.Tokens = append(row.Tokens, tokenView{Icon: iconCard, Tone: "card", Label: capFirst(countWords(len(cards), "card", "cards")), Title: strings.Join(cards, ", ")})
 		level = max(level, 1)
+	}
+	for i, l := range tokLevel {
+		if l == level && l > 1 {
+			row.Tokens[i].Widest = true
+		}
 	}
 	row.Nobody = len(row.Tokens) == 0
 	row.NobodyText = msgNobodyHolds
