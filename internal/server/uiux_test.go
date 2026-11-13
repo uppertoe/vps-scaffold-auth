@@ -114,3 +114,23 @@ func TestInvitationsLinesAndConfirmations(t *testing.T) {
 		}
 	}
 }
+
+// The Overview lists what the Apps, Invitations and Cards pages list, and
+// leaves out the ROUTE_GROUPS_FILE note once app roles are on.
+func TestOverviewAgreesWithTheOtherPages(t *testing.T) {
+	srv, _, c := appsAdmin(t)
+	openInvitation(t, srv, "k.lee@monash.org", srv.now().Add(-8*24*time.Hour))
+	body := html.UnescapeString(c.get("/admin/", nil).Body.String())
+	for _, want := range []string{
+		"Nobody holds the User role in ", ">caffeine</a>, so nobody can reach it.",
+		"The invitation to k.lee@monash.org for Fellowship enquiries has not been accepted after a week.",
+		msgActiveCardsTile,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("overview lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "Nothing needs attention.") || strings.Contains(body, "ROUTE_GROUPS_FILE") {
+		t.Error("overview says nothing needs attention, or names ROUTE_GROUPS_FILE with app roles on")
+	}
+}

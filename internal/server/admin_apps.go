@@ -88,11 +88,9 @@ func (s *Server) handleAdminApps(w http.ResponseWriter, r *http.Request) {
 		v.Focus = s.holderFocus(world, kind, ref)
 	}
 	filter := strings.ToLower(v.Filter)
+	v.Attention = closedAppLines(world)
 	for _, a := range world.m.Sorted() {
 		block := s.appBlock(world, a, false, focus, nil)
-		if !anyHolder(world, a) {
-			v.Attention = append(v.Attention, attentionLine{Bad: true, Before: "Nobody holds the User role in ", Link: "/admin/apps/" + a.Name, Name: a.Label, After: ", so nobody can reach it."})
-		}
 		if filter != "" && !appMatches(world, a, block, filter) {
 			continue
 		}
@@ -101,6 +99,18 @@ func (s *Server) handleAdminApps(w http.ResponseWriter, r *http.Request) {
 	v.Attention = append(v.Attention, s.invitationLines(world)...)
 	v.Key = s.key(world)
 	s.renderAdmin(w, r, http.StatusOK, "admin_apps", adminData{Title: "Apps", Apps: v, Script: rolesScript})
+}
+
+// closedAppLines are the attention lines about apps that nothing holds a
+// role in, which the Apps page and the Overview both show.
+func closedAppLines(w *rolesWorld) []attentionLine {
+	var out []attentionLine
+	for _, a := range w.m.Sorted() {
+		if !anyHolder(w, a) {
+			out = append(out, attentionLine{Bad: true, Before: "Nobody holds the User role in ", Link: "/admin/apps/" + a.Name, Name: a.Label, After: ", so nobody can reach it."})
+		}
+	}
+	return out
 }
 
 // anyHolder reports whether anything holds a role in the app.

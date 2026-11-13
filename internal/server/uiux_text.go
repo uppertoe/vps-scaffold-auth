@@ -19,3 +19,7 @@ const (
 
 // The visible control at the foot of the app page's picker, which closes it.
 const msgPickerDone = "Done"
+
+// The Overview's tile that counts the active cards, in the cards' own
+// vocabulary (it read "Active break-glass codes").
+const msgActiveCardsTile = "Active break-glass cards"

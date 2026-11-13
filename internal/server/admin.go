@@ -692,6 +692,24 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ov.Sites = s.routeAccess()
+	// The Apps, Invitations and Cards pages' attention lines, so the
+	// Overview lists everything that needs an administrator.
+	if s.rolesOn() {
+		world, err := s.loadRolesWorld(ctx)
+		if err != nil {
+			s.adminError(w, r)
+			return
+		}
+		ov.Lines = append(closedAppLines(world), s.invitationLines(world)...)
+	}
+	stats, err := s.cardStats(ctx)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	sortCards(codes)
+	ov.Lines = append(ov.Lines, cardLines(codes, stats)...)
+	ov.CardsTile = msgActiveCardsTile
 	s.renderAdmin(w, r, http.StatusOK, "admin_home", adminData{Title: "Overview", Overview: ov})
 }
 

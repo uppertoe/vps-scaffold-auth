@@ -255,6 +255,7 @@
   ul.todo li:first-child { padding-top: 0; } ul.todo li:first-child::before { top: 7px; }
   ul.todo li:last-child { border-bottom: 0; padding-bottom: 0; }
   ul.todo li::before { content: ""; position: absolute; left: 0; top: 19px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn-fg); }
+  ul.todo li.bad::before { background: var(--off-fg); }
 
   /* Facts about one thing: a fixed grid of labelled cells. */
   .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); border: 1px solid var(--border); border-radius: 12px; background: var(--surface); margin: 0 0 24px; overflow: hidden; }

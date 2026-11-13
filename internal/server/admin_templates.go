@@ -199,11 +199,15 @@ type overviewView struct {
 	// Sites is the "who can reach what" table (ROUTE_ACCESS_FILE); nil
 	// leaves the table out.
 	Sites []siteAccessView
+	// Lines are the Apps, Invitations and Cards pages' attention lines.
+	Lines []attentionLine
+	// CardsTile labels the count of active cards.
+	CardsTile string
 }
 
 // Attention reports whether anything on the overview needs action.
 func (o *overviewView) Attention() bool {
-	return len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0 || len(o.FeedProblems) > 0 || len(o.FeedIncludes) > 0
+	return len(o.Lines) > 0 || len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0 || len(o.FeedProblems) > 0 || len(o.FeedIncludes) > 0
 }
 
 // missingGroupView is a group a route requires that has not been created.
