@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
@@ -56,32 +58,159 @@ func (s *Server) scanBand(ctx context.Context, c store.BreakGlassCode, v *scanVi
 	v.Header = hexOrDefault(d.Header, breakglass.DefaultPalette.Header)
 	v.Ink = breakglass.InkOn(v.Header)
 	v.Title = d.Title
-	if dd := s.drawDesign(ctx, d); len(dd.Logo) > 0 && d.ID > 0 {
-		v.LogoURL = "/card-logo/" + strconv.FormatInt(d.ID, 10) + "?v=" + strconv.FormatInt(d.UpdatedAt.Unix(), 10)
-		v.Panel = d.LogoMode == store.DesignLogoPanel
+	// A design that no active card uses has no logo served (see
+	// handleCardLogo), so its band shows the title instead.
+	if d.ID > 0 {
+		if l := s.cardLogo(ctx, d.ID); l.png != nil {
+			v.LogoURL = "/card-logo/" + strconv.FormatInt(d.ID, 10) + "?v=" + url.QueryEscape(l.version)
+			v.Panel = d.LogoMode == store.DesignLogoPanel
+		}
 	}
 }
 
+// cardLogoTTL is how long a design's drawn logo, and whether an active card
+// uses it, is kept in memory before the store is read again.
+const cardLogoTTL = 30 * time.Second
+
+// cardLogoMax bounds the cache; past it, the cache starts again empty.
+const cardLogoMax = 64
+
+// cardLogoEntry is a design's logo as its cards draw it. png is nil when
+// the design does not exist, has no logo, or no active card uses it.
+type cardLogoEntry struct {
+	at      time.Time
+	version string
+	png     []byte // shared: callers only write it to a response
+}
+
+type cardLogoCache struct {
+	mu sync.Mutex
+	m  map[int64]cardLogoEntry
+}
+
+// cardLogo returns a design's drawn logo, from memory when the copy is
+// recent, so a flood of logo requests reads the store at most once a
+// design per cardLogoTTL. The lock is held across the read, so a flood
+// causes one read, not many. A failed read keeps the previous copy.
+func (s *Server) cardLogo(ctx context.Context, id int64) cardLogoEntry {
+	now := s.now()
+	c := &s.cardLogos
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.m[id]; ok && now.Sub(e.at) < cardLogoTTL && !now.Before(e.at) {
+		return e
+	}
+	e, err := s.loadCardLogo(ctx, id)
+	if err != nil {
+		log.Printf("card logo %d: %v", id, err)
+		return c.m[id]
+	}
+	e.at = now
+	if c.m == nil || len(c.m) >= cardLogoMax {
+		c.m = map[int64]cardLogoEntry{}
+	}
+	c.m[id] = e
+	return e
+}
+
+// loadCardLogo reads and draws a design's logo, when an active card uses
+// the design. Its version changes whenever the drawn logo can: the design is
+// saved, or, for a design that uses the site logo, the site logo changes.
+func (s *Server) loadCardLogo(ctx context.Context, id int64) (cardLogoEntry, error) {
+	inUse, err := s.designsInUse(ctx)
+	if err != nil {
+		return cardLogoEntry{}, err
+	}
+	if !inUse[id] {
+		return cardLogoEntry{}, nil
+	}
+	d, found, err := s.store.GetCardDesign(ctx, id)
+	if err != nil || !found {
+		return cardLogoEntry{}, err
+	}
+	dd := s.drawDesign(ctx, d)
+	png, ok := breakglass.LogoPNG(dd.Logo, dd.LogoType, d.LogoMode)
+	if !ok {
+		return cardLogoEntry{}, nil
+	}
+	version := strconv.FormatInt(d.UpdatedAt.Unix(), 10)
+	if d.LogoSource == store.DesignLogoSite {
+		_, _, sv, err := s.siteLogo(ctx)
+		if err != nil {
+			return cardLogoEntry{}, err
+		}
+		version += "-" + sv
+	}
+	return cardLogoEntry{version: version, png: png}, nil
+}
+
+// designsInUse are the designs at least one active card draws: its own, or
+// the first design when it has none or its design has gone (see cardDesign).
+func (s *Server) designsInUse(ctx context.Context) (map[int64]bool, error) {
+	codes, err := s.store.ListBreakGlassCodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ds, err := s.store.ListCardDesigns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(ds) == 0 {
+		return nil, nil
+	}
+	known := make(map[int64]bool, len(ds))
+	for _, d := range ds {
+		known[d.ID] = true
+	}
+	out := map[int64]bool{}
+	for _, c := range codes {
+		if c.Status != store.BreakGlassActive {
+			continue
+		}
+		if known[c.DesignID] {
+			out[c.DesignID] = true
+		} else {
+			out[ds[0].ID] = true
+		}
+	}
+	return out, nil
+}
+
 // handleCardLogo serves a design's logo as its cards draw it (white in the
-// white treatment), for the band on the scan pages. A logo is not a secret.
+// white treatment), for the band on the scan pages. A logo is not a secret,
+// but only the logo of a design an active card uses is served, the requests
+// are limited per client address like the scan page's, and the store is read
+// at most once a design per cardLogoTTL. The scan pages link the logo with
+// its version (?v=), so that URL names one exact image and is cached for a
+// year; any other request revalidates by ETag.
 func (s *Server) handleCardLogo(w http.ResponseWriter, r *http.Request) {
+	if !s.logoLimiter.Allow(clientIP(r)) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
 	id, ok := pathID(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	d, found, err := s.store.GetCardDesign(r.Context(), id)
-	if err != nil || !found {
+	l := s.cardLogo(r.Context(), id)
+	if l.png == nil {
 		http.NotFound(w, r)
 		return
 	}
-	dd := s.drawDesign(r.Context(), d)
-	png, ok := breakglass.LogoPNG(dd.Logo, dd.LogoType, d.LogoMode)
-	if !ok {
-		http.NotFound(w, r)
+	etag := `"` + l.version + `"`
+	w.Header().Set("ETag", etag)
+	if r.URL.Query().Get("v") == l.version {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	setImageHeaders(w, "image/png")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	writeImage(w, "image/png", png)
+	w.Write(l.png)
 }
 
 // msgSignInInstead is the withdrawn or replaced card's offer to sign in,

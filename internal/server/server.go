@@ -40,6 +40,8 @@ type Server struct {
 	wrongCodes     *ratelimit.Limiter // wrong email or TOTP codes, per client IP
 	breakLimiter   *ratelimit.Limiter // per-IP limiter for break-glass grants
 	viewLimiter    *ratelimit.Limiter // per-IP limiter for the scan's page, so one use spends one grant token
+	logoLimiter    *ratelimit.Limiter // per-IP limiter for a card design's logo (card_scan.go)
+	cardLogos      cardLogoCache
 	inviteLimiter  *ratelimit.Limiter // per-IP limiter for an invitation's page (invite_public.go)
 	refusedNotices hourlyOnce         // notifications of a refused (retargeted) card
 	totpReplay     *totpReplay
@@ -105,6 +107,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		wrongCodes:    limiterOr(cfg.RateLimitWrongCodesPerIP, cfg.RateLimitPerIP),
 		breakLimiter:  newBreakLimiter(cfg),
 		viewLimiter:   newBreakLimiter(cfg),
+		logoLimiter:   newBreakLimiter(cfg),
 		inviteLimiter: limiterOr(cfg.RateLimitPerIP, config.RateLimit{Count: 30, Window: time.Minute}),
 		access:        newAccessAudit(st, cfg.AuditRetention),
 		members:       newMembersAPI(cfg.MemberReaders),
