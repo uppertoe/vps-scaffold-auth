@@ -373,6 +373,7 @@ func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, status int,
 		data.Notice, data.Warning = s.takeNotice(w, r)
 	}
 	data.RolesOn = s.rolesOn()
+	data.TOTPEnabled = s.cfg.TOTPEnabled
 	csp := s.csp
 	if data.Script != "" {
 		csp += "; script-src " + scriptHash(string(data.Script))

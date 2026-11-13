@@ -14,6 +14,7 @@
     --accent: #2563eb;          /* links, primary action, current page */
     --accent-hover: #1d4ed8;
     --accent-soft: #eff4ff;
+    --on-accent: #fff;          /* text on an accent or danger fill */
     --bg: #f4f5f7;              /* page background */
     --surface: #fff;            /* panels */
     --surface-2: #f9fafb;       /* panel heads, table heads, quiet wells */
@@ -36,6 +37,9 @@
   @media (prefers-color-scheme: dark) {
     :root {
       --accent: #6b9bff; --accent-hover: #8fb3ff; --accent-soft: #1b2638;
+      /* The dark accent and danger fills are light, so their text is dark:
+         white on them is under 3:1. */
+      --on-accent: #0b1220;
       --bg: #121417; --surface: #1a1d21; --surface-2: #20242a;
       --border: #2d3138; --line: #262a30;
       --text: #e7e9ec; --muted: #a0a6ae; --faint: #7d838b;
@@ -71,6 +75,11 @@
      bar appears. */
   header.bar nav { display: flex; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; flex: 1 1 0; min-width: 0; -webkit-overflow-scrolling: touch; }
   header.bar nav::-webkit-scrollbar { display: none; }
+  /* Where the tabs are wider than the bar, the last one fades out at the
+     edge, a sign that the menu scrolls. */
+  @media (max-width: 1100px) {
+    header.bar nav { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); padding-right: 24px; }
+  }
   header.bar nav a {
     display: flex; align-items: center; padding: 0 12px; white-space: nowrap;
     color: var(--muted); font-size: 14px; font-weight: 500; text-decoration: none;
@@ -177,12 +186,12 @@
   /* Buttons: primary (default), secondary (.ghost), destructive (.danger). */
   button {
     margin-top: 18px; padding: 9px 16px; font: inherit; font-size: 14px; font-weight: 600; line-height: 1.3;
-    border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer;
+    border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: var(--on-accent); cursor: pointer;
   }
   button:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   button.ghost { background: var(--surface); color: var(--text); border-color: var(--input-border); }
   button.ghost:hover { background: var(--surface-2); border-color: var(--faint); }
-  button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  button.danger { background: var(--danger); border-color: var(--danger); color: var(--on-accent); }
   button.danger:hover { background: var(--danger-hover); border-color: var(--danger-hover); }
   button.small, .inline button { margin-top: 0; padding: 5px 11px; font-size: 13px; }
   .inline { display: inline; }
@@ -283,7 +292,7 @@
       <a href="/admin/break"{{if or (eq .Active "admin_codes") (eq .Active "admin_code_detail") (eq .Active "admin_card_new") (eq .Active "admin_designs") (eq .Active "admin_design")}} aria-current="page"{{end}}>Break-glass cards</a>
       <a href="/admin/access"{{if eq .Active "admin_access"}} aria-current="page"{{end}}>Access log</a>
       <a href="/admin/audit"{{if eq .Active "admin_audit"}} aria-current="page"{{end}}>Admin audit</a>
-      <a href="/admin/totp"{{if eq .Active "admin_totp"}} aria-current="page"{{end}}>Admin 2FA</a>
+      {{if .TOTPEnabled}}<a href="/admin/totp"{{if eq .Active "admin_totp"}} aria-current="page"{{end}}>Admin 2FA</a>{{end}}
       <a href="/admin/settings"{{if eq .Active "admin_settings"}} aria-current="page"{{end}}>Settings</a>
     </nav>
     {{if .AdminEmail}}<span class="who">{{.AdminEmail}} <a href="/logout">Sign out</a></span>{{end}}
