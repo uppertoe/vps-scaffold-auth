@@ -1,9 +1,10 @@
 {{define "title"}}Sign in{{end}}
 {{define "content"}}
 <h1>Sign in</h1>
-<p class="sub">Enter your email and we'll send you a sign-in code.</p>
+<p class="sub">Enter your email address, and we will send you a sign-in code.</p>
 {{if .LoginNotice}}<p class="sub notice">{{.LoginNotice}}</p>{{end}}
 {{if .HintDomains}}<p class="sub">This page is for <strong>{{.HintDomains}}</strong> email addresses.</p>{{end}}
+{{if .RoleHint}}<p class="sub">{{.RoleHint}}</p>{{end}}
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 {{if .Passkey}}<div class="err" id="passkey-error" hidden>Your passkey could not be used to sign in. Please try again, or sign in with an email code.</div>{{end}}
 <form method="post" action="/request" autocomplete="on">

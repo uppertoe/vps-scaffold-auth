@@ -3,5 +3,5 @@
 <h1>{{.Title}}</h1>
 {{if .Message}}<p class="sub">{{.Message}}</p>{{end}}
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
-<div class="links"><a href="/login?rd={{.Redirect | urlquery}}">Back to sign in</a></div>
+<div class="links"><a href="/login?rd={{.Redirect | urlquery}}">{{if .LinkText}}{{.LinkText}}{{else}}Back to sign in{{end}}</a></div>
 {{end}}

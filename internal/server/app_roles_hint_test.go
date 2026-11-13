@@ -200,7 +200,7 @@ func TestRoleGuardDeclinesEarlyForDomainGroupsOnly(t *testing.T) {
 	}
 
 	rec := c.postForm("/request", url.Values{"email": {"someone@outside.org"}, "rqd": {q.Get("rqd")}})
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "This app is only available to rch.org.au email addresses.") {
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "This app admits only rch.org.au email addresses. If you have an rch.org.au address, sign in with that address.") {
 		t.Fatalf("an address outside the domain: %d:\n%s", rec.Code, rec.Body.String())
 	}
 	if sentCount(sender) != 0 {

@@ -145,11 +145,11 @@ func TestCardPagesRender(t *testing.T) {
 	sid, did := strconv.FormatInt(id, 10), strconv.FormatInt(d.ID, 10)
 	pages := map[string][]string{
 		"/admin/break":                             {"Break-glass cards", "New card for NeverDrugs", "has never been tested"},
-		"/admin/break/new?app=neverdrugs":          {"Which page should a scan open?", "Drug search", "neverdrugs.example.com/search", "One card already", "Create the card"},
+		"/admin/break/new?app=neverdrugs":          {"Page a scan opens", "Drug search", "neverdrugs.example.com/search", "One card already", "Create the card"},
 		"/admin/break/" + sid:                      {"Opens NeverDrugs for whoever holds it", "NeverDrugs home page", "Download the PDF", "Replace or withdraw the card", "Nobody has scanned this card yet."},
 		"/admin/break/" + sid + "?confirm=replace": {"Replace the card for Angiography Lab 1?", "Keep the card"},
 		"/admin/break/designs":                     {"Department standard", "One card uses it · A6"},
-		"/admin/break/designs/" + did:              {"One active card uses this design.", "Saving changes one card.", "Easiest to read", "Postcard, 105 × 148 mm"},
+		"/admin/break/designs/" + did:              {"One active card uses this design.", "Saving the design changes the look of one card.", "Easiest to read", "Postcard, 105 × 148 mm"},
 		"/admin/break/designs/new":                 {"This design is not saved yet.", "Saving adds the design to the list."},
 		"/admin/apps/neverdrugs":                   {"Create a break-glass card for this role", "/admin/break/new?app=neverdrugs"},
 	}
@@ -282,7 +282,7 @@ func TestWithdrawnAndReplacedCardPages(t *testing.T) {
 		t.Errorf("events = %+v", events)
 	}
 	// An address that never was a card gets the neutral page.
-	if rec := anon.get("/break/nothing-here", nil); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "Access code not available") {
+	if rec := anon.get("/break/nothing-here", nil); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), msgCardUnknownTitle) {
 		t.Errorf("unknown = %d", rec.Code)
 	}
 }

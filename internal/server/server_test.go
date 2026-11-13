@@ -344,7 +344,7 @@ func TestResendWithinCooldownDoesNotResetAttempts(t *testing.T) {
 	c.postForm("/request", url.Values{"email": {"user@example.com"}})
 
 	rec := c.postForm("/verify-code", url.Values{"code": {"000000"}}) // 5th wrong overall
-	if !strings.Contains(rec.Body.String(), "Too many incorrect attempts") {
+	if !strings.Contains(rec.Body.String(), "entered incorrectly too many times") {
 		t.Fatalf("expected lockout after the cap; the resend reset the counter. body = %q", rec.Body.String())
 	}
 }
@@ -478,7 +478,7 @@ func TestDecoyAddressHitsAttemptCap(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		last = c.postForm("/verify-code", url.Values{"code": {"000000"}})
 	}
-	if !strings.Contains(last.Body.String(), "Too many incorrect attempts") {
+	if !strings.Contains(last.Body.String(), "entered incorrectly too many times") {
 		t.Errorf("non-permitted address did not reach the attempt cap like a permitted one: %q", last.Body.String())
 	}
 }
@@ -1058,7 +1058,7 @@ func TestResendTransitionsMatchForDecoy(t *testing.T) {
 	state := func(rec *httptest.ResponseRecorder) string {
 		body := rec.Body.String()
 		switch {
-		case strings.Contains(body, "Too many incorrect attempts"):
+		case strings.Contains(body, "entered incorrectly too many times"):
 			return "locked"
 		case strings.Contains(body, "Incorrect code"):
 			return "mismatch"
@@ -1112,7 +1112,7 @@ func TestRecentCodeReadErrorKeepsCounters(t *testing.T) {
 	srv.store = recentCheckFails{srv.store}
 	c.postForm("/request", url.Values{"email": {"user@example.com"}})
 	rec := c.postForm("/verify-code", url.Values{"code": {"nope"}})
-	if !strings.Contains(rec.Body.String(), "Too many incorrect attempts") {
+	if !strings.Contains(rec.Body.String(), "entered incorrectly too many times") {
 		t.Fatalf("counters were reset by a re-request during a read error; got %d:\n%s", rec.Code, rec.Body.String())
 	}
 }

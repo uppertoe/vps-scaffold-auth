@@ -136,7 +136,7 @@ func TestReviewWarnings(t *testing.T) {
 		"r.user": {"network:rch", "guests:"},
 	})
 	for _, want := range []string{
-		"Save these changes?",
+		"Review the changes",
 		"Nobody will hold Administrator once this is saved, so /admin/* will be closed to everyone.",
 		"Anyone on the RCH network will reach every other path without signing in.",
 		"Anyone who confirms an email address will reach every other path.",

@@ -82,6 +82,10 @@ type pageData struct {
 	// are carried to /request as hidden fields.
 	RoleGuard       bool
 	RoleHintDomains string
+	// RoleHint is the sentence that suggests the role's domains.
+	RoleHint string
+	// LinkText replaces the message page's "Back to sign in".
+	LinkText string
 	// EmailPlaceholder is the login field's example address, derived from the
 	// effective domain (the route requirement, else the configured allow-list)
 	// as you@<domain>; empty falls back to a generic example in the template.

@@ -2,27 +2,27 @@
 {{define "content"}}
 {{with .Settings}}
 <h1>Settings</h1>
-<p class="sub">Runtime operational settings. These override the environment defaults and take effect immediately.</p>
+<p class="sub">Changes on this page take effect as soon as you save them.</p>
 
 <form method="post" action="/admin/settings">
   <input type="hidden" name="csrf" value="{{$.CSRF}}">
 
   <div class="panel">
-    <h2>Break-glass access</h2>
+    <h2>Card sessions</h2>
     <label for="hours">Session duration (hours)</label>
     <input id="hours" name="hours" type="number" min="0.25" max="12" step="0.25" value="{{.BreakGlassHours}}" style="max-width:160px">
-    <p class="muted">How long a session granted by scanning a break-glass card lasts (maximum 12 hours). These sessions are never renewed. Revoking or re-minting the card ends them early. Keep it short.</p>
+    <p class="muted">A session started by scanning a card lasts this many hours, up to 12, and is never renewed. Replacing or withdrawing the card ends its sessions.</p>
   </div>
 
   <div class="panel">
-    <h2>Use notifications</h2>
-    <label for="emails">Notify emails</label>
+    <h2>When a card is used</h2>
+    <label for="emails">Email these addresses</label>
     <input id="emails" name="emails" type="text" value="{{.NotifyEmails}}" placeholder="oncall@example.com, lead@example.com">
-    <p class="muted">Comma-separated. Emailed whenever a break-glass code is used. Leave blank to disable email notifications.</p>
+    <p class="muted">Separate addresses with commas. If the box is empty, no email is sent.</p>
 
     <label for="webhook">Webhook URL</label>
     <input id="webhook" name="webhook" type="url" value="{{.WebhookURL}}" placeholder="https://ntfy.sh/your-topic">
-    <p class="muted">Optional. A JSON payload is POSTed here on each use (ntfy / Slack / Pushover style). Timeout: {{.WebhookTimeout}}. Leave blank to disable.</p>
+    <p class="muted">If you enter an address, the gateway sends it a JSON message each time a card is used, and waits up to {{.WebhookTimeout}} for an answer.</p>
   </div>
 
   <button type="submit">Save settings</button>

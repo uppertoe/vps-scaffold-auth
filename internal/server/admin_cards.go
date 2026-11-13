@@ -36,7 +36,7 @@ const (
 	msgCardCreatedSubj = "A break-glass card has been created for %s."
 	msgCardReplaceSubj = "The break-glass card for %s has been replaced."
 	msgCardWithdrawSub = "The break-glass card for %s has been withdrawn."
-	msgCardNoPages     = "The app's snippet names no page a card may open."
+	msgCardNoPages     = msgCardNoPagesApproved
 	msgLegacyHeading   = "Cards that open a group"
 	msgLegacyNote      = "These cards were made before app roles, and each one opens the sites of its group. They keep working until they are replaced or withdrawn."
 )
@@ -399,6 +399,7 @@ type newCardView struct {
 	PreviewURL  string
 	Caption     string
 	RolesOn     bool
+	ChooseFirst string
 	// Without app roles, a card still opens a group (the form before app
 	// roles).
 	Targets  []targetOptionView
@@ -412,6 +413,7 @@ type newCardApp struct {
 	Cards       string
 	Reach       reachView
 	Pages       []newCardPage
+	PagesHint   string
 	Disabled    bool
 	Checked     bool
 }
@@ -439,7 +441,8 @@ func (s *Server) handleAdminBreakNew(w http.ResponseWriter, r *http.Request) {
 // missing after a refused create.
 func (s *Server) renderNewCard(w http.ResponseWriter, r *http.Request, status int, label, note, app, page, design, group, redirect, warning string) {
 	ctx := r.Context()
-	v := &newCardView{Label: trimField(label), Note: trimField(note), App: app, RolesOn: s.rolesOn(), Group: group, Redirect: redirect}
+	v := &newCardView{Label: trimField(label), Note: trimField(note), App: app, RolesOn: s.rolesOn(), Group: group, Redirect: redirect,
+		ChooseFirst: msgCardChooseAppFirst}
 	designs, err := s.store.ListCardDesigns(ctx)
 	if err != nil {
 		s.adminError(w, r)
@@ -464,7 +467,8 @@ func (s *Server) renderNewCard(w http.ResponseWriter, r *http.Request, status in
 			return
 		}
 		for _, a := range s.appRoles.Sorted() {
-			na := newCardApp{Name: a.Name, Label: a.Label, Token: tokenView{Icon: iconApp, Label: a.Label, Title: a.Label + ": User"}}
+			na := newCardApp{Name: a.Name, Label: a.Label, Token: tokenView{Icon: iconApp, Label: a.Label, Title: a.Label + ": User"},
+				PagesHint: fmt.Sprintf(msgCardPagesHint, a.Label)}
 			n := len(world.cardsFor(a.Name, roles.UserRole))
 			if n == 0 {
 				na.Cards = "No cards yet"

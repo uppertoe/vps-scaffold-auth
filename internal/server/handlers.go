@@ -411,7 +411,7 @@ func applyRoleHint(d *pageData, rqr, rhd string) {
 	d.RoleGuard = true
 	if rhd = clampHint(rhd); rhd != "" {
 		d.RoleHintDomains = rhd
-		d.HintDomains = formatDomains(rhd)
+		d.RoleHint = fmt.Sprintf(msgRoleHint, formatDomains(rhd))
 	}
 }
 
@@ -522,7 +522,7 @@ func formatDomains(s string) string {
 	fields := strings.FieldsFunc(s, func(r rune) bool {
 		return r == ',' || r == ' ' || r == ';' || r == '\n' || r == '\r' || r == '\t'
 	})
-	return strings.ToLower(strings.Join(fields, ", "))
+	return strings.ToLower(joinOr(fields))
 }
 
 // handleRoot handles a bare hit to the auth host. An already-signed-in visitor
@@ -655,7 +655,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// handleVerify with Caddy's trusted header_up.
 	if rqd != "" && !authz.CanAccessApp(emailAddr, "", false, false, rqd, "", false) {
 		data := pageData{
-			Error:    "This app is only available to " + domainLabel(rqd, dlabel) + " email addresses. Please sign in with one of those.",
+			Error:    fmt.Sprintf(msgDeclineDomain, domainLabel(rqd, dlabel), withArticle(domainLabel(rqd, dlabel))),
 			Redirect: rd, Remember: remember, RequireGroups: rqg,
 		}
 		applyAccessHint(&data, rqd, dlabel)
@@ -1025,11 +1025,11 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeLockedOut)
 		s.sessions.ClearState(w)
-		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusUnauthorized, st, rd, "Too many incorrect attempts. Please request a new code.", true) {
+		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusUnauthorized, st, rd, msgInviteCodeTooMany, true) {
 			return
 		}
 		s.render(w, http.StatusUnauthorized, "login", pageData{
-			Error: "Too many incorrect attempts. Please request a new code.", Redirect: rd,
+			Error: msgLoginTooMany, Redirect: rd,
 		})
 	default: // ConsumeExpired, ConsumeNoCode
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeExpired)
@@ -1726,8 +1726,7 @@ func (s *Server) activeCard(w http.ResponseWriter, r *http.Request, token, ip, u
 
 func (s *Server) cardNotAvailable(w http.ResponseWriter) {
 	s.render(w, http.StatusNotFound, "message", pageData{
-		Title:   "Access code not available",
-		Message: "This emergency access code is not active. Please contact an administrator.",
+		Title: msgCardUnknownTitle, Message: msgCardUnknownBody, LinkText: msgCardUnknownLink,
 	})
 }
 
@@ -1871,10 +1870,7 @@ func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request
 	// made from the old code is refused like a revoked card.
 	if !ok || code.Status != store.BreakGlassActive || offer.Gen != cardGeneration(code) {
 		log.Printf("break-glass activate denied (inactive, unknown or re-minted code %d) from %s", offer.CodeID, ip)
-		s.render(w, http.StatusNotFound, "message", pageData{
-			Title:   "Access code not available",
-			Message: "This emergency access code is not active. Please contact an administrator.",
-		})
+		s.cardNotAvailable(w)
 		return
 	}
 

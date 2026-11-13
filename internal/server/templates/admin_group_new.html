@@ -10,7 +10,7 @@
   <input type="hidden" name="from" value="new">
   {{if .Kinds}}
   <section class="fsec">
-    <h2><span class="step">1</span>What kind of group?</h2>
+    <h2><span class="step">1</span>Kind of group</h2>
     <label class="choice"><input type="radio" name="kind" value="domain"{{if eq .Kind "domain"}} checked{{end}}><span class="r"></span><span class="cl"><b>Domain group</b><small>Everyone at one or more email domains, such as rch.org.au.</small></span></label>
     <label class="choice"><input type="radio" name="kind" value="list"{{if ne .Kind "domain"}} checked{{end}}><span class="r"></span><span class="cl"><b>List</b><small>Named people, kept by hand or filled from a feed.</small></span></label>
   </section>
@@ -32,7 +32,7 @@
     <p class="hint">{{.OrgText.Hint}}</p>
   </section>
   <section class="fsec for-list">
-    <h2><span class="step">3</span>How is the list kept?</h2>
+    <h2><span class="step">3</span>How the list is kept</h2>
     <div class="segs"><span class="on">By hand</span><span class="off" aria-disabled="true">From a feed</span></div>
     <p class="hint">A feed is set by the server's configuration, so a list filled from a feed appears here once the server has been set up.</p>
   </section>

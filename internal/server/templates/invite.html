@@ -19,7 +19,7 @@
          autocomplete="one-time-code" autofocus required placeholder="{{$.CodePlaceholder}}">
   <button type="submit">{{.CodeButton}}</button>
 </form>{{end}}
-{{if .Token}}<p class="hint">{{.Late}}</p>
+{{if .Token}}{{if .Late}}<p class="hint">{{.Late}}</p>{{end}}
 <form class="secondary" method="post" action="/invite/send"><input type="hidden" name="token" value="{{.Token}}"><button type="submit" class="secondary">{{.NewCode}}</button></form>{{end}}
 {{else}}
 {{if .Token}}<form method="post" action="/invite/send"><input type="hidden" name="token" value="{{.Token}}"><button type="submit">{{.SendCode}}</button></form>{{end}}

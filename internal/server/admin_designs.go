@@ -370,7 +370,7 @@ func (s *Server) renderDesign(w http.ResponseWriter, r *http.Request, status int
 		v.SaveNote = "Saving changes no printed card."
 	default:
 		v.Sub = capFirst(countWords(n, "active card uses", "active cards use")) + " this design."
-		v.SaveNote = "Saving changes " + countWords(n, "card", "cards") + ". Printed cards keep working, and you can reprint them for the new look."
+		v.SaveNote = fmt.Sprintf(msgDesignSaveNote, countWords(n, "card", "cards"))
 	}
 	if !v.New {
 		v.Action = "/admin/break/designs/" + strconv.FormatInt(d.ID, 10) + "/save"

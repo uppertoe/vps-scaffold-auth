@@ -326,6 +326,11 @@ func (s *Server) renderInviteCodeError(w http.ResponseWriter, r *http.Request, s
 	}
 	p := s.inviteCodePage(a, v, token, rd)
 	p.Error, p.CodeForm = msg, !ended
+	if ended {
+		// The code step has ended, so the lines about the sent code and
+		// entering it no longer apply.
+		p.Lines, p.Late = nil, ""
+	}
 	s.renderInvite(w, status, p)
 	return true
 }

@@ -228,3 +228,17 @@ func TestNetworkAndGuestsOnlyForUser(t *testing.T) {
 		}
 	}
 }
+
+// The sign-in hints join their domains with "or", and the decline names
+// them with their article.
+func TestDomainsJoinedWithOr(t *testing.T) {
+	if got := formatDomains("rch.org.au, mcri.edu.au"); got != "rch.org.au or mcri.edu.au" {
+		t.Errorf("formatDomains = %q", got)
+	}
+	if got := fmt.Sprintf(msgRoleHint, formatDomains("rch.org.au,mcri.edu.au")); got != "If you have an rch.org.au or mcri.edu.au email address, sign in with that address." {
+		t.Errorf("role hint = %q", got)
+	}
+	if withArticle("rch.org.au") != "an rch.org.au" || withArticle("gosh.nhs.uk") != "a gosh.nhs.uk" {
+		t.Error("withArticle chose the wrong article")
+	}
+}

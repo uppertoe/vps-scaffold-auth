@@ -65,7 +65,7 @@
     <select name="person_role" aria-label="Role">{{range .Roles}}<option value="{{.Role}}">{{.Label}}</option>{{end}}</select>
     <input type="date" name="until" aria-label="End date (optional)" title="End date (optional)">
     <button type="submit" class="ghost">Add</button>
-    {{if $.RolesOn}}<a class="ghostbtn" href="{{.InviteHref}}">Invite with an end date</a>{{end}}
+    {{if $.RolesOn}}<a class="ghostbtn" href="{{.InviteHref}}">Invite by email</a>{{end}}
   </form>
 </div>
 
@@ -118,7 +118,7 @@
   <form class="dialog" role="dialog" aria-modal="true" aria-labelledby="rv" method="post" action="/admin/apps/{{$app}}/save">
     <input type="hidden" name="csrf" value="{{$csrf}}">
     {{range .Values}}<input type="hidden" name="c" value="{{.}}">{{end}}
-    <h2 id="rv">Save these changes?</h2>
+    <h2 id="rv">Review the changes</h2>
     <ul>{{range .Items}}<li><span>{{.Role}}</span><span>{{.Op}}</span><span>{{if .Token}}{{template "token" .Token}}{{else}}{{.Person}}{{end}}</span></li>{{end}}</ul>
     {{range .Warnings}}<p class="warnline">{{.}}</p>{{end}}
     <p>{{.Note}}</p>

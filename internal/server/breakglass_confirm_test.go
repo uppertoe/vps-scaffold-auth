@@ -71,7 +71,7 @@ func TestBreakGlassPostRefusesCrossSiteAndBadTokens(t *testing.T) {
 	}
 	for _, tok := range []string{"", "not-a-real-token"} {
 		rec := c.postForm("/break", url.Values{"token": {tok}})
-		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "Access code not available") {
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), msgCardUnknownTitle) {
 			t.Errorf("POST token %q = %d, want the neutral page", tok, rec.Code)
 		}
 	}
@@ -101,7 +101,7 @@ func TestBreakGlassCardRefusedOnceTargetIsAppRole(t *testing.T) {
 	// A page opened before the change, or the token posted from a photo,
 	// is refused at the grant, recorded, and reported.
 	rec := c.postForm("/break", url.Values{"token": {token}})
-	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "Access code not available") {
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), msgCardUnknownTitle) {
 		t.Fatalf("grant = %d, want the neutral page", rec.Code)
 	}
 	if c.cookies[session.SessionCookie] != nil {

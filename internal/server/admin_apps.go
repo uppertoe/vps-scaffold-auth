@@ -20,7 +20,7 @@ import (
 // The Apps pages: every app role and who holds it (GET /admin/apps), and one
 // app's page, where its roles are given and taken away
 // (GET /admin/apps/{app}). A change on an app's page is first shown for
-// review ("Save these changes?"), with the warnings the server finds, and is
+// review ("Review the changes"), with the warnings the server finds, and is
 // then saved in one transaction with a record of each change, after which the
 // other administrators are emailed once.
 
@@ -555,7 +555,7 @@ func decodeChange(app, v string) (roleChange, bool) {
 	return c, true
 }
 
-// reviewView is the "Save these changes?" dialog.
+// reviewView is the "Review the changes" dialog.
 type reviewView struct {
 	Items    []reviewItem
 	Warnings []string

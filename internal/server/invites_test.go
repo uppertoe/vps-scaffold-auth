@@ -299,10 +299,10 @@ func TestInvitationCodeLockedOut(t *testing.T) {
 		wrong = "111111"
 	}
 	var body string
-	for i := 0; i < srv.cfg.OTPMaxAttempts+1 && !strings.Contains(body, "Too many"); i++ {
+	for i := 0; i < srv.cfg.OTPMaxAttempts+1 && !strings.Contains(body, "too many times"); i++ {
 		body = html.UnescapeString(p.postForm("/verify-code", url.Values{"code": {wrong}, "token": {token}}).Body.String())
 	}
-	if !strings.Contains(body, "Too many incorrect attempts. Please request a new code.") || strings.Contains(body, `action="/verify-code"`) ||
+	if !strings.Contains(body, msgInviteCodeTooMany) || strings.Contains(body, `action="/verify-code"`) || strings.Contains(body, "We have sent a code") || strings.Contains(body, "has not arrived") ||
 		!strings.Contains(body, ">Send a new code</button>") || strings.Contains(body, "Use a different email") {
 		t.Errorf("locked out:\n%s", body)
 	}

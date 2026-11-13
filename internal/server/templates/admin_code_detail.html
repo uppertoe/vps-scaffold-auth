@@ -30,7 +30,7 @@
     <dl class="cfacts">
       <div><dt>Opens</dt><dd>{{if .AppLabel}}{{if .Group}}<span>{{.AppLabel}}</span>{{else}}{{template "token" .AppToken}}<span class="muted">as a user</span>{{end}}{{else}}<span>The group {{.Group}}</span>{{end}}</dd></div>
       <div><dt>A scan opens</dt><dd><span>{{.PageLabel}}</span>{{if ne .PageLabel .PageURL}}<span class="muted mono">{{.PageURL}}</span>{{end}}</dd></div>
-      <div><dt>Note for administrators</dt><dd><span>{{if .Note}}{{.Note}}{{else}}<span class="muted">No note</span>{{end}}</span><span class="muted"> · not printed</span></dd></div>
+      <div><dt>Note for administrators</dt><dd>{{if .Note}}<span>{{.Note}}</span><span class="muted"> · not printed</span>{{else}}<span class="muted">No note</span>{{end}}</dd></div>
     </dl>
     <div class="acthead"><h2>Activity</h2><span class="muted">{{.UsesLine}}</span></div>
     <div class="rlist tbl events">

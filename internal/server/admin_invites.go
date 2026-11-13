@@ -55,7 +55,7 @@ const (
 	msgInviteNoAddress   = "Nothing has been checked, because no address has been entered."
 	msgInviteTooMany     = "Nothing has been checked, because more than 100 addresses have been entered. Invite them in smaller batches."
 	msgInviteNoRole      = "Nothing has been checked, because no role has been chosen."
-	msgInviteNoDate      = "Nothing has been checked. Enter the end date as a day, month and year."
+	msgInviteNoDate      = "Nothing has been checked, because the end date is missing. Enter the end date as a day, month and year."
 	msgInviteDatePassed  = "Nothing has been checked, because the end date has passed."
 	msgInviteLongMessage = "Nothing has been checked, because the message is longer than 500 characters."
 	msgInvitesNone       = "No invitations have been sent."
