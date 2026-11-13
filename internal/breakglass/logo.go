@@ -97,26 +97,68 @@ func decodeLogo(data []byte, mime string) (image.Image, bool) {
 	return img, true
 }
 
-// whiten turns a logo white. A logo with transparency keeps its shape and
-// every visible pixel becomes white; a logo without (a JPEG, or a PNG on a
-// solid background) takes its shape from how dark each pixel is, so dark
-// marks on a light background become white marks on nothing.
+// whiten turns a logo white. A mark drawn on transparency keeps its shape
+// and every visible pixel becomes white. A logo on a solid tile (a JPEG, a
+// PNG on a solid background, or a coloured badge with transparent corners)
+// takes its shape from how dark each pixel is, so dark marks on a light
+// background become white marks on nothing, and a dark tile becomes a white
+// one with its light lettering cut out, rather than a white block.
 func whiten(img *image.NRGBA) {
-	transparent := false
-	for i := 3; i < len(img.Pix); i += 4 {
-		if img.Pix[i] < 250 {
-			transparent = true
-			break
-		}
-	}
+	solid := solidImage(img)
 	for i := 0; i < len(img.Pix); i += 4 {
 		a := img.Pix[i+3]
-		if !transparent {
+		if solid {
+			// Darkness, stretched so that a dark tile or mark is fully
+			// white rather than nearly so.
 			l := lum(rgb{int(img.Pix[i]), int(img.Pix[i+1]), int(img.Pix[i+2])})
-			a = uint8(255 - int(l*255+0.5))
+			d := (1 - l) / 0.85 * 255
+			if d < float64(a) {
+				a = uint8(d + 0.5)
+			}
 		}
 		img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = 255, 255, 255, a
 	}
+}
+
+// solidImage reports whether a logo sits on a solid tile: within the box
+// that holds its visible pixels, three in four pixels are opaque (a round
+// badge fills about 79% of its box). A mark drawn on transparency
+// (lettering, an outline) leaves far more of its box clear.
+func solidImage(img image.Image) bool {
+	b := img.Bounds()
+	minX, minY, maxX, maxY := b.Max.X, b.Max.Y, b.Min.X-1, b.Min.Y-1
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if _, _, _, a := img.At(x, y).RGBA(); a > 0x1000 {
+				minX, minY, maxX, maxY = min(minX, x), min(minY, y), max(maxX, x), max(maxY, y)
+			}
+		}
+	}
+	if maxX < minX {
+		return false
+	}
+	opaque, all := 0, 0
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			all++
+			if _, _, _, a := img.At(x, y).RGBA(); a >= 0xf000 {
+				opaque++
+			}
+		}
+	}
+	return opaque*4 >= all*3
+}
+
+// LogoSolid reports whether a logo sits on a solid tile (see solidImage).
+// Made white, such a logo reads as a tile with its lettering cut out, so
+// a design is better showing it on a white panel. ok is false for a logo
+// that cannot be read.
+func LogoSolid(data []byte, mime string) (solid, ok bool) {
+	img, ok := decodeLogo(data, mime)
+	if !ok {
+		return false, false
+	}
+	return solidImage(img), true
 }
 
 // LogoInk is a logo's own colour as "#rrggbb": the average of its visible

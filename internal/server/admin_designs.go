@@ -174,6 +174,10 @@ type designEditView struct {
 	HasOwnLogo bool
 	InkSite    string
 	InkOwn     string
+	// SolidSite and SolidOwn mark a logo on a solid tile, which reads best
+	// on a white panel (see breakglass.LogoSolid).
+	SolidSite bool
+	SolidOwn  bool
 	Title      string
 	Steps      string
 	Sizes      []choiceView
@@ -200,6 +204,12 @@ type choiceView struct {
 func (s *Server) handleAdminDesignNew(w http.ResponseWriter, r *http.Request) {
 	d := defaultDesign()
 	d.ID, d.Name = 0, ""
+	// A site logo on a solid tile starts on a white panel.
+	if logo, mime, _, err := s.siteLogo(r.Context()); err == nil && len(logo) > 0 {
+		if solid, _ := breakglass.LogoSolid(logo, mime); solid {
+			d.LogoMode = store.DesignLogoPanel
+		}
+	}
 	if r.URL.Query().Get("draft") != "" {
 		d, _ = designFromForm(r.URL.Query().Get, d)
 	}
@@ -375,19 +385,24 @@ func (s *Server) renderDesign(w http.ResponseWriter, r *http.Request, status int
 	// The logo's own colour, for the readability check of each source.
 	if logo, mime, _, err := s.siteLogo(ctx); err == nil && len(logo) > 0 {
 		v.InkSite, _ = breakglass.LogoInk(logo, mime)
+		v.SolidSite, _ = breakglass.LogoSolid(logo, mime)
 	}
 	if stored, found, _ := s.store.GetCardDesign(ctx, d.ID); found && len(stored.Logo) > 0 {
 		v.HasOwnLogo = true
 		v.InkOwn, _ = breakglass.LogoInk(stored.Logo, stored.LogoType)
+		v.SolidOwn, _ = breakglass.LogoSolid(stored.Logo, stored.LogoType)
 	}
-	ink, hasLogo := v.InkSite, v.InkSite != ""
+	ink, hasLogo, solid := v.InkSite, v.InkSite != "", v.SolidSite
 	if d.LogoSource == store.DesignLogoOwn {
-		ink, hasLogo = v.InkOwn, v.HasOwnLogo
+		ink, hasLogo, solid = v.InkOwn, v.HasOwnLogo, v.SolidOwn
 	}
 	if d.LogoSource == store.DesignLogoNone {
 		hasLogo = false
 	}
 	best, ok := breakglass.LogoReadable(d.Header, d.LogoMode, ink, hasLogo)
+	if solid {
+		best = store.DesignLogoPanel
+	}
 	if !ok {
 		v.LogoWarn = msgLogoWarnAsIs
 		if best == store.DesignLogoWhite {

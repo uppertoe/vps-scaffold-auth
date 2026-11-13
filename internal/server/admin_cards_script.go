@@ -63,6 +63,7 @@ const designScript template.JS = `(function () {
     var ink = src === "own" ? f.getAttribute("data-ink-own") : f.getAttribute("data-ink-site");
     var has = src !== "none" && !!ink;
     var best = has && contrast("#ffffff", header) >= contrast(ink, header) ? "white" : "asis";
+    if (has && f.getAttribute(src === "own" ? "data-solid-own" : "data-solid-site") === "1") best = "panel";
     f.querySelectorAll("[data-rec]").forEach(function (e) { e.hidden = !has || e.getAttribute("data-rec") !== best; });
     var ok = !has || mode === "panel" || contrast(mode === "white" ? "#ffffff" : ink, header) >= 3;
     document.getElementById("logoWarn").textContent = ok ? "" : f.getAttribute(best === "white" ? "data-logo-warn-white" : "data-logo-warn-asis");

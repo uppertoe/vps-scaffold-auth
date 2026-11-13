@@ -5,7 +5,7 @@
 {{with .DesignEd}}
 <a class="back" href="/admin/break/designs">&larr; All designs</a>
 <div class="ptitle"><div><h1>{{if .Name}}{{.Name}}{{else}}New design{{end}}</h1><p>{{.Sub}}</p></div></div>
-<form id="de" method="post" action="{{.Action}}" enctype="multipart/form-data" data-id="{{.ID}}" data-sample="{{.Sample}}" data-app="{{.SampleApp}}" data-ink-site="{{.InkSite}}" data-ink-own="{{.InkOwn}}" data-accent-warn="The accent colour is hard to see on white. Choose a darker accent." data-logo-warn-white="The logo is hard to see on this header colour. Choose In white, or On a white panel." data-logo-warn-asis="The logo is hard to see on this header colour. Choose As uploaded, or On a white panel.">
+<form id="de" method="post" action="{{.Action}}" enctype="multipart/form-data" data-id="{{.ID}}" data-sample="{{.Sample}}" data-app="{{.SampleApp}}" data-ink-site="{{.InkSite}}" data-ink-own="{{.InkOwn}}" data-solid-site="{{if .SolidSite}}1{{end}}" data-solid-own="{{if .SolidOwn}}1{{end}}" data-accent-warn="The accent colour is hard to see on white. Choose a darker accent." data-logo-warn-white="The logo is hard to see on this header colour. Choose In white, or On a white panel." data-logo-warn-asis="The logo is hard to see on this header colour. Choose As uploaded, or On a white panel.">
 <input type="hidden" name="csrf" value="{{$csrf}}">
 <div class="cardlayout reverse">
   <div>
