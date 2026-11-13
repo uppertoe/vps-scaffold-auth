@@ -177,7 +177,7 @@ func (s *Server) heldRoles(r *http.Request, id *session.Identity, app string) []
 		Email:      id.Email,
 		Guest:      id.Kind == session.KindGuest,
 		BreakGlass: id.Kind == session.KindBreakGlass,
-		Lists:      listSet(id.Groups),
+		Lists:      sessionLists(id),
 		Addr:       clientAddr(r),
 	}
 	if sub.BreakGlass {
@@ -188,10 +188,14 @@ func (s *Server) heldRoles(r *http.Request, id *session.Identity, app string) []
 	return roles.Held(app, sub, st.assignments, s.roleEnv(st))
 }
 
-func listSet(groups string) map[string]bool {
+// sessionLists are the lists a session's person belongs to: its groups
+// without the tier token (user, admin or guest) and any other reserved name,
+// which BuildGroups never takes from a stored group, so a list assignment
+// matches real membership only.
+func sessionLists(id *session.Identity) map[string]bool {
 	out := map[string]bool{}
-	for _, g := range strings.Split(groups, ",") {
-		if g = strings.TrimSpace(g); g != "" {
+	for _, g := range strings.Split(id.Groups, ",") {
+		if g = strings.TrimSpace(g); g != "" && !authz.IsReservedGroup(g) {
 			out[g] = true
 		}
 	}
@@ -365,7 +369,7 @@ func (s *Server) mayHoldRoleSnapshot(ctx context.Context, id *session.Identity) 
 		return false
 	}
 	st := s.roleData(ctx)
-	return roles.MaySignIn(id.Email, listSet(id.Groups), st.assignments, s.roleEnv(st))
+	return roles.MaySignIn(id.Email, sessionLists(id), st.assignments, s.roleEnv(st))
 }
 
 // loginRole is the sign-in decision: the allow-list and administrators as

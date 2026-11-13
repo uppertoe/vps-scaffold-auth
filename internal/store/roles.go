@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"strings"
 	"time"
 )
@@ -234,6 +235,11 @@ func checkAssignment(ctx context.Context, q querier, a *RoleAssignment) error {
 	}
 	switch a.Kind {
 	case AssignDomainGroup, AssignList:
+		// A group stored under a reserved name (legacy data, manual SQL)
+		// would be matched against a session's tier token, not its members.
+		if authz.IsReservedGroup(a.Ref) {
+			return ErrInvalidAssignment
+		}
 		want := GroupKindDomain
 		if a.Kind == AssignList {
 			want = GroupKindList

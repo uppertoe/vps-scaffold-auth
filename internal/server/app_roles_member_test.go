@@ -142,3 +142,25 @@ func TestMemberTierAtRenewal(t *testing.T) {
 		t.Errorf("former staff member with a role on the role guard = %d, want 200", rec.Code)
 	}
 }
+
+// A list assignment matches real list membership only, never the tier token
+// in a session's groups, even if a group under a reserved name was given a
+// role behind the admin pages' back.
+func TestListAssignmentIgnoresTierToken(t *testing.T) {
+	srv, sender := rolesServer(t, "")
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "user@example.com", nil)
+	wantDenied(t, "before the assignment", c.get("/verify", roleGuard("enquiries", "")))
+	// The assignment the store now refuses, put straight into the cache.
+	st := srv.roleData(context.Background())
+	for _, tier := range []string{authz.RoleUser, authz.RoleAdmin, authz.RoleGuest} {
+		st.assignments = append(st.assignments, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignList, Ref: tier})
+	}
+	srv.roleCache.mu.Lock()
+	srv.roleCache.state, srv.roleCache.at, srv.roleCache.ok = st, srv.now(), true
+	srv.roleCache.mu.Unlock()
+	wantDenied(t, "a list assignment named after the tier", c.get("/verify", roleGuard("enquiries", "")))
+	if got := sessionLists(&session.Identity{Groups: "guest,fellows,user,admin"}); len(got) != 1 || !got["fellows"] {
+		t.Errorf("sessionLists = %v, want fellows only", got)
+	}
+}

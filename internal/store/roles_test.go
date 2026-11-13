@@ -227,3 +227,22 @@ func TestRoleSchemaMigratesOldDatabase(t *testing.T) {
 		t.Errorf("role_assignments missing after migrate: %v", err)
 	}
 }
+
+// A list or domain group stored under a reserved name (legacy data, manual
+// SQL) cannot be given a role: a session's tier token would match it, not
+// its members.
+func TestAssignmentRefusesReservedGroupNames(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, name := range []string{"user", "admin", "guest"} {
+		if err := s.CreateGroupOfKind(ctx, name, "", GroupKindList); err != nil {
+			t.Fatalf("create %q: %v", name, err)
+		}
+		for _, kind := range []string{AssignList, AssignDomainGroup} {
+			err := s.AddRoleAssignment(ctx, RoleAssignment{App: "enquiries", Role: "admin", Kind: kind, Ref: name})
+			if !errors.Is(err, ErrInvalidAssignment) {
+				t.Errorf("assign %s %q: err = %v, want ErrInvalidAssignment", kind, name, err)
+			}
+		}
+	}
+}
