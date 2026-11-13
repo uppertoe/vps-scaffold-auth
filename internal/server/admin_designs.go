@@ -176,8 +176,8 @@ type designEditView struct {
 	InkOwn     string
 	// SolidSite and SolidOwn mark a logo on a solid tile, which reads best
 	// on a white panel (see breakglass.LogoSolid).
-	SolidSite bool
-	SolidOwn  bool
+	SolidSite  bool
+	SolidOwn   bool
 	Title      string
 	Steps      string
 	Sizes      []choiceView
