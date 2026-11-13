@@ -68,7 +68,7 @@ has its own test, named in the table.
 | G10 | Guessing at a code is bounded per network and in total, and a stranger cannot destroy or reset an owner's code. | `ConsumeCode`, the resend cooldown | `TestConsumeCodeAggregateCapAcrossIPs`, `TestConsumeCodeAttemptCapPerIP`, `TestResendWithinCooldownDoesNotResetAttempts`, `TestOverLimitDecoyDoesNotBlockOwner` |
 | G11 | The sign-in flow does not reveal which addresses are allowed. | Decoy codes; mail sent after the response | `TestVerifyCodeDoesNotEnumerate`, `TestDisallowedEmailNoCodeButSameResponse`, `TestResendTransitionsMatchForDecoy` |
 | G12 | Renewal re-checks the rules and recalculates groups. | `handleVerify`, `renewalRole` | `TestRevokedPrincipalNotRenewed`, `TestDemotedAdminLosesAdminGroupAtRenewal`; e2e: *an admin change through Caddy reaches a session at its next request* |
-| G13 | No code, cookie value or card token reaches the log. | No logging of them; the log mail backend refused outside development | `TestSecretsNeverReachTheLog`, `TestLoadLogBackendRequiresInsecure` |
+| G13 | No code, cookie value, card token or invitation token reaches the log. | No logging of them; the log mail backend refused outside development; the auth host's `log_skip` for `/break`, `/break/*` and `/invite/*` in `deploy/auth.caddy` keeps the tokens in those paths out of Caddy's access log | `TestSecretsNeverReachTheLog`, `TestLoadLogBackendRequiresInsecure` |
 | G14 | The gateway refuses to start on an unsafe or malformed setting. | `config.validate` | the `TestLoad…` tests, `TestMalformedBooleanRefused` |
 | G15 | One anonymous visitor cannot exhaust the gateway. | Body and header caps, upload checks, the logo cache | `TestPublicFormsCapBodies`, `TestDeclaredOversizeIsRefused`, `TestCheckRasterRefusesCraftedPNGs`, `TestCheckSVG` |
 | G16 | Mail is never sent unencrypted, and a notification webhook cannot reach the host or cloud metadata. | `email/smtp.go`, `breakglass.dialGuarded` | `TestWebhookRefusesNameResolvingToBlockedAddress`, `TestWebhookDoesNotFollowRedirects` |
@@ -105,8 +105,9 @@ has its own test, named in the table.
 - **Break-glass cards end to end.** A card's token exists only in its QR image.
   Card behaviour is gateway logic, proven by the unit tests under G7. The
   group guard a card depends on is proven end to end under the `reports` host.
-- **Keeping card tokens out of Caddy's access log.** This depends on the
-  server's logging configuration.
+- **Keeping card and invitation tokens out of Caddy's access log.** The
+  reference `auth.caddy` skips those paths, but whether a server's own copy
+  does, and what else it logs, depends on the server's logging configuration.
 
 ## Accepted, and why
 
