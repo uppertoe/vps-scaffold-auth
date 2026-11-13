@@ -30,8 +30,11 @@ func roleLoginURL(t *testing.T, srv *Server, app, role string) url.Values {
 	return u.Query()
 }
 
-// A role guard hints the domains of the domain groups holding its role, and
-// declines early (rqd) only when domain groups are the only holders.
+// A role guard hints the domains of the domain groups holding its role only
+// when domain groups are its only assignments: as rqd, which declines early,
+// when nothing else could admit anyone, and as rhd beside rqr=1 when a card
+// or an open invitation could. Any other holder gives rqr=1 alone, so an
+// anonymous visitor learns no more about it than that mark.
 func TestRoleGuardLoginHint(t *testing.T) {
 	type hint struct{ rqd, rqr, rhd string }
 	cases := []struct {
@@ -57,7 +60,7 @@ func TestRoleGuardLoginHint(t *testing.T) {
 				mustListGroup(t, srv, "exec")
 				mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignList, Ref: "exec"})
 			},
-			want: hint{rqr: "1", rhd: "rch.org.au"},
+			want: hint{rqr: "1"},
 		},
 		{
 			name: "a domain group and a current person", app: "enquiries", role: "admin",
@@ -65,7 +68,7 @@ func TestRoleGuardLoginHint(t *testing.T) {
 				assignDomains(t, srv, "enquiries", "admin", "rch", "rch.org.au")
 				mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignPerson, Ref: "p@partner.org", How: store.AssignedByAdmin})
 			},
-			want: hint{rqr: "1", rhd: "rch.org.au"},
+			want: hint{rqr: "1"},
 		},
 		{
 			name: "a domain group and an ended person", app: "enquiries", role: "admin",
@@ -81,7 +84,7 @@ func TestRoleGuardLoginHint(t *testing.T) {
 				assignDomains(t, srv, "caffeine", "user", "rch", "rch.org.au")
 				mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignGuests})
 			},
-			want: hint{rqr: "1", rhd: "rch.org.au"},
+			want: hint{rqr: "1"},
 		},
 		{
 			name: "a domain group and a network", app: "caffeine", role: "user",
@@ -89,7 +92,7 @@ func TestRoleGuardLoginHint(t *testing.T) {
 				assignDomains(t, srv, "caffeine", "user", "rch", "rch.org.au")
 				mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignNetwork, Ref: "theatre"})
 			},
-			want: hint{rqr: "1", rhd: "rch.org.au"},
+			want: hint{rqr: "1"},
 		},
 		{
 			name: "the user role counts every role in the app", app: "enquiries", role: "user",
@@ -106,7 +109,7 @@ func TestRoleGuardLoginHint(t *testing.T) {
 				mustListGroup(t, srv, "exec")
 				mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignList, Ref: "exec"})
 			},
-			want: hint{rqr: "1", rhd: "rch.org.au"},
+			want: hint{rqr: "1"},
 		},
 		{
 			name: "another role's holders do not count for a role other than user", app: "enquiries", role: "admin",
@@ -210,10 +213,10 @@ func TestRoleGuardDeclinesEarlyForDomainGroupsOnly(t *testing.T) {
 	}
 }
 
-// From a role guard that a list also holds, the login page hints the domain
-// group's domain but never declines: an address that holds no role is sent
-// no code and sees the ordinary code page, the same page a holder sees, so
-// the page does not reveal who holds the role.
+// From a role guard that a list also holds, the login page hints no domain
+// and never declines: an address that holds no role is sent no code and sees
+// the ordinary code page, the same page a holder sees, so the page does not
+// reveal who holds the role.
 func TestRoleGuardWithOtherHoldersDoesNotDecline(t *testing.T) {
 	srv, sender := rolesServer(t, "")
 	assignDomains(t, srv, "enquiries", "admin", "rch", "rch.org.au")
@@ -226,14 +229,11 @@ func TestRoleGuardWithOtherHoldersDoesNotDecline(t *testing.T) {
 	c := newClient(t, srv.Handler())
 
 	page := c.get("/login?"+q.Encode(), nil).Body.String()
-	if !strings.Contains(page, "This page is for <strong>rch.org.au</strong> email addresses.") {
-		t.Errorf("the login page does not hint the domain group's domain:\n%s", page)
+	if strings.Contains(page, "rch.org.au") {
+		t.Errorf("the login page reveals the domain group's domain:\n%s", page)
 	}
-	if !strings.Contains(page, `name="rqr" value="1"`) || !strings.Contains(page, `name="rhd" value="rch.org.au"`) || strings.Contains(page, `name="rqd"`) {
-		t.Errorf("the login page does not carry the role guard's hint:\n%s", page)
-	}
-	if !strings.Contains(page, `placeholder="you@rch.org.au"`) {
-		t.Errorf("the placeholder does not use the hinted domain:\n%s", page)
+	if !strings.Contains(page, `name="rqr" value="1"`) || strings.Contains(page, `name="rhd"`) || strings.Contains(page, `name="rqd"`) {
+		t.Errorf("the login page does not carry the role guard's mark alone:\n%s", page)
 	}
 
 	form := func(email string) url.Values {

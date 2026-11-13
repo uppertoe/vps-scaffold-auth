@@ -114,6 +114,14 @@ These risks are known. The design docs explain each one for the department.
 
 - A visitor who calls `/verify` on the public auth host learns only their own
   identity, and can make the access log record a visit to the auth host.
+- A visitor with no session who sends a role guard's headers to `/verify`
+  learns the domains of a role whose assignments are domain groups only, in
+  the login URL's hint, as a domain guard has always shown its domains. Any
+  other holder of a role, and an open invitation or a card, shows only as
+  the role guard's mark (`rqr=1`), and an undeclared app or role is answered
+  in the same way, so app and role names cannot be tried out
+  (`roleLoginHint`, `TestRoleGuardLoginHint`,
+  `TestRoleGuardNetworkWithoutSession`).
 - An older Safari, which sends no `Sec-Fetch-Site`, can be made to sign out or
   start a sign-in by another site. It cannot complete one.
 - A stolen session works until it expires, the person's listing is removed, or

@@ -274,9 +274,17 @@ func (s *Server) roleWantsAdminStep(id *session.Identity) bool {
 // app role that is given to a network the client is inside. It reports
 // whether it wrote a response; when it did not, the caller sends the request
 // to sign in as before.
+//
+// A guard that also sends X-Auth-Policy is refused. A guard naming an app or
+// role the manifest does not declare is sent to sign in like any other (see
+// roleLoginHint), so a visitor with no session cannot tell declared names from
+// undeclared ones; once signed in, the request is refused.
 func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
 	app, role, ok := s.roleRequest(r)
 	if !ok {
+		if r.Header.Get(headerPolicy) == "" {
+			return false
+		}
 		s.redirectToDenied(w, r)
 		return true
 	}
@@ -297,23 +305,31 @@ func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
 // domain groups, it carries their domains as rqd, so the sign-in page hints
 // them and /request declines an address at none of them, exactly as for
 // protected_domains. Otherwise it carries rqr=1, which marks a role guard so
-// the page does not fall back to the allow-list's domains, and rhd, the
-// domains of any domain groups among the holders, which the page hints but
-// never declines on: an address that holds no role is then sent no code and
-// sees the ordinary "check your email" page, so the page does not reveal who
-// holds the role. Like the domain guard's hint, this is a courtesy and not a
-// boundary: /verify decides.
+// the page does not fall back to the allow-list's domains. When the role's
+// assignments are domain groups only and a card or an open invitation also
+// admits someone, it adds rhd, those domains, which the page hints but never
+// declines on; the domains are the ones rqd would otherwise carry. Any other
+// holder adds nothing, so an anonymous visitor learns of it no more than
+// rqr=1 says. An address that holds no role is sent no code and sees the
+// ordinary "check your email" page, so the page does not reveal who holds
+// the role. An app or role the manifest does not declare is answered as a
+// declared role with no hint, so names cannot be tried out. Like the domain
+// guard's hint, this is a courtesy and not a boundary: /verify decides.
 func (s *Server) roleLoginHint(r *http.Request) string {
 	app := strings.TrimSpace(r.Header.Get(headerApp))
 	role := strings.TrimSpace(r.Header.Get(headerRole))
 	if role == "" {
 		role = roles.UserRole
 	}
-	if r.Header.Get(headerPolicy) != "" || !s.appRoles.Has(app, role) {
+	if r.Header.Get(headerPolicy) != "" {
 		return ""
+	}
+	if !s.appRoles.Has(app, role) {
+		return "&rqr=1"
 	}
 	st := s.roleData(r.Context())
 	domains, only := roles.SignInDomains(app, role, st.assignments, s.roleEnv(st))
+	domainsOnly := only
 	if only {
 		// A card or an open invitation for the role admits someone outside
 		// the domains too.
@@ -333,7 +349,7 @@ func (s *Server) roleLoginHint(r *http.Request) string {
 		return "&rqd=" + url.QueryEscape(hint)
 	}
 	out := "&rqr=1"
-	if hint != "" {
+	if hint != "" && domainsOnly {
 		out += "&rhd=" + url.QueryEscape(hint)
 	}
 	return out

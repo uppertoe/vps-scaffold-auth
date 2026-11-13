@@ -171,7 +171,16 @@ func TestRoleGuardNetworkWithoutSession(t *testing.T) {
 	if rec := c.get("/verify", roleGuard("caffeine", "")); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login?") {
 		t.Errorf("no network role = %d to %q, want sign in", rec.Code, rec.Header().Get("Location"))
 	}
-	wantDenied(t, "unknown app without a session", c.get("/verify", roleGuard("nope", "")))
+	// An undeclared app or role is answered as a declared one that nobody
+	// holds: a sign-in with the role guard's mark and no hint, so names
+	// cannot be tried out. Once signed in, it is refused.
+	for _, g := range []map[string]string{roleGuard("nope", ""), roleGuard("caffeine", "editor"), roleGuard("enquiries", "admin")} {
+		rec := c.get("/verify", g)
+		loc := rec.Header().Get("Location")
+		if rec.Code != http.StatusFound || !strings.HasSuffix(loc, "&rqr=1") || !strings.Contains(loc, "/login?") {
+			t.Errorf("%v without a session = %d to %q, want sign in with rqr=1 alone", g, rec.Code, loc)
+		}
+	}
 }
 
 func TestRoleGuardBreakGlassCard(t *testing.T) {
