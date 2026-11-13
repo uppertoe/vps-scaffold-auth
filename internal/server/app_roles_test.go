@@ -258,3 +258,50 @@ func TestSignInByRole(t *testing.T) {
 		t.Errorf("model off: loginRole = %q, want deny", got)
 	}
 }
+
+// Remote-Roles lists every role held, separated by commas, as the apps split it.
+func TestRemoteRolesAreCommaSeparated(t *testing.T) {
+	srv, sender := rolesServer(t, "")
+	for _, role := range []string{"admin", "user"} {
+		mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: role, Kind: store.AssignPerson, Ref: "user@example.com", How: store.AssignedByAdmin})
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "user@example.com", nil)
+	rec := c.get("/verify", roleGuard("enquiries", ""))
+	if got := rec.Header().Get("Remote-Roles"); got != "admin,user" {
+		t.Errorf("Remote-Roles = %q, want admin,user", got)
+	}
+}
+
+// A gateway administrator without a recent second step holds no app role
+// above user: an admin route sends them to the admin door, and a user route
+// shows the app the user role only, as the older groups=admin guard did. A
+// person who holds the role but is not a gateway administrator is unaffected.
+func TestAppAdminRoleNeedsTheAdminStep(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app-roles.tsv")
+	if err := os.WriteFile(path, []byte(testAppRoles), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, sender := testServerWith(t, func(c *config.Config) {
+		c.AppRolesFile = path
+		c.TOTPEnabled = true
+		c.AdminEmails = []string{"admin@example.com"}
+	})
+	for _, who := range []string{"admin@example.com", "user@example.com"} {
+		mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignPerson, Ref: who, How: store.AssignedByAdmin})
+	}
+	admin := newClient(t, srv.Handler())
+	loginAs(t, admin, sender, "admin@example.com", nil)
+	if rec := admin.get("/verify", roleGuard("enquiries", "admin")); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
+		t.Errorf("admin without the step on the admin role = %d %q, want the admin door", rec.Code, rec.Header().Get("Location"))
+	}
+	rec := admin.get("/verify", roleGuard("enquiries", ""))
+	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Roles") != "user" {
+		t.Errorf("admin without the step on a user route = %d, roles %q; want 200, user", rec.Code, rec.Header().Get("Remote-Roles"))
+	}
+	other := newClient(t, srv.Handler())
+	loginAs(t, other, sender, "user@example.com", nil)
+	if rec := other.get("/verify", roleGuard("enquiries", "admin")); rec.Code != http.StatusOK || rec.Header().Get("Remote-Roles") != "admin" {
+		t.Errorf("non-gateway-admin holder = %d, roles %q; want 200, admin", rec.Code, rec.Header().Get("Remote-Roles"))
+	}
+}
