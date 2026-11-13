@@ -366,9 +366,15 @@ func TestChain(t *testing.T) {
 		alice.setCookie("app."+domain, "app_own", "kept")
 		h := appSees(t, alice.get("https://app."+domain+"/after", map[string]string{
 			"Remote-User": "boss@admins.example", "Remote-Groups": "admin", "X-Auth-Policy": "groups=admin",
+			"Remote-Roles": "admin",
 		}))
 		if got := h.Get("Remote-User"); got != "alice@example.org" {
 			t.Errorf("app saw Remote-User %q", h["Remote-User"])
+		}
+		// An older guard sends no Remote-Roles, so a client-sent one must not
+		// reach the app: an app that reads Remote-Roles would believe it.
+		if got := h["Remote-Roles"]; len(got) != 0 {
+			t.Errorf("a client-sent Remote-Roles reached the app through an older guard: %q", got)
 		}
 		if got := h["Remote-Groups"]; len(got) != 1 || got[0] != "user" {
 			t.Errorf("app saw Remote-Groups %q, want exactly [user]", got)

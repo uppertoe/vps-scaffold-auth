@@ -355,4 +355,8 @@ auth.{$DOMAIN} {
 	request_header -Remote-User
 	request_header -Remote-Email
 	request_header -Remote-Groups
+	# Every guard strips a client-sent Remote-Roles too, not only the role
+	# guard: an app that reads Remote-Roles must never believe one a client
+	# sent through an older guard.
+	request_header -Remote-Roles
 }
