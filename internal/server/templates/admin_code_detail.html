@@ -36,9 +36,9 @@
     <div class="rlist tbl events">
       <div class="rrow colhead"><div>When</div><div>Outcome</div><div>Device</div><div>Network address</div></div>
       {{range .Events}}
-      <div class="rrow"><div>{{.When}}</div><div><span class="pill {{.Tone}}">{{.Outcome}}</span></div><div>{{.Device}}</div><div class="mono muted">{{.Address}}</div></div>
+      <div class="rrow"><div>{{.When}}</div><div data-label="Outcome"><span class="pill {{.Tone}}">{{.Outcome}}</span></div><div data-label="Device">{{.Device}}</div><div class="mono muted" data-label="Network address">{{.Address}}</div></div>
       {{else}}
-      <div class="rrow"><div class="muted">Nobody has scanned this card yet.</div></div>
+      <div class="rrow empty"><div class="muted">Nobody has scanned this card yet.</div></div>
       {{end}}
     </div>
   </div>

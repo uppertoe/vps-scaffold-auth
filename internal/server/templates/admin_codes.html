@@ -4,7 +4,7 @@
 {{with .Cards}}
 <div class="ptitle"><div><h1>Break-glass cards</h1><p>A card opens one app for whoever holds it, without signing in.</p></div><a class="btnlink" href="/admin/break/new">New card</a></div>
 {{template "cards_tabs" "cards"}}
-{{if .Attention}}<div class="attn">{{range .Attention}}<div><i{{if .Bad}} class="bad"{{end}}></i><span>The card for <a href="/admin/break/{{.ID}}">{{.Label}}</a> {{.Sentence}}</span></div>{{end}}</div>{{end}}
+{{if .Attention}}<div class="attn">{{range .Attention}}<div><i{{if .Bad}} class="bad"{{end}}></i><span>{{.Before}}<a href="{{.Link}}">{{.Name}}</a>{{.After}}</span></div>{{end}}</div>{{end}}
 {{if .Empty}}<p class="muted">No card has been made yet. Use New card to make the first one.</p>{{end}}
 {{if .Apps}}
 <div class="rlist clist">

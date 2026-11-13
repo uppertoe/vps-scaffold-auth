@@ -46,19 +46,12 @@ const sampleLocation = "Location"
 
 // cardsView is the cards list.
 type cardsView struct {
-	Attention []cardAttention
+	Attention []attentionLine
 	Apps      []cardAppGroup
 	Legacy    []cardRow
 	Empty     bool
 	LegacyH   string
 	LegacyN   string
-}
-
-type cardAttention struct {
-	Bad      bool
-	ID       int64
-	Label    string
-	Sentence string
 }
 
 type cardAppGroup struct {
@@ -135,13 +128,8 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 	v := &cardsView{Empty: len(codes) == 0, LegacyH: msgLegacyHeading, LegacyN: msgLegacyNote}
 	groups := map[string]*cardAppGroup{}
 	refused := s.refusedTargets()
-	sort.SliceStable(codes, func(i, j int) bool {
-		ai, aj := codes[i].Status == store.BreakGlassActive, codes[j].Status == store.BreakGlassActive
-		if ai != aj {
-			return ai
-		}
-		return strings.ToLower(codes[i].Label) < strings.ToLower(codes[j].Label)
-	})
+	sortCards(codes)
+	v.Attention = cardLines(codes, stats)
 	for _, c := range codes {
 		st := stats[c.ID]
 		row := cardRow{ID: c.ID, Label: c.Label, Note: c.Note, Active: c.Status == store.BreakGlassActive, Uses: usesWord(st.uses30),
@@ -150,13 +138,7 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 			row.LastUsed = s.shortStamp(st.last)
 		}
 		if !c.TestedAt.IsZero() {
-			row.Tested = s.longDate(c.TestedAt)
-		}
-		if row.Active && c.TestedAt.IsZero() {
-			v.Attention = append(v.Attention, cardAttention{Bad: true, ID: c.ID, Label: c.Label, Sentence: msgCardUntested})
-		}
-		if row.Active && st.uses30 >= 3 {
-			v.Attention = append(v.Attention, cardAttention{ID: c.ID, Label: c.Label, Sentence: fmt.Sprintf(msgCardBusy, numberWord(st.uses30))})
+			row.Tested = s.shortStamp(c.TestedAt)
 		}
 		if c.App == "" {
 			row.Group = c.TargetGroup
@@ -182,6 +164,37 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(v.Apps, func(i, j int) bool { return strings.ToLower(v.Apps[i].Label) < strings.ToLower(v.Apps[j].Label) })
 	s.renderAdmin(w, r, http.StatusOK, "admin_codes", adminData{Title: "Break-glass cards", Cards: v})
+}
+
+// sortCards puts active cards first, then sorts by location.
+func sortCards(codes []store.BreakGlassCode) {
+	sort.SliceStable(codes, func(i, j int) bool {
+		ai, aj := codes[i].Status == store.BreakGlassActive, codes[j].Status == store.BreakGlassActive
+		if ai != aj {
+			return ai
+		}
+		return strings.ToLower(codes[i].Label) < strings.ToLower(codes[j].Label)
+	})
+}
+
+// cardLines are the attention lines about cards, which the Cards page and
+// the Overview both show: each active card never tested, and each used
+// three times or more in 30 days. codes are sorted as sortCards sorts them.
+func cardLines(codes []store.BreakGlassCode, stats map[int64]cardStats) []attentionLine {
+	var out []attentionLine
+	for _, c := range codes {
+		if c.Status != store.BreakGlassActive {
+			continue
+		}
+		link := "/admin/break/" + strconv.FormatInt(c.ID, 10)
+		if c.TestedAt.IsZero() {
+			out = append(out, attentionLine{Bad: true, Before: "The card for ", Link: link, Name: c.Label, After: " " + msgCardUntested})
+		}
+		if n := stats[c.ID].uses30; n >= 3 {
+			out = append(out, attentionLine{Before: "The card for ", Link: link, Name: c.Label, After: " " + fmt.Sprintf(msgCardBusy, numberWord(n))})
+		}
+	}
+	return out
 }
 
 // --- Designs as cards draw them ---

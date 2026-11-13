@@ -14,6 +14,8 @@
 
   .clist .rrow { grid-template-columns: 40px minmax(0, 1.6fr) 140px 100px 140px 104px; height: 72px; }
   .clist .rrow.colhead { height: 36px; }
+  .clist .rrow.colhead > div { font-size: 12px; font-weight: 600; color: var(--muted); }
+  .clist .none { color: var(--muted); }
   .clist .rrow.colhead > div:first-child { padding-left: 0; }
   .clist .rrow.app { grid-template-columns: minmax(0, 1fr) auto; height: 40px; }
   .clist .rrow.app .name { grid-column: 1; }
@@ -36,13 +38,14 @@
 
   .steps { list-style: none; margin: 0 0 24px; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
   .steps.one { grid-template-columns: 1fr; }
-  .steps li { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: 20px 20px; column-gap: 12px; padding: 12px 16px; border-left: 1px solid var(--line); align-items: center; }
+  .steps li { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: 20px auto; column-gap: 12px; padding: 12px 16px; border-left: 1px solid var(--line); align-items: start; }
   .steps li:first-child { border-left: 0; }
   .steps i { grid-row: 1 / 3; width: 28px; height: 28px; border-radius: 50%; border: 1.5px dashed var(--input-border); display: grid; place-items: center; font-style: normal; font-size: 14px; color: var(--muted); }
   .steps li.done i { border: 0; background: var(--ok-bg); color: var(--ok-fg); box-shadow: inset 0 0 0 1px var(--ok-line); }
   .steps li.gone i { border: 0; background: var(--off-bg); color: var(--off-fg); }
   .steps b { font-size: 14px; font-weight: 600; }
-  .steps span { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* A step's instruction is what the administrator does next, so it wraps. */
+  .steps span { font-size: 13px; line-height: 18px; color: var(--muted); }
 
   .cfacts { margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
   .cfacts > div { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 16px; align-items: center; min-height: 48px; padding: 0 16px; border-top: 1px solid var(--line); }
@@ -145,9 +148,18 @@
     .steps { grid-template-columns: 1fr; }
     .steps li { border-left: 0; border-top: 1px solid var(--line); }
     .steps li:first-child { border-top: 0; }
-    .clist .rrow { grid-template-columns: 40px minmax(0, 1fr) 104px; grid-template-rows: none; height: 72px; padding: 0 16px; }
-    .clist .rrow > div:nth-child(3), .clist .rrow > div:nth-child(4), .clist .rrow > div:nth-child(5) { display: none; }
+    /* Each card is a block: the thumbnail, the location and the state on the
+       first line, then Last used, In 30 days and Last tested, labelled. */
+    .clist .rrow { grid-template-columns: 40px minmax(0, 1fr) auto; grid-template-rows: none; height: auto; min-height: 72px; padding: 10px 16px; row-gap: 2px; align-items: center; }
+    .clist .rrow > div:first-child { grid-row: 1 / span 4; align-self: start; }
+    .clist .rrow > div:last-child { grid-column: 3; grid-row: 1; }
+    .clist .rrow > div[data-label] { grid-column: 2 / -1; display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; font-size: 13px; }
+    .clist .rrow > div[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 12px; font-weight: 600; }
     .clist .rrow.colhead { display: none; }
+    .tbl.events .rrow { height: auto; min-height: 48px; padding-block: 10px; row-gap: 2px; }
+    .tbl.events .rrow > div[data-label] { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+    .tbl.events .rrow > div[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 12px; font-weight: 600; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .tbl.events .rrow > div[data-label] > * { justify-self: start; }
     .clist .rrow.app { grid-template-columns: minmax(0, 1fr) auto; height: 40px; }
   .clist .rrow.app .name { grid-column: 1; }
     .clist .rrow.app .host { display: none; }
@@ -172,8 +184,8 @@
 {{define "card_row"}}<div class="rrow{{if not .Active}} withdrawn{{end}}">
   <div><img class="cardimg mini" src="/admin/break/{{.ID}}/card.svg?thumb=1&amp;v={{.Version}}" alt="" width="40" height="56" loading="lazy"></div>
   <div class="loc"><b><a href="/admin/break/{{.ID}}">{{.Label}}</a></b><small>{{if .Refused}}<span class="pill guest">{{.Refused}}</span> {{end}}{{if .Note}}{{.Note}}{{else if .Group}}Opens the group {{.Group}}{{else}}No note{{end}}</small></div>
-  <div>{{if .LastUsed}}{{.LastUsed}}{{else}}<span class="muted">Never</span>{{end}}</div>
-  <div>{{if .Uses}}{{.Uses}}{{else}}<span class="muted">None</span>{{end}}</div>
-  <div>{{if .Tested}}{{.Tested}}{{else if .Active}}<span class="never">Never</span>{{else}}<span class="muted">Never</span>{{end}}</div>
+  <div data-label="Last used">{{if .LastUsed}}{{.LastUsed}}{{else}}<span class="none">Never</span>{{end}}</div>
+  <div data-label="In 30 days">{{if .Uses}}{{.Uses}}{{else}}<span class="none">None</span>{{end}}</div>
+  <div data-label="Last tested">{{if .Tested}}{{.Tested}}{{else if .Active}}<span class="never">Never</span>{{else}}<span class="none">Never</span>{{end}}</div>
   <div>{{if .Active}}<span class="pill ok">Active</span>{{else}}<span class="pill off">Withdrawn</span>{{end}}</div>
 </div>{{end}}
