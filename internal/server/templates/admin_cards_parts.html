@@ -6,10 +6,6 @@
   .subtabs { display: flex; border-bottom: 1px solid var(--border); margin: -8px 0 24px; height: 40px; overflow-x: auto; }
   .subtabs a { display: flex; align-items: center; padding: 0 12px; font-size: 14px; color: var(--muted); text-decoration: none; white-space: nowrap; }
   .subtabs a[aria-current] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
-  .btnlink { display: inline-flex; align-items: center; height: 38px; padding: 0 16px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; white-space: nowrap; text-decoration: none !important; border: 1px solid var(--accent); }
-  .btnlink:hover { background: var(--accent-hover); }
-  .btnlink.quiet { background: var(--surface); color: var(--text); border-color: var(--input-border); }
-  .btnlink.quiet:hover { background: var(--surface-2); }
   .btnlink.wide { width: 100%; justify-content: center; }
   .btnlink.red { background: var(--surface); color: var(--danger); border-color: var(--off-line); }
   .cardimg { display: block; width: 100%; height: auto; background: #fff; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,.12), 0 8px 24px rgba(0,0,0,.08); }
@@ -64,11 +60,7 @@
   .dangerpanel h2 { margin: 0 0 12px; }
   .twocol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
   .twocol p { font-size: 14px; color: var(--muted); min-height: 60px; }
-  .confirmbox { background: var(--card-bg); border: 1px solid var(--card-line); border-radius: 8px; padding: 12px; }
-  .confirmbox p { min-height: 0; color: var(--text); }
-  .confirmbox .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .confirmbox form { margin: 0; }
-  .confirmbox button { margin: 0; }
+  .twocol .confirmbox p { min-height: 0; }
 
   .fsec { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; display: grid; gap: 8px; min-width: 0; }
   .fsec h2 { margin: 0 0 4px; font-size: 15px; display: flex; gap: 10px; align-items: center; }

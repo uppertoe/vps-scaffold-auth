@@ -82,7 +82,7 @@ func (s *Server) handleAdminApps(w http.ResponseWriter, r *http.Request) {
 	if addr := normalizeEmail(q.Get("address")); addr != "" && plainAddress(addr) {
 		v.Address = addr
 		focus.address = addr
-		focus.heldByAddress, v.Focus = s.checkAddress(r.Context(), world, addr)
+		focus.heldByAddress, focus.heldVia, v.Focus = s.checkAddress(r.Context(), world, addr)
 	} else if kind, ref, ok := parseHolderID(v.Holder); ok && kind != store.AssignPerson {
 		focus.holderKind, focus.holderRef = kind, ref
 		v.Focus = s.holderFocus(world, kind, ref)
@@ -140,7 +140,7 @@ func appMatches(w *rolesWorld, a *roles.App, b appBlockView, f string) bool {
 // checkAddress works out which roles an address holds, and says so.
 // Networks are left out, because an address has no network, and so are
 // guests, which the sentence names separately.
-func (s *Server) checkAddress(ctx context.Context, w *rolesWorld, addr string) (map[string]bool, string) {
+func (s *Server) checkAddress(ctx context.Context, w *rolesWorld, addr string) (held, via map[string]bool, focus string) {
 	lists := map[string]bool{}
 	if gs, err := s.store.GroupsForEmail(ctx, addr); err == nil {
 		for _, g := range gs {
@@ -150,9 +150,9 @@ func (s *Server) checkAddress(ctx context.Context, w *rolesWorld, addr string) (
 	sub := roles.Subject{Session: true, Email: addr, Lists: lists}
 	sub.Guest = s.currentRole(ctx, addr) == authz.RoleDeny
 	env := roles.Env{Domains: w.domains, Now: w.now}
-	held := map[string]bool{}
+	held, via = map[string]bool{}, map[string]bool{}
 	apps := map[string]bool{}
-	var via []string
+	var through []string
 	seen := map[string]bool{}
 	direct := false
 	var guestApps []string
@@ -171,9 +171,12 @@ func (s *Server) checkAddress(ctx context.Context, w *rolesWorld, addr string) (
 				apps[a.Name] = true
 				if as.Kind == store.AssignPerson {
 					direct = true
-				} else if l := w.groupLabel(as.Ref); !seen[l] {
-					seen[l] = true
-					via = append(via, l)
+				} else {
+					via[a.Name+":"+role+"|"+holderID(as.Kind, as.Ref)] = true
+					if l := w.groupLabel(as.Ref); !seen[l] {
+						seen[l] = true
+						through = append(through, l)
+					}
 				}
 			}
 		}
@@ -182,7 +185,7 @@ func (s *Server) checkAddress(ctx context.Context, w *rolesWorld, addr string) (
 		}
 	}
 	if direct {
-		via = append(via, "a direct assignment")
+		through = append(through, "a direct assignment")
 	}
 	var waiting []string
 	for _, v := range w.openInvites() {
@@ -193,13 +196,13 @@ func (s *Server) checkAddress(ctx context.Context, w *rolesWorld, addr string) (
 	}
 	switch {
 	case len(held) == 0 && len(waiting) > 0:
-		return held, fmt.Sprintf(msgCheckInvited, addr, joinAnd(waiting))
+		return held, via, fmt.Sprintf(msgCheckInvited, addr, joinAnd(waiting))
 	case len(held) > 0:
-		return held, fmt.Sprintf("%s holds %s in %s, through %s.", addr, countWords(len(held), "role", "roles"), countWords(len(apps), "app", "apps"), joinAnd(via))
+		return held, via, fmt.Sprintf("%s holds %s in %s, through %s.", addr, countWords(len(held), "role", "roles"), countWords(len(apps), "app", "apps"), joinAnd(through))
 	case len(guestApps) > 0:
-		return held, fmt.Sprintf("%s holds no role. The address can sign in only as a guest, at %s.", addr, joinAnd(guestApps))
+		return held, via, fmt.Sprintf("%s holds no role. The address can sign in only as a guest, at %s.", addr, joinAnd(guestApps))
 	}
-	return held, addr + " holds no role."
+	return held, via, addr + " holds no role."
 }
 
 // holderFocus is the sentence about a token clicked on the overview.

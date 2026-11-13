@@ -212,7 +212,27 @@ type tokenView struct {
 	Held    bool
 	Pending string
 	On      bool
+	// Capped hides a token on the overview until the script fits the row,
+	// so that a page without the script shows the first tokens and
+	// "+N more" rather than tokens cut off at the row's edge.
+	Capped bool
 }
+
+// rank is how long a token stays when a row is too narrow for all of
+// them: matched tokens longest, then the card token, then the others.
+func (t tokenView) rank() int {
+	switch {
+	case t.On:
+		return 3
+	case t.Tone == "card":
+		return 2
+	}
+	return 1
+}
+
+// tokenCap is how many tokens an overview row shows before the script has
+// fitted it.
+const tokenCap = 3
 
 // holderToken draws one non-person holder.
 func (s *Server) holderToken(w *rolesWorld, kind, ref string) tokenView {
@@ -395,15 +415,18 @@ func pathsPhrase(a *roles.App, role string) string {
 
 // roleRowView is one row: an app role, who holds it, and its widest access.
 type roleRowView struct {
-	Role, Label     string
-	Paths           string
-	PathsMono       bool
-	Tokens          []tokenView
-	Nobody          bool
-	NobodyText      string
-	Reach           reachView
-	Mark            string // "hit" or "dim" while an address or holder is checked
-	Editable        bool
+	Role, Label string
+	Paths       string
+	PathsMono   bool
+	Tokens      []tokenView
+	Nobody      bool
+	NobodyText  string
+	Reach       reachView
+	Mark        string // "hit" or "dim" while an address or holder is checked
+	Editable    bool
+	// More and MoreTitle are the "+N more" token of a capped row, and the
+	// holders it stands for.
+	More, MoreTitle string
 	PickID, AddText string
 	Picker          *pickerView
 }
@@ -444,6 +467,9 @@ type rowFocus struct {
 	holderKind, holderRef string // a token clicked on the overview
 	address               string // an address checked on the overview
 	heldByAddress         map[string]bool
+	// heldVia marks the holders through which the address holds each role,
+	// as "app:role|kind:ref", so their tokens are marked too.
+	heldVia map[string]bool
 }
 
 func (f *rowFocus) active() bool { return f != nil && (f.holderKind != "" || f.address != "") }
@@ -532,6 +558,9 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 		if f != nil && f.holderKind == h.kind && f.holderRef == h.ref {
 			t.On = true
 		}
+		if f != nil && f.address != "" && f.heldVia[a.Name+":"+role+"|"+id] {
+			t.On = true
+		}
 		if !removing {
 			level = max(level, holderLevel[h.kind])
 		}
@@ -582,6 +611,9 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 		}
 	}
 	row.Reach = s.reach(level)
+	if !editable {
+		capTokens(&row)
+	}
 	if f.active() {
 		hit := false
 		if f.address != "" {
@@ -605,6 +637,36 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 		row.Picker = s.picker(w, a, role, inRow, p)
 	}
 	return row
+}
+
+// capTokens hides all but tokenCap of a row's tokens, the least important
+// first and from the end, behind "+N more".
+func capTokens(row *roleRowView) {
+	n := len(row.Tokens) - tokenCap
+	if n <= 0 {
+		return
+	}
+	idx := make([]int, len(row.Tokens))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		ra, rb := row.Tokens[idx[a]].rank(), row.Tokens[idx[b]].rank()
+		if ra != rb {
+			return ra < rb
+		}
+		return idx[a] > idx[b]
+	})
+	for _, i := range idx[:n] {
+		row.Tokens[i].Capped = true
+	}
+	var hidden []string
+	for _, t := range row.Tokens {
+		if t.Capped {
+			hidden = append(hidden, t.Label)
+		}
+	}
+	row.More, row.MoreTitle = fmt.Sprintf("+%d more", n), strings.Join(hidden, ", ")
 }
 
 // picker lists the networks, guests, domain groups and lists that do not

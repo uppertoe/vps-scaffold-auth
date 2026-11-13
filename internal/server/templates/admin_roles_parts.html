@@ -25,18 +25,21 @@
   .ptitle p.mono { font-size: 13px; }
 
   .attn { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 24px; }
-  .attn div { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 16px; border-top: 1px solid var(--line); font-size: 14px; white-space: nowrap; overflow: hidden; }
+  /* Attention lines and the focus sentence wrap: they are what the page is
+     for, so none of their words is cut off. */
+  .attn div { display: flex; align-items: flex-start; gap: 12px; min-height: 40px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 14px; line-height: 20px; }
   .attn div:first-child { border-top: 0; }
-  .attn i { width: 8px; height: 8px; border-radius: 50%; background: var(--warn-fg); flex: none; }
+  .attn i { width: 8px; height: 8px; border-radius: 50%; background: var(--warn-fg); flex: none; margin-top: 6px; }
   .attn i.bad { background: var(--off-fg); }
-  .attn span { overflow: hidden; text-overflow: ellipsis; }
+  .attn span { min-width: 0; overflow-wrap: anywhere; }
   form.toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 320px) auto; gap: 8px; margin: 0 0 8px; }
   form.toolbar input { height: 36px; padding: 0 12px; font-size: 14px; }
   form.toolbar button { margin: 0; height: 36px; padding: 0 16px; white-space: nowrap; }
-  .focus { height: 40px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-radius: 8px; font-size: 14px; margin-bottom: 16px; white-space: nowrap; overflow: hidden; }
+  .focus { min-height: 40px; display: flex; align-items: flex-start; gap: 12px; padding: 9px 16px; border-radius: 8px; font-size: 14px; line-height: 20px; margin-bottom: 16px; }
   .focus.on { background: var(--accent-soft); border: 1px solid var(--accent-line); }
-  .focus.off { color: var(--faint); border: 1px dashed var(--border); }
-  .focus span { overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; }
+  .focus.off { color: var(--muted); border: 1px dashed var(--border); }
+  .focus span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .focus a { flex: none; }
 
   .rlist { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
   .rrow { display: grid; grid-template-columns: var(--rolecol) minmax(0, 1fr) var(--reachcol); align-items: center; column-gap: 16px; height: 48px; padding: 0 16px; border-top: 1px solid var(--line); }
@@ -47,6 +50,7 @@
   .rrow.app .name b { font-weight: 600; }
   .rrow.app .host { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
   .rrow.app .bydesign { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); flex: none; }
+  .rrow.app .bydesign:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
   .rrow.app .edit { justify-self: end; font-size: 13px; font-weight: 500; }
   .rrole { display: flex; gap: 8px; align-items: baseline; padding-left: 16px; min-width: 0; white-space: nowrap; }
   .rrole b { font-weight: 500; font-size: 14px; flex: none; }
@@ -59,15 +63,23 @@
 
   .tok { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 28px; max-width: 220px; flex: none; padding: 0 8px; border-radius: 6px; border: 1px solid var(--tag-line); background: var(--tag-bg); color: var(--tag-fg); font-size: 13px; font-weight: 400; white-space: nowrap; cursor: pointer; margin: 0; text-decoration: none; }
   a.tok:hover { text-decoration: none; border-color: var(--accent); }
-  .tok > span.l { overflow: hidden; text-overflow: ellipsis; }
+  .tok > span.l { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  /* The one token left in a row too narrow for it shrinks, with an
+     ellipsis, rather than being hidden (see rolesScript). */
+  .rwho .tok.shrink { flex: 0 1 auto; min-width: 48px; }
   .tok .n { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); padding-left: 6px; border-left: 1px solid var(--tag-line); line-height: 16px; }
   .tok.wide { background: var(--wide-bg); color: var(--wide-fg); border-color: var(--wide-line); }
   .tok.card { background: var(--card-bg); color: var(--card-fg); border-color: var(--card-line); }
   .tok.card .n { border-color: var(--card-line); color: inherit; }
-  .tok.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .tok.on .n { color: #fff; border-color: rgba(255, 255, 255, .45); }
-  .tok.more { cursor: default; color: var(--muted); background: transparent; }
-  .tok[hidden] { display: none; }
+  .tok.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .tok.on .n { color: var(--on-accent); border-color: currentColor; }
+  .tok.more { color: var(--muted); background: transparent; font: inherit; font-size: 13px; font-weight: 400; line-height: normal; }
+  .tok.more:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .tok.more[aria-expanded=true] { border-color: var(--accent); color: var(--text); }
+  /* The holders behind "+N more", shown when it is pressed. */
+  .morepop { position: fixed; z-index: 25; max-width: min(320px, calc(100vw - 32px)); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .16); padding: 6px; display: grid; gap: 4px; }
+  .morepop .tok { max-width: 100%; }
+  .tok[hidden], .tok.capped { display: none; }
   .tok.add { background: transparent; border: 1px dashed var(--accent-line); color: var(--accent); }
   .tok.padd { border: 1.5px dashed var(--accent); }
   .tok.static { cursor: default; }
@@ -94,10 +106,10 @@
   .rscale { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; margin-top: 16px; }
   .rscale h4 { margin: 0 0 8px; font-size: 13px; }
   .ladder { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
-  .ladder > div { display: grid; grid-template-rows: 20px 20px 18px; justify-items: start; gap: 2px; font-size: 12px; min-width: 0; }
+  .ladder > div { display: grid; grid-template-rows: 20px 20px auto; align-content: start; justify-items: start; gap: 2px; font-size: 12px; min-width: 0; }
   .ladder .reach { grid-template-columns: 16px 40px; }
   .ladder b { font-weight: 600; color: var(--text); white-space: nowrap; }
-  .ladder small { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .ladder small { color: var(--muted); line-height: 16px; max-width: 100%; }
 
   .meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin: 0 0 24px; }
   .meta div { padding: 12px 16px; border-left: 1px solid var(--line); min-width: 0; }
@@ -105,7 +117,7 @@
   .meta dt { font-size: 12px; color: var(--muted); height: 16px; }
   .meta dd { margin: 4px 0 0; height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .changes { min-height: 56px; margin-top: 8px; display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 12px; font-size: 14px; }
-  .changes.none { color: var(--faint); border: 1px dashed var(--border); }
+  .changes.none { color: var(--muted); border: 1px dashed var(--border); }
   .changes.some { background: var(--accent-soft); border: 1px solid var(--accent-line); color: var(--text); }
   .changes span { flex: 1 1 auto; min-width: 0; }
   .changes span[hidden], .changes a[hidden] { display: none; }
@@ -122,6 +134,20 @@
   .tbl .num { font-variant-numeric: tabular-nums; }
   .tbl .ended { color: var(--faint); }
   .tbl .none { color: var(--muted); }
+  /* A table's empty message spans the row, and wraps. */
+  .tbl .rrow.empty, .rlist .rrow.empty { height: auto; min-height: 48px; padding-block: 12px; }
+  .tbl .rrow.empty > div, .rlist .rrow.empty > div { grid-column: 1 / -1; white-space: normal; overflow: visible; }
+  /* A confirmation opened from a row (?withdraw=, ?resend=) sits under it. */
+  .rlist .rrow.confirmrow { display: block; height: auto; padding: 4px 16px 12px; border-top: 0; }
+  .confirmbox { background: var(--card-bg); border: 1px solid var(--card-line); border-radius: 8px; padding: 12px; }
+  .confirmbox p { min-height: 0; margin: 0 0 12px; font-size: 14px; color: var(--text); white-space: normal; }
+  .confirmbox .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .confirmbox form { margin: 0; }
+  .confirmbox button { margin: 0; }
+  .btnlink { display: inline-flex; align-items: center; height: 38px; padding: 0 16px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 14px; font-weight: 600; white-space: nowrap; text-decoration: none !important; border: 1px solid var(--accent); }
+  .btnlink:hover { background: var(--accent-hover); }
+  .btnlink.quiet { background: var(--surface); color: var(--text); border-color: var(--input-border); }
+  .btnlink.quiet:hover { background: var(--surface-2); }
   .tbl form { margin: 0; }
   .tbl button.link, .linkbtn { margin: 0; padding: 0; border: 0; background: none; color: var(--accent); font-weight: 400; font-size: 14px; cursor: pointer; }
   .tbl button.link:hover { text-decoration: underline; background: none; }
@@ -152,6 +178,8 @@
   .opt small { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .opt .oline { display: flex; gap: 8px; align-items: center; min-width: 0; }
   .pop .jump { display: flex; align-items: center; height: 40px; padding: 0 8px; font-size: 14px; gap: 8px; }
+  .pop .pfoot { display: flex; justify-content: flex-end; padding: 8px 8px 4px; margin-top: 4px; border-top: 1px solid var(--line); }
+  .pop .pfoot .btnlink { height: 34px; }
 
   .scrim { position: fixed; inset: 0; background: var(--scrim); display: flex; align-items: flex-start; justify-content: center; padding: 96px 16px 16px; z-index: 30; overflow-y: auto; }
   .dialog { width: 600px; max-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
@@ -184,12 +212,21 @@
     .rrow.app .host { display: none; }
     .tbl .rrow, .tbl.paths .rrow, .tbl.people .rrow, .tbl.ghere .rrow, .tbl.orphans .rrow { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; height: auto; row-gap: 4px; padding: 10px 16px; }
     .tbl .rrow > div:nth-child(n+3) { color: var(--muted); font-size: 13px; }
+    /* Each cell after the first is labelled with its column's heading. */
+    .tbl .rrow > div[data-label] { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; align-items: baseline; white-space: normal; overflow-wrap: anywhere; }
+    .tbl .rrow > div[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 12px; font-weight: 600; }
+    .tbl .rrow > div[data-label] > * { min-width: 0; justify-self: start; max-width: 100%; }
+    .rrow.app .bydesign .bdt { display: none; }
     .addline { grid-template-columns: 1fr; }
     .rkey > div { grid-template-columns: 1fr; height: auto; gap: 4px; padding-block: 8px; }
     .rkey > div > span:last-child { white-space: normal; }
     .ladder { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 12px; }
     .changes { flex-wrap: wrap; }
     p.secnote { white-space: normal; }
+  }
+  @media (max-width: 480px) {
+    .dialog li { grid-template-columns: minmax(0, 1fr) auto; height: auto; padding: 8px 0; row-gap: 4px; }
+    .dialog li > span:last-child { grid-column: 1 / -1; }
   }
 </style>{{end}}
 
@@ -208,18 +245,18 @@
 
 {{define "ico"}}<svg class="ico" aria-hidden="true"><use href="#{{.}}"/></svg>{{end}}
 
-{{define "token"}}{{if .Field}}<label class="tok{{if .Tone}} {{.Tone}}{{end}}{{if eq .Pending "add"}} padd{{end}}" title="{{.Title}}"><input type="checkbox" class="tick" name="{{.Field}}" value="{{.Value}}"{{if .Checked}} checked{{end}} data-held="{{if .Held}}1{{else}}0{{end}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}<span class="x" aria-hidden="true"></span></label>{{else if .Href}}<a class="tok{{if .Tone}} {{.Tone}}{{end}}{{if .On}} on{{end}}" href="{{.Href}}" title="{{.Title}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</a>{{else}}<span class="tok static{{if .Tone}} {{.Tone}}{{end}}{{if .On}} on{{end}}" title="{{.Title}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</span>{{end}}{{end}}
+{{define "token"}}{{if .Field}}<label class="tok{{if .Tone}} {{.Tone}}{{end}}{{if eq .Pending "add"}} padd{{end}}" title="{{.Title}}"><input type="checkbox" class="tick" name="{{.Field}}" value="{{.Value}}"{{if .Checked}} checked{{end}} data-held="{{if .Held}}1{{else}}0{{end}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}<span class="x" aria-hidden="true"></span></label>{{else if .Href}}<a class="tok{{if .Tone}} {{.Tone}}{{end}}{{if .On}} on{{end}}{{if .Capped}} capped{{end}}" href="{{.Href}}" title="{{.Title}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</a>{{else}}<span class="tok static{{if .Tone}} {{.Tone}}{{end}}{{if .On}} on{{end}}{{if .Capped}} capped{{end}}" title="{{.Title}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</span>{{end}}{{end}}
 
 {{define "reach"}}<div class="reach{{if .Closed}} closed{{end}}" title="{{.Title}}">{{if .Closed}}{{template "ico" "k-none"}}<span class="w">Closed</span>{{else}}{{template "ico" .Step.Icon}}<span class="w">{{.Step.Word}}</span>{{end}}<span class="meter">{{range .Bars}}<i{{if .}} class="f"{{end}}></i>{{end}}</span></div>{{end}}
 
 {{define "rolelist"}}<div class="rlist" id="roles">
   <div class="rrow colhead"><div>Role</div><div>Who holds it</div><div>Widest access</div></div>
   {{range .}}
-  <div class="rrow app"><div class="name"><b>{{.Label}}</b><span class="host">{{.Host}}</span>{{if .Open}}<span class="bydesign" title="{{.OpenTitle}}">{{template "ico" "k-lock"}}{{.Open}}</span>{{end}}</div>{{if .Editable}}<div></div>{{else}}<a class="edit" href="/admin/apps/{{.Name}}">Edit</a>{{end}}</div>
+  {{if not .Editable}}<div class="rrow app"><div class="name"><b>{{.Label}}</b><span class="host">{{.Host}}</span>{{if .Open}}<span class="bydesign" title="{{.Open}}: {{.OpenTitle}}" tabindex="0">{{template "ico" "k-lock"}}<span class="bdt">{{.Open}}</span></span>{{end}}</div><a class="edit" href="/admin/apps/{{.Name}}">Edit</a></div>{{end}}
   {{range .Rows}}
   <div class="rrow{{if .Mark}} {{.Mark}}{{end}}">
     <div class="rrole" title="{{.Label}}{{if .Paths}}: {{.Paths}}{{end}}"><b>{{.Label}}</b><span{{if .PathsMono}} class="p"{{end}}>{{.Paths}}</span></div>
-    <div class="rwho" data-fit>{{range .Tokens}}{{template "token" .}}{{end}}{{if .Tokens}}<span class="tok more" hidden></span>{{end}}{{if and .Nobody (not .Editable)}}<span class="nobody">{{.NobodyText}}</span>{{end}}{{if .Editable}}<a class="tok add" href="#{{.PickID}}" title="Give this role to a group, a list or a setting">{{template "ico" "k-plus"}}<span class="l">{{.AddText}}</span></a>{{end}}</div>
+    <div class="rwho" data-fit>{{range .Tokens}}{{template "token" .}}{{end}}{{if .Tokens}}<button type="button" class="tok more" aria-expanded="false"{{if .More}} title="{{.MoreTitle}}"{{else}} hidden{{end}}>{{.More}}</button>{{end}}{{if and .Nobody (not .Editable)}}<span class="nobody">{{.NobodyText}}</span>{{end}}{{if .Editable}}<a class="tok add" href="#{{.PickID}}" title="Give this role to a group, a list or a setting">{{template "ico" "k-plus"}}<span class="l">{{.AddText}}</span></a>{{end}}</div>
     {{template "reach" .Reach}}
   </div>
   {{end}}
