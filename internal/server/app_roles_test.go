@@ -40,8 +40,9 @@ func rolesServer(t *testing.T, networks string) (*Server, *captureSender) {
 	})
 }
 
+// roleGuard is the headers a role guard on the app's own host sends.
 func roleGuard(app, role string) map[string]string {
-	h := map[string]string{"X-Auth-App": app}
+	h := map[string]string{"X-Auth-App": app, "X-Forwarded-Host": app + ".example.com"}
 	if role != "" {
 		h["X-Auth-Role"] = role
 	}
@@ -313,4 +314,37 @@ func TestAppAdminRoleNeedsTheAdminStep(t *testing.T) {
 	if rec := other.get("/verify", roleGuard("enquiries", "admin")); rec.Code != http.StatusOK || rec.Header().Get("Remote-Roles") != "admin" {
 		t.Errorf("non-gateway-admin holder = %d, roles %q; want 200, admin", rec.Code, rec.Header().Get("Remote-Roles"))
 	}
+}
+
+// A guard is bound to its app's hosts: a guard naming an app on any other
+// host (one copied onto another site) is refused once signed in, and with no
+// session admits nobody through a network and is sent to sign in with the
+// role guard's mark alone, as for an undeclared app.
+func TestRoleGuardBoundToTheAppsHosts(t *testing.T) {
+	srv, sender := rolesServer(t, "rch=10.0.0.0/8")
+	mustAssign(t, srv, store.RoleAssignment{App: "nd", Role: "user", Kind: store.AssignNetwork, Ref: "rch"})
+	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignPerson, Ref: "user@example.com", How: store.AssignedByAdmin})
+	anon := newClient(t, srv.Handler())
+	if rec := anon.get("/verify", roleGuard("nd", "")); rec.Code != http.StatusOK {
+		t.Fatalf("network on the app's host = %d, want 200", rec.Code)
+	}
+	for _, host := range []string{"other.example.com", "auth.example.com", "", "ND.example.com:443"} {
+		rec := anon.get("/verify", withHost(roleGuard("nd", ""), host))
+		if host == "ND.example.com:443" {
+			if rec.Code != http.StatusOK {
+				t.Errorf("network on the app's host with a port and capitals = %d, want 200", rec.Code)
+			}
+			continue
+		}
+		if loc := rec.Header().Get("Location"); rec.Code != http.StatusFound || !strings.Contains(loc, "/login?") || !strings.HasSuffix(loc, "&rqr=1") {
+			t.Errorf("network on host %q = %d to %q, want sign in with rqr=1 alone", host, rec.Code, loc)
+		}
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "user@example.com", nil)
+	if rec := c.get("/verify", roleGuard("enquiries", "")); rec.Code != http.StatusOK {
+		t.Fatalf("holder on the app's host = %d, want 200", rec.Code)
+	}
+	wantDenied(t, "holder on another app's host", c.get("/verify", withHost(roleGuard("enquiries", ""), "caffeine.example.com")))
+	wantDenied(t, "holder with no host", c.get("/verify", withHost(roleGuard("enquiries", ""), "")))
 }

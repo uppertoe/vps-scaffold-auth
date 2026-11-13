@@ -92,6 +92,20 @@ type Manifest struct {
 	Apps map[string]*App
 }
 
+// ServesHost reports whether host (lower-case, without a port) is one of
+// the app's hosts. A nil app serves none.
+func (a *App) ServesHost(host string) bool {
+	if a == nil || host == "" {
+		return false
+	}
+	for _, h := range a.Hosts {
+		if h == host {
+			return true
+		}
+	}
+	return false
+}
+
 // Has reports whether app declares role.
 func (m Manifest) Has(app, role string) bool {
 	a, ok := m.Apps[app]

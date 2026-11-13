@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -139,24 +140,47 @@ func wantsRoles(r *http.Request) bool {
 }
 
 // roleRequest reads and checks the app and role a guard asks for. It logs and
-// returns ok=false for a guard that also sends X-Auth-Policy, or that names an
-// app or role the manifest does not declare.
+// returns ok=false for a guard that also sends X-Auth-Policy, that names an
+// app or role the manifest does not declare, or that guards a host the
+// manifest does not give the app (see roleRequestProblem).
 func (s *Server) roleRequest(r *http.Request) (app, role string, ok bool) {
+	app, role, problem := s.roleRequestProblem(r)
+	if problem != "" {
+		log.Printf("warning: refusing a guard for app %q role %q on %q: %s", app, role, r.Header.Get("X-Forwarded-Host"), problem)
+		return "", "", false
+	}
+	return app, role, true
+}
+
+// roleRequestProblem is roleRequest's check without the log: the app and
+// role asked for, and why the request is refused, or "" when it is not. A
+// guard's host must be one of the app's hosts in the manifest, so a guard
+// copied onto another site cannot borrow an app's roles.
+func (s *Server) roleRequestProblem(r *http.Request) (app, role, problem string) {
 	app = strings.TrimSpace(r.Header.Get(headerApp))
 	role = strings.TrimSpace(r.Header.Get(headerRole))
 	if role == "" {
 		role = roles.UserRole
 	}
-	host := r.Header.Get("X-Forwarded-Host")
-	if r.Header.Get(headerPolicy) != "" {
-		log.Printf("warning: refusing a guard that sends both X-Auth-App and X-Auth-Policy for %q", host)
-		return "", "", false
+	switch {
+	case r.Header.Get(headerPolicy) != "":
+		return app, role, "it sends both X-Auth-App and X-Auth-Policy"
+	case !s.appRoles.Has(app, role):
+		return app, role, "not in the app roles manifest"
+	case !s.appRoles.Apps[app].ServesHost(forwardedHost(r)):
+		return app, role, "the host is not one of the app's hosts in the app roles manifest"
 	}
-	if !s.appRoles.Has(app, role) {
-		log.Printf("warning: refusing a guard for app %q role %q on %q: not in the app roles manifest", app, role, host)
-		return "", "", false
+	return app, role, ""
+}
+
+// forwardedHost is the host the guard runs on, as Caddy sets it, lower-case
+// and without a port.
+func forwardedHost(r *http.Request) string {
+	h := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
 	}
-	return app, role, true
+	return strings.ToLower(h)
 }
 
 // clientAddr is the client address the gateway trusts, as a netip.Addr.
@@ -276,9 +300,10 @@ func (s *Server) roleWantsAdminStep(id *session.Identity) bool {
 // to sign in as before.
 //
 // A guard that also sends X-Auth-Policy is refused. A guard naming an app or
-// role the manifest does not declare is sent to sign in like any other (see
-// roleLoginHint), so a visitor with no session cannot tell declared names from
-// undeclared ones; once signed in, the request is refused.
+// role the manifest does not declare, or guarding a host that is not the
+// app's, admits nobody through a network and is sent to sign in like any
+// other (see roleLoginHint), so a visitor with no session cannot tell
+// declared names from undeclared ones; once signed in, it is refused.
 func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
 	app, role, ok := s.roleRequest(r)
 	if !ok {
@@ -324,7 +349,7 @@ func (s *Server) roleLoginHint(r *http.Request) string {
 	if r.Header.Get(headerPolicy) != "" {
 		return ""
 	}
-	if !s.appRoles.Has(app, role) {
+	if _, _, problem := s.roleRequestProblem(r); problem != "" {
 		return "&rqr=1"
 	}
 	st := s.roleData(r.Context())
