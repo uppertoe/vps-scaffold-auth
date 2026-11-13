@@ -776,7 +776,7 @@ func (s *Server) reviewWarnings(w *rolesWorld, a *roles.App, changes []roleChang
 		}
 		switch c.A.Kind {
 		case store.AssignNetwork:
-			out = append(out, fmt.Sprintf(msgNetworkOpens, networkLabel(c.A.Ref), pathsPhrase(a, c.A.Role)))
+			out = append(out, fmt.Sprintf(msgNetworkOpens, s.networkLabel(c.A.Ref), pathsPhrase(a, c.A.Role)))
 		case store.AssignGuests:
 			out = append(out, fmt.Sprintf(msgGuestsOpen, pathsPhrase(a, c.A.Role)))
 		}

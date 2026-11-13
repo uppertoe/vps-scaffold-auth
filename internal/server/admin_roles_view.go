@@ -43,7 +43,7 @@ type accessStep struct {
 func (s *Server) accessSteps() []accessStep {
 	net := "Anyone on a named network"
 	if names := s.networkNames(); len(names) > 0 {
-		net = "Anyone on the " + networkLabel(names[0])
+		net = "Anyone on the " + s.networkLabel(names[0])
 	}
 	return []accessStep{
 		{6, "Public", iconLock, "Anyone, without signing in"},
@@ -65,8 +65,14 @@ func (s *Server) networkNames() []string {
 	return out
 }
 
-// networkLabel names a network for people: "rch" is "RCH network".
-func networkLabel(name string) string { return strings.ToUpper(name) + " network" }
+// networkLabel names a network for people, as NETWORK_RANGES writes its
+// name: "RCH=…" is "RCH network", and "hospital=…" is "hospital network".
+func (s *Server) networkLabel(name string) string {
+	if n, ok := s.cfg.NetworkNames[name]; ok {
+		name = n
+	}
+	return name + " network"
+}
 
 // holderOrder sorts holders as the pages list them: networks, guests, domain
 // groups, then lists.
@@ -194,7 +200,7 @@ func (s *Server) holderToken(w *rolesWorld, kind, ref string) tokenView {
 	t := tokenView{}
 	switch kind {
 	case store.AssignNetwork:
-		t.Icon, t.Tone, t.Label = iconNetwork, "wide", networkLabel(ref)
+		t.Icon, t.Tone, t.Label = iconNetwork, "wide", s.networkLabel(ref)
 	case store.AssignGuests:
 		t.Icon, t.Tone, t.Label = iconGuests, "wide", "Guests"
 	case store.AssignDomainGroup:
@@ -211,7 +217,7 @@ func (s *Server) holderToken(w *rolesWorld, kind, ref string) tokenView {
 func (s *Server) holderWho(w *rolesWorld, kind, ref string) string {
 	switch kind {
 	case store.AssignNetwork:
-		return "Anyone on the " + networkLabel(ref) + ", without signing in"
+		return "Anyone on the " + s.networkLabel(ref) + ", without signing in"
 	case store.AssignGuests:
 		return "Anyone who confirms an email address"
 	case store.AssignDomainGroup:

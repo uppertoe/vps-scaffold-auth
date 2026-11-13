@@ -18,6 +18,10 @@ func TestParseNetworkRanges(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
+	names := NetworkNamesAsWritten(" rch=10.0.0.0/8, 172.16.5.9 ; MCH=10.64.0.0/10,2001:db8::/32;")
+	if want := map[string]string{"rch": "rch", "mch": "MCH"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("names: got %v, want %v", names, want)
+	}
 	if got, err := ParseNetworkRanges(""); err != nil || len(got) != 0 {
 		t.Errorf("empty: %v, %v", got, err)
 	}

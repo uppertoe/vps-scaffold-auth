@@ -81,6 +81,9 @@ type Config struct {
 	// is the one the gateway already trusts for rate limits, never a header
 	// the client controls.
 	NetworkRanges map[string][]netip.Prefix
+	// NetworkNames are the networks' names as NETWORK_RANGES writes them,
+	// by their lower-case names, for the admin pages ("RCH network").
+	NetworkNames map[string]string
 
 	// GroupFeeds are groups filled from endpoints (GROUP_FEEDS, with tokens in
 	// GROUP_FEED_TOKEN_<GROUP>), fetched every FeedInterval. A failed fetch, an
@@ -271,6 +274,7 @@ func Load() (*Config, error) {
 	if c.NetworkRanges, err = ParseNetworkRanges(getenv("NETWORK_RANGES", "")); err != nil {
 		return nil, err
 	}
+	c.NetworkNames = NetworkNamesAsWritten(getenv("NETWORK_RANGES", ""))
 	c.DisplayLocation = time.UTC
 	if c.DisplayTimezone != "" {
 		loc, lerr := time.LoadLocation(c.DisplayTimezone)
@@ -660,6 +664,20 @@ func splitLowerCSV(s string) []string {
 		p = strings.ToLower(strings.TrimSpace(p))
 		if p != "" {
 			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// NetworkNamesAsWritten returns each network's name in NETWORK_RANGES as
+// written, by its lower-case name: "RCH=10.0.0.0/8" names "rch" "RCH". It
+// reads only the names; ParseNetworkRanges checks the value.
+func NetworkNamesAsWritten(v string) map[string]string {
+	out := map[string]string{}
+	for _, entry := range strings.Split(v, ";") {
+		name, _, ok := strings.Cut(strings.TrimSpace(entry), "=")
+		if name = strings.TrimSpace(name); ok && name != "" {
+			out[strings.ToLower(name)] = name
 		}
 	}
 	return out

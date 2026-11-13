@@ -37,6 +37,7 @@ func rolesServer(t *testing.T, networks string) (*Server, *captureSender) {
 	return testServerWith(t, func(c *config.Config) {
 		c.AppRolesFile = path
 		c.NetworkRanges = ranges
+		c.NetworkNames = config.NetworkNamesAsWritten(networks)
 	})
 }
 

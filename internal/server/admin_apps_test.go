@@ -28,7 +28,7 @@ const testAppRolesWithPaths = "enquiries\tuser\tUser\tenquiries.{$DOMAIN}\n" +
 	"caffeine\tuser\tUser\tcaffeine.{$DOMAIN}\n" +
 	"@path\tcaffeine\t*\tuser\n"
 
-// appsAdmin is a server with the manifest above, a network "rch", two
+// appsAdmin is a server with the manifest above, a network "RCH", two
 // administrators, and a client signed in as the first.
 func appsAdmin(t *testing.T) (*Server, *captureSender, *client) {
 	t.Helper()
@@ -36,13 +36,14 @@ func appsAdmin(t *testing.T) (*Server, *captureSender, *client) {
 	if err := os.WriteFile(path, []byte(testAppRolesWithPaths), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ranges, err := config.ParseNetworkRanges("rch=10.0.0.0/8")
+	ranges, err := config.ParseNetworkRanges("RCH=10.0.0.0/8")
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv, sender := testServerWith(t, func(c *config.Config) {
 		c.AppRolesFile = path
 		c.NetworkRanges = ranges
+		c.NetworkNames = config.NetworkNamesAsWritten("RCH=10.0.0.0/8")
 		c.AdminEmails = []string{"admin@example.com", "boss@example.com"}
 	})
 	c := newClient(t, srv.Handler())
