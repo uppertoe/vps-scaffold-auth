@@ -8,7 +8,7 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
-	golang.org/x/image v0.47.0
+	golang.org/x/image v0.48.0
 	modernc.org/sqlite v1.61.1
 )
 
@@ -19,8 +19,8 @@ require (
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/net v0.60.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
