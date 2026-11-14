@@ -163,8 +163,9 @@ func TestDomainRemovalAndDeleteConfirmations(t *testing.T) {
 	}
 }
 
-// A list member outside the allow-list who holds an app role signs in as a
-// member, so carries no "not on the allow-list" pill; the list's facts say
+// A list member outside the allow-list keeps the "not on the allow-list"
+// pill even when the list holds an app role, because the membership still
+// admits them wherever the list guards an older app; the list's facts say
 // which roles it holds.
 func TestOutsideListMemberIsMarkedEvenWithARole(t *testing.T) {
 	srv, _, c := appsAdmin(t)
