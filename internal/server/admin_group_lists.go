@@ -70,9 +70,6 @@ func (s *Server) planBulkAdd(r *http.Request, group, raw string) (*bulkPlan, err
 			}
 		}
 	}
-	// A list that holds an app role makes its members members of the
-	// gateway, so an address added to it does not sign in as a guest.
-	listHolds := s.rolesOn() && s.listHoldsRole(r.Context(), group)
 	members, err := s.store.ListGroupMembers(r.Context(), group)
 	if err != nil {
 		return nil, err
@@ -109,25 +106,10 @@ func (s *Server) planBulkAdd(r *http.Request, group, raw string) (*bulkPlan, err
 			plan.Refused = append(plan.Refused, e)
 		default:
 			ok := s.policy.Allowed(e)
-			plan.Add = append(plan.Add, memberView{Email: e, Permitted: ok, Guest: !ok && !listHolds && !s.mayHoldRoleNow(r.Context(), e, false)})
+			plan.Add = append(plan.Add, memberView{Email: e, Permitted: ok, Guest: !ok})
 		}
 	}
 	return plan, nil
-}
-
-// listHoldsRole reports whether a list holds a role in an app of the
-// manifest.
-func (s *Server) listHoldsRole(ctx context.Context, group string) bool {
-	as, err := s.store.ListRoleAssignments(ctx, "")
-	if err != nil {
-		return false
-	}
-	for _, a := range as {
-		if a.Kind == store.AssignList && a.Ref == group && s.appRoles.Has(a.App, a.Role) {
-			return true
-		}
-	}
-	return false
 }
 
 // handleAdminConfirmMembers adds the addresses ticked on the confirmation page.

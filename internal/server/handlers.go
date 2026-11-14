@@ -411,7 +411,7 @@ func applyRoleHint(d *pageData, rqr, rhd string) {
 	d.RoleGuard = true
 	if rhd = clampHint(rhd); rhd != "" {
 		d.RoleHintDomains = rhd
-		d.RoleHint = fmt.Sprintf(msgRoleHint, formatDomains(rhd))
+		d.RoleHint = fmt.Sprintf(msgRoleHint, withArticle(formatDomains(rhd)))
 	}
 }
 

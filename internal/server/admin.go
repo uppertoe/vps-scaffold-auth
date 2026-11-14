@@ -811,7 +811,7 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 		mv := make([]memberView, 0, len(members))
 		for _, m := range members {
 			ok := s.policy.Allowed(m)
-			mv = append(mv, memberView{Email: m, Permitted: ok, Guest: !ok && !s.mayHoldRoleNow(r.Context(), m, false), AddedFrom: addedFrom[m]})
+			mv = append(mv, memberView{Email: m, Permitted: ok, Guest: !ok, AddedFrom: addedFrom[m]})
 		}
 		hosts := routeGroups[g.Name]
 		inc := map[string]bool{}

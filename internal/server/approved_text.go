@@ -17,7 +17,7 @@ const (
 // the domains joined with "or"; the decline's second names them with their
 // article ("an rch.org.au").
 const (
-	msgRoleHint      = "If you have an %s email address, sign in with that address."
+	msgRoleHint      = "If you have %s email address, sign in with that address."
 	msgDeclineDomain = "This app admits only %s email addresses. If you have %s address, sign in with that address."
 )
 

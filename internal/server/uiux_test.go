@@ -166,7 +166,7 @@ func TestDomainRemovalAndDeleteConfirmations(t *testing.T) {
 // A list member outside the allow-list who holds an app role signs in as a
 // member, so carries no "not on the allow-list" pill; the list's facts say
 // which roles it holds.
-func TestListMemberWithRoleIsNotMarkedGuest(t *testing.T) {
+func TestOutsideListMemberIsMarkedEvenWithARole(t *testing.T) {
 	srv, _, c := appsAdmin(t)
 	ctx := context.Background()
 	if err := srv.store.CreateGroupOfKind(ctx, "registrars", "Registrars", store.GroupKindList); err != nil {
@@ -183,8 +183,11 @@ func TestListMemberWithRoleIsNotMarkedGuest(t *testing.T) {
 	}
 	mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignList, Ref: "registrars"})
 	page = c.get("/admin/groups/registrars", nil).Body.String()
-	if strings.Contains(page, "not on the allow-list") {
-		t.Error("a member who holds a role is marked as signing in only as a guest")
+	// The person signs in as a member through the role, and older guards
+	// treat a member as a guest: this membership still admits them wherever
+	// the list guards an older app, so the warning stays.
+	if !strings.Contains(page, "not on the allow-list") {
+		t.Error("an outside member of a list that holds a role is no longer marked")
 	}
 	if !strings.Contains(page, "One role in one app") {
 		t.Error("the facts' Used by does not name the list's roles")
@@ -235,7 +238,10 @@ func TestDomainsJoinedWithOr(t *testing.T) {
 	if got := formatDomains("rch.org.au, mcri.edu.au"); got != "rch.org.au or mcri.edu.au" {
 		t.Errorf("formatDomains = %q", got)
 	}
-	if got := fmt.Sprintf(msgRoleHint, formatDomains("rch.org.au,mcri.edu.au")); got != "If you have an rch.org.au or mcri.edu.au email address, sign in with that address." {
+	if got := fmt.Sprintf(msgRoleHint, withArticle(formatDomains("rch.org.au,mcri.edu.au"))); got != "If you have an rch.org.au or mcri.edu.au email address, sign in with that address." {
+		t.Errorf("role hint = %q", got)
+	}
+	if got := fmt.Sprintf(msgRoleHint, withArticle(formatDomains("uq.edu.au"))); got != "If you have a uq.edu.au email address, sign in with that address." {
 		t.Errorf("role hint = %q", got)
 	}
 	if withArticle("rch.org.au") != "an rch.org.au" || withArticle("gosh.nhs.uk") != "a gosh.nhs.uk" {
