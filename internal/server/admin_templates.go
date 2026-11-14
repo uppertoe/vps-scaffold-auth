@@ -28,8 +28,11 @@ type adminData struct {
 	// Bulk add confirmation page.
 	Bulk   *bulkPlan
 	Groups []groupView
-	// Group page: the one group shown.
-	Group *groupView
+	// Groups page: the Organisation name cell of a group without one.
+	NoOrgName string
+	// Group page: the one group shown, and the wording of its name field.
+	Group    *groupView
+	NameText groupNameCopy
 	// Groups page: groups the routes require that do not exist yet, and
 	// whether the route manifest (ROUTE_GROUPS_FILE) was read at all.
 	MissingGroups []missingGroupView
@@ -39,9 +42,14 @@ type adminData struct {
 	// Codes page: the groups offered as a card's target, refused ones marked.
 	TargetOptions []targetOptionView
 	Events        []store.BreakGlassEvent
-	Branding      brandingView
 	Settings      settingsView
-	CodeBranding  codeBrandingView
+	// Break-glass cards: the list, the new-card form, one card's page, the
+	// designs and the design editor (admin_cards.go, admin_designs.go).
+	Cards    *cardsView
+	NewCard  *newCardView
+	CardPage *cardPageView
+	Designs  *designsView
+	DesignEd *designEditView
 	// Admin two-factor page.
 	TOTPEnabled bool
 	TOTPAdmins  []totpAdminView
@@ -56,6 +64,18 @@ type adminData struct {
 	Passkeys        []passkeyRow
 	PasskeyRenew    string
 	PasskeysRemoved bool
+	// App roles: the Apps overview, one app's page, and whether the model is
+	// on (which shows the Apps menu item). Script is a page's inline script,
+	// allowed by its hash (see rolesScript).
+	RolesOn bool
+	Apps    *appsView
+	App     *appView
+	Script  template.JS
+	// New group page.
+	NewGroup *newGroupView
+	// Invitations pages.
+	Invites   *invitesView
+	NewInvite *newInviteView
 	// Access log, one person chosen: offer to sign them out everywhere.
 	EndSessionsFor string
 	SessionsEnded  bool
@@ -87,43 +107,12 @@ type newTOTPView struct {
 	Key   string
 }
 
-type codeBrandingView struct {
-	Title        string
-	Body         string
-	Instructions string
-	InhTitle     string // inherited/global value, shown as placeholder
-	InhBody      string
-	InhInstr     string
-	CustomColors bool
-	HeaderColor  string
-	AccentColor  string
-	Bar1Color    string
-	Bar2Color    string
-	Bar3Color    string
-	HasLogo      bool
-	HasGlyph     bool
-}
-
-type brandingView struct {
-	Title        string
-	Body         string
-	Instructions string
-	Placeholder  store.Branding // resolved defaults, shown as input placeholders
-	HasLogo      bool
-	HasPDFLogo   bool
-	HasGlyph     bool
-	HeaderColor  string
-	AccentColor  string
-	Bar1Color    string
-	Bar2Color    string
-	Bar3Color    string
-}
-
 type settingsView struct {
 	BreakGlassHours string
 	NotifyEmails    string
 	WebhookURL      string
 	WebhookTimeout  string
+	HasLogo         bool
 }
 
 type groupView struct {
@@ -146,7 +135,37 @@ type groupView struct {
 	// NotYetCreated: the feed is configured but has never answered, so the
 	// group row does not exist yet; the first successful sync creates it.
 	NotYetCreated bool
+	// App roles (fillGroupRoles): the kind, a domain group's domains, whom
+	// the group admits, and the app roles it holds.
+	Kind      string
+	Domains   []string
+	Who       string
+	Roles     []appRoleRef
+	RoleCount int
+	AppCount  int
+	UsedBy    string
+	// Org is a domain group's organisation name, and OrgText the field's
+	// wording.
+	Org     string
+	OrgText orgNameCopy
+	// Display is the group's label, or its name when it has none; Token
+	// draws it as the app pages do, linked to its page.
+	Display string
+	Token   tokenView
+	// AppLabels are the apps the group holds a role in.
+	AppLabels []string
+	// The groups of Includes, IncludedIn and IncludeOptions, by label.
+	IncludeRefs, IncludedInRefs, OptionRefs []groupRef
+	// HoldsText says that a group holding roles cannot be deleted.
+	HoldsText string
+	// ConfirmDomain is the domain whose removal is being confirmed
+	// (?remove=domain), with the confirmation's wording.
+	ConfirmDomain                           string
+	ConfirmText, ConfirmButton, ConfirmKeep string
 }
+
+// groupRef is a group named by its label, linked by its name.
+type groupRef struct{ Name, Label string }
 
 // feedView is a feed-filled group's source and last sync, for the Groups page.
 type feedView struct {
@@ -155,7 +174,9 @@ type feedView struct {
 	Detail      string
 	LastAttempt string
 	LastSuccess string
-	Pending     bool
+	// Since is the day of the last successful sync, as "9 November".
+	Since   string
+	Pending bool
 	// The held change, exactly as it would be applied, and its hash (sent
 	// back with Accept so only the change on screen can be accepted).
 	PendingAdd    []string
@@ -180,6 +201,7 @@ type feedRetryView struct {
 // administrator's attention. Break-glass target groups are left out of
 // MissingGroups, because a card needs no group to exist.
 type overviewView struct {
+	Apps              int // apps in the app-roles manifest
 	Groups            int
 	Members           int
 	ActiveCards       int
@@ -197,11 +219,15 @@ type overviewView struct {
 	// Sites is the "who can reach what" table (ROUTE_ACCESS_FILE); nil
 	// leaves the table out.
 	Sites []siteAccessView
+	// Lines are the Apps, Invitations and Cards pages' attention lines.
+	Lines []attentionLine
+	// CardsTile labels the count of active cards.
+	CardsTile string
 }
 
 // Attention reports whether anything on the overview needs action.
 func (o *overviewView) Attention() bool {
-	return len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0 || len(o.FeedProblems) > 0 || len(o.FeedIncludes) > 0
+	return len(o.Lines) > 0 || len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0 || len(o.FeedProblems) > 0 || len(o.FeedIncludes) > 0
 }
 
 // missingGroupView is a group a route requires that has not been created.
@@ -223,6 +249,11 @@ type missingGroupView struct {
 type memberView struct {
 	Email     string
 	Permitted bool
+	// Guest marks an address that can sign in only as a guest: the
+	// allow-list does not admit it, and it holds no app role (an address
+	// that holds one signs in as a member; see session.KindMember). Only
+	// such an address carries the "not on the allow-list" pill.
+	Guest bool
 	// AddedFrom is the address a feed made this one from, if it did.
 	AddedFrom string
 }
@@ -274,9 +305,13 @@ type adminEventView struct {
 // missing here (from a newer build) is shown by its code.
 var adminActionLabels = map[string]string{
 	store.AdminActionBreakCreate:        "Card created",
-	store.AdminActionBreakRevoke:        "Card revoked",
-	store.AdminActionBreakRemint:        "Card re-minted",
+	store.AdminActionBreakRevoke:        "Card withdrawn",
+	store.AdminActionBreakRemint:        "Card replaced",
 	store.AdminActionCodeBranding:       "Card design changed",
+	store.AdminActionCardDesign:         "Card given another design",
+	store.AdminActionDesignCreate:       "Card design created",
+	store.AdminActionDesignSave:         "Card design saved",
+	store.AdminActionDesignDelete:       "Card design deleted",
 	store.AdminActionGroupCreate:        "Group created",
 	store.AdminActionGroupDelete:        "Group deleted",
 	store.AdminActionGroupLabel:         "Group label changed",
@@ -290,6 +325,10 @@ var adminActionLabels = map[string]string{
 	store.AdminActionSessionsEnd:        "Signed out on every device",
 	store.AdminActionSettingsUpdate:     "Settings changed",
 	store.AdminActionBrandingUpdate:     "Branding changed",
+	store.AdminActionRoleGive:           "App role given",
+	store.AdminActionRoleTake:           "App role taken away",
+	store.AdminActionGroupDomainAdd:     "Domain added to a group",
+	store.AdminActionGroupDomainRemove:  "Domain removed from a group",
 }
 
 func adminActionLabel(action string) string {
@@ -323,12 +362,12 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 	funcs := template.FuncMap{
 		"fmtTime": func(t time.Time) string { return t.In(loc).Format("2006-01-02 15:04:05 MST") },
 	}
-	base, err := template.New("admin_base.html").Funcs(funcs).ParseFS(templatesFS, "templates/admin_base.html")
+	base, err := template.New("admin_base.html").Funcs(funcs).ParseFS(templatesFS, "templates/admin_base.html", "templates/admin_roles_parts.html", "templates/admin_groups_css.html", "templates/admin_cards_parts.html")
 	if err != nil {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_branding", "admin_settings", "admin_totp", "admin_access", "admin_audit"} {
+	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_card_new", "admin_designs", "admin_design", "admin_settings", "admin_totp", "admin_access", "admin_audit", "admin_apps", "admin_app", "admin_group_new"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err
@@ -337,6 +376,9 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 			return nil, err
 		}
 		out[name] = t
+	}
+	if err := addPages(out, base, adminInvitePages, "admin_invites_css.html"); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -359,7 +401,13 @@ func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, status int,
 	if data.Notice == "" && data.Warning == "" {
 		data.Notice, data.Warning = s.takeNotice(w, r)
 	}
-	w.Header().Set("Content-Security-Policy", s.csp)
+	data.RolesOn = s.rolesOn()
+	data.TOTPEnabled = s.cfg.TOTPEnabled
+	csp := s.csp
+	if data.Script != "" {
+		csp += "; script-src " + scriptHash(string(data.Script))
+	}
+	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := t.ExecuteTemplate(w, "base", data); err != nil {

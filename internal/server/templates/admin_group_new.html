@@ -1,0 +1,43 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "groups_css"}}{{end}}
+{{define "content"}}
+{{with .NewGroup}}
+<a class="back" href="/admin/groups">&larr; All groups</a>
+<div class="ptitle"><div><h1>New group</h1><p>{{if .Kinds}}Choose the kind of group first. The kind cannot be changed later.{{else}}A group holds people, kept by hand.{{end}}</p></div></div>
+<nav class="subtabs" aria-label="Groups"><a href="/admin/groups">All groups</a><a href="/admin/groups/new" aria-current="page">New group</a></nav>
+<form class="newgroup" method="post" action="/admin/groups">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <input type="hidden" name="from" value="new">
+  {{if .Kinds}}
+  <section class="fsec">
+    <h2><span class="step">1</span>Kind of group</h2>
+    <label class="choice"><input type="radio" name="kind" value="domain"{{if eq .Kind "domain"}} checked{{end}}><span class="r"></span><span class="cl"><b>Domain group</b><small>Everyone at one or more email domains, such as rch.org.au.</small></span></label>
+    <label class="choice"><input type="radio" name="kind" value="list"{{if ne .Kind "domain"}} checked{{end}}><span class="r"></span><span class="cl"><b>List</b><small>Named people, kept by hand or filled from a feed.</small></span></label>
+  </section>
+  {{else}}<input type="hidden" name="kind" value="list">{{end}}
+  <section class="fsec">
+    <h2>{{if .Kinds}}<span class="step">2</span>{{end}}Name</h2>
+    <input type="text" name="label" required maxlength="200" value="{{.Label}}" placeholder="For example, Anaesthesia registrars" aria-label="Name">
+    {{if .Kinds}}<p class="hint">The name is shown to administrators. Apps never see it.</p>{{end}}
+  </section>
+  {{if .Kinds}}
+  <section class="fsec for-domain">
+    <h2><span class="step">3</span>Domains</h2>
+    <input type="text" name="domains" class="mono" value="{{.Domains}}" placeholder="monashhealth.org" aria-label="Domains">
+    <p class="hint">Public webmail domains, such as gmail.com, are refused, because they would admit anyone.</p>
+  </section>
+  <section class="fsec for-domain">
+    <h2><span class="step">4</span><label for="org">{{.OrgText.Label}}</label></h2>
+    <input type="text" id="org" name="org" maxlength="80" value="{{.Org}}">
+    <p class="hint">{{.OrgText.Hint}}</p>
+  </section>
+  <section class="fsec for-list">
+    <h2><span class="step">3</span>How the list is kept</h2>
+    <div class="segs"><span class="on">By hand</span><span class="off" aria-disabled="true">From a feed</span></div>
+    <p class="hint">A feed is set by the server's configuration, so a list filled from a feed appears here once the server has been set up.</p>
+  </section>
+  {{end}}
+  <div class="btnrow"><button type="submit">Create the group</button><a href="/admin/groups">Cancel</a></div>
+</form>
+{{end}}
+{{end}}

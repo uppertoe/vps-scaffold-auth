@@ -1,0 +1,8 @@
+# The app roles the role guards in e2e/Caddyfile name. Fields are separated
+# by one TAB; see internal/roles/manifest.go.
+
+e2e	user	User	roles.{$DOMAIN},editors.{$DOMAIN}
+e2e	manager	Manager	roles.{$DOMAIN}
+e2e	editor	Editor	editors.{$DOMAIN}
+@label	e2e	End-to-end test app
+@path	e2e	*	manager

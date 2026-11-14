@@ -39,6 +39,7 @@ services:
     tmpfs: [/tmp]
     volumes:
       - auth_data:/data
+      - ./app-roles.tsv:/etc/vps-auth/app-roles.tsv:ro
     mem_limit: 128m
     pids_limit: 128
     environment:
@@ -55,6 +56,8 @@ services:
       - TOTP_ENABLED=true
       - PASSKEYS_ENABLED=true
       - OTP_LENGTH=8
+      # The app roles the role guards in e2e/Caddyfile name.
+      - APP_ROLES_FILE=/etc/vps-auth/app-roles.tsv
       # Short renewal so the test can watch a session renew.
       - SESSION_TTL=10m
       - SESSION_RENEW_AFTER=3s

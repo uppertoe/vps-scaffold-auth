@@ -25,11 +25,27 @@ import (
 // wrapped by requireAdmin in routes(); handlers here can assume an admin caller.
 func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/{$}", s.handleAdminHome)
+	mux.HandleFunc("GET /admin/apps", s.handleAdminApps)
+	mux.HandleFunc("GET /admin/apps/{app}", s.handleAdminApp)
+	mux.HandleFunc("POST /admin/apps/{app}/review", s.handleAdminAppReview)
+	mux.HandleFunc("POST /admin/apps/{app}/edit", s.handleAdminAppEdit)
+	mux.HandleFunc("POST /admin/apps/{app}/save", s.handleAdminAppSave)
+	mux.HandleFunc("GET /admin/invitations", s.handleAdminInvites)
+	mux.HandleFunc("GET /admin/invitations/new", s.handleAdminNewInvite)
+	mux.HandleFunc("POST /admin/invitations/check", s.handleAdminInviteCheck)
+	mux.HandleFunc("POST /admin/invitations/edit", s.handleAdminInviteEdit)
+	mux.HandleFunc("POST /admin/invitations", s.handleAdminInviteSend)
+	mux.HandleFunc("POST /admin/invitations/{id}/resend", s.handleAdminInviteResend)
+	mux.HandleFunc("POST /admin/invitations/{id}/withdraw", s.handleAdminInviteWithdraw)
 	mux.HandleFunc("GET /admin/groups", s.handleAdminGroups)
+	mux.HandleFunc("GET /admin/groups/new", s.handleAdminNewGroup)
+	mux.HandleFunc("POST /admin/groups/{name}/domains", s.handleAdminAddDomain)
+	mux.HandleFunc("POST /admin/groups/{name}/domains/delete", s.handleAdminRemoveDomain)
 	mux.HandleFunc("POST /admin/groups", s.handleAdminCreateGroup)
 	mux.HandleFunc("GET /admin/groups/{name}", s.handleAdminGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/delete", s.handleAdminDeleteGroup)
 	mux.HandleFunc("POST /admin/groups/{name}/label", s.handleAdminGroupLabel)
+	mux.HandleFunc("POST /admin/groups/{name}/org", s.handleAdminGroupOrg)
 	mux.HandleFunc("POST /admin/groups/{name}/members", s.handleAdminAddMember)
 	mux.HandleFunc("POST /admin/groups/{name}/members/confirm", s.handleAdminConfirmMembers)
 	mux.HandleFunc("POST /admin/groups/{name}/includes", s.handleAdminAddInclude)
@@ -41,13 +57,22 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/audit", s.handleAdminAudit)
 	mux.HandleFunc("GET /admin/break", s.handleAdminBreakList)
 	mux.HandleFunc("POST /admin/break", s.handleAdminBreakCreate)
+	mux.HandleFunc("GET /admin/break/new", s.handleAdminBreakNew)
+	mux.HandleFunc("GET /admin/break/preview.svg", s.handleAdminBreakPreview)
 	mux.HandleFunc("GET /admin/break/{id}", s.handleAdminBreakDetail)
 	mux.HandleFunc("POST /admin/break/{id}/revoke", s.handleAdminBreakRevoke)
 	mux.HandleFunc("POST /admin/break/{id}/remint", s.handleAdminBreakRemint)
-	mux.HandleFunc("GET /admin/break/{id}/qr.png", s.handleAdminBreakQR)
-	mux.HandleFunc("GET /admin/break/{id}/pdf", s.handleAdminBreakPDF)
-	mux.HandleFunc("POST /admin/break/{id}/branding", s.handleAdminSaveCodeBranding)
-	mux.HandleFunc("GET /admin/break/{id}/branding/{which}/img", s.handleAdminCodeBrandingImage)
+	mux.HandleFunc("POST /admin/break/{id}/design", s.handleAdminBreakDesign)
+	// pdf, qr.png and card.svg (see handleAdminBreakFile).
+	mux.HandleFunc("GET /admin/break/{id}/{file}", s.handleAdminBreakFile)
+	mux.HandleFunc("GET /admin/break/designs", s.handleAdminDesigns)
+	mux.HandleFunc("POST /admin/break/designs", s.handleAdminDesignCreate)
+	mux.HandleFunc("GET /admin/break/designs/new", s.handleAdminDesignNew)
+	mux.HandleFunc("GET /admin/break/designs/preview.svg", s.handleAdminDesignPreview)
+	mux.HandleFunc("GET /admin/break/designs/{id}", s.handleAdminDesign)
+	mux.HandleFunc("GET /admin/break/designs/{id}/card.svg", s.handleAdminDesignSVG)
+	mux.HandleFunc("POST /admin/break/designs/{id}/save", s.handleAdminDesignSave)
+	mux.HandleFunc("POST /admin/break/designs/{id}/delete", s.handleAdminDesignDelete)
 	mux.HandleFunc("GET /admin/branding", s.handleAdminBranding)
 	mux.HandleFunc("POST /admin/branding", s.handleAdminSaveBranding)
 	mux.HandleFunc("GET /admin/branding/{which}/img", s.handleAdminBrandingImage)
@@ -196,75 +221,8 @@ func (s *Server) totpIssuer() string {
 	return s.cfg.Domain
 }
 
-// defaultInstructions is shown on the card when no custom instructions are set.
-const defaultInstructions = "1. Open your phone camera and point it at the code.\n" +
-	"2. Tap the link that appears.\n" +
-	"3. You will be signed in for temporary emergency access."
-
-// maxBrandingUpload caps logo/glyph upload size.
+// maxBrandingUpload caps logo upload size.
 const maxBrandingUpload = 2 << 20 // 2 MiB
-
-// resolvedBranding loads stored branding and fills empty text fields with the
-// configured/built-in defaults. (Colours/images are left empty here; the PDF
-// renderer falls back to the RCH palette for empty colours.)
-func (s *Server) resolvedBranding(ctx context.Context) store.Branding {
-	b, _, err := s.store.GetBranding(ctx)
-	if err != nil {
-		log.Printf("load branding: %v", err)
-	}
-	if trimField(b.Title) == "" {
-		b.Title = orFallback(s.cfg.BreakGlassPDFHeader, "Emergency access")
-	}
-	if trimField(b.Body) == "" {
-		b.Body = s.cfg.BreakGlassPDFBody
-	}
-	if trimField(b.Instructions) == "" {
-		b.Instructions = defaultInstructions
-	}
-	return b
-}
-
-// effectiveCardBranding merges a code's per-code overrides over the global
-// branding over the built-in defaults, producing the final content+palette for
-// that code's PDF and QR.
-func (s *Server) effectiveCardBranding(ctx context.Context, codeID int64) store.Branding {
-	g := s.resolvedBranding(ctx) // global, with text defaults filled
-	c, err := s.store.GetCodeBranding(ctx, codeID)
-	if err != nil {
-		log.Printf("load code branding %d: %v", codeID, err)
-	}
-	pick := func(override, base string) string {
-		if trimField(override) != "" {
-			return override
-		}
-		return base
-	}
-	out := store.Branding{
-		Title:        pick(c.Title, g.Title),
-		Body:         pick(c.Body, g.Body),
-		Instructions: pick(c.Instructions, g.Instructions),
-		HeaderColor:  pick(c.HeaderColor, g.HeaderColor),
-		AccentColor:  pick(c.AccentColor, g.AccentColor),
-		Bar1Color:    pick(c.Bar1Color, g.Bar1Color),
-		Bar2Color:    pick(c.Bar2Color, g.Bar2Color),
-		Bar3Color:    pick(c.Bar3Color, g.Bar3Color),
-	}
-	// Card logo: per-card override, else the PDF-default logo (typically a white
-	// variant for the dark header), else the global site logo.
-	if len(c.Logo) > 0 {
-		out.Logo, out.LogoType = c.Logo, c.LogoType
-	} else if len(g.PDFLogo) > 0 {
-		out.Logo, out.LogoType = g.PDFLogo, g.PDFLogoType
-	} else {
-		out.Logo, out.LogoType = g.Logo, g.LogoType
-	}
-	if len(c.Glyph) > 0 {
-		out.Glyph, out.GlyphType = c.Glyph, c.GlyphType
-	} else {
-		out.Glyph, out.GlyphType = g.Glyph, g.GlyphType
-	}
-	return out
-}
 
 func orFallback(v, def string) string {
 	if trimField(v) == "" {
@@ -326,35 +284,17 @@ func splitEmails(s string) []string {
 	return out
 }
 
-// --- Branding admin page ---
+// --- The site logo ---
 
+// handleAdminBranding sends the old branding page to Settings, where the site
+// logo is now set. The card's colours, wording and logo are set by card
+// designs (admin_designs.go).
 func (s *Server) handleAdminBranding(w http.ResponseWriter, r *http.Request) {
-	b, _, err := s.store.GetBranding(r.Context())
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	def := s.resolvedBranding(r.Context())
-	pal := breakglass.DefaultPalette
-	s.renderAdmin(w, r, http.StatusOK, "admin_branding", adminData{
-		Title: "Branding",
-		Branding: brandingView{
-			Title:        b.Title,
-			Body:         b.Body,
-			Instructions: b.Instructions,
-			Placeholder:  def,
-			HasLogo:      len(b.Logo) > 0,
-			HasPDFLogo:   len(b.PDFLogo) > 0,
-			HasGlyph:     len(b.Glyph) > 0,
-			HeaderColor:  orFallback(b.HeaderColor, pal.Header),
-			AccentColor:  orFallback(b.AccentColor, pal.Accent),
-			Bar1Color:    orFallback(b.Bar1Color, pal.Bar1),
-			Bar2Color:    orFallback(b.Bar2Color, pal.Bar2),
-			Bar3Color:    orFallback(b.Bar3Color, pal.Bar3),
-		},
-	})
+	http.Redirect(w, r, "/admin/settings#logo", http.StatusSeeOther)
 }
 
+// handleAdminSaveBranding stores or removes the site logo, which the sign-in
+// pages, the favicon and cards whose design uses the site logo all show.
 func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request) {
 	allowSlowUpload(w)
 	// Whatever this request changes, the sign-in pages and emails read the
@@ -370,43 +310,12 @@ func (s *Server) handleAdminSaveBranding(w http.ResponseWriter, r *http.Request)
 	if !s.checkCSRF(w, r) {
 		return
 	}
-	// Check every image before saving anything, so a refused image does not
-	// leave the text and colours half saved.
-	if err := validateImageFields(r, "logo", "pdflogo", "glyph"); err != nil {
-		s.brandingUploadError(w, r)
-		return
-	}
-	if err := s.store.SaveBrandingText(r.Context(),
-		trimField(r.PostFormValue("title")),
-		trimField(r.PostFormValue("body")),
-		trimField(r.PostFormValue("instructions"))); err != nil {
-		s.adminError(w, r)
-		return
-	}
-	pal := breakglass.DefaultPalette
-	if err := s.store.SaveBrandingColors(r.Context(),
-		hexOrDefault(r.PostFormValue("header_color"), pal.Header),
-		hexOrDefault(r.PostFormValue("accent_color"), pal.Accent),
-		hexOrDefault(r.PostFormValue("bar1_color"), pal.Bar1),
-		hexOrDefault(r.PostFormValue("bar2_color"), pal.Bar2),
-		hexOrDefault(r.PostFormValue("bar3_color"), pal.Bar3)); err != nil {
-		s.adminError(w, r)
-		return
-	}
 	if err := s.applyImageField(r, store.BrandingLogo, "logo"); err != nil {
 		s.brandingUploadError(w, r)
 		return
 	}
-	if err := s.applyImageField(r, store.BrandingPDFLogo, "pdflogo"); err != nil {
-		s.brandingUploadError(w, r)
-		return
-	}
-	if err := s.applyImageField(r, store.BrandingGlyph, "glyph"); err != nil {
-		s.brandingUploadError(w, r)
-		return
-	}
-	s.auditAdmin(r, store.AdminActionBrandingUpdate, "global", "")
-	s.redirectDone(w, r, "/admin/branding", "branding-saved", "")
+	s.auditAdmin(r, store.AdminActionBrandingUpdate, "global", "site logo")
+	s.redirectDone(w, r, "/admin/settings", "branding-saved", "")
 }
 
 // allowSlowUpload gives an admin's branding upload two minutes to arrive. The
@@ -448,18 +357,6 @@ func (s *Server) applyImageField(r *http.Request, which store.BrandingImage, fie
 		return err
 	}
 	return s.store.SetBrandingImage(r.Context(), which, data, mime)
-}
-
-// applyCodeImageField is applyImageField for a single code's override image.
-func (s *Server) applyCodeImageField(r *http.Request, codeID int64, which store.BrandingImage, field string) error {
-	if r.PostFormValue("remove_"+field) != "" {
-		return s.store.ClearCodeBrandingImage(r.Context(), codeID, which)
-	}
-	data, mime, present, err := readUploadedImage(r, field)
-	if err != nil || !present {
-		return err
-	}
-	return s.store.SetCodeBrandingImage(r.Context(), codeID, which, data, mime)
 }
 
 // readUploadedImage reads and validates an uploaded image from a multipart
@@ -544,8 +441,14 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			NotifyEmails:    strings.Join(emails, ", "),
 			WebhookURL:      webhook,
 			WebhookTimeout:  s.cfg.BreakGlassWebhookTimeout.String(),
+			HasLogo:         s.hasSiteLogo(r.Context()),
 		},
 	})
+}
+
+func (s *Server) hasSiteLogo(ctx context.Context) bool {
+	logo, _, _, err := s.siteLogo(ctx)
+	return err == nil && len(logo) > 0
 }
 
 func (s *Server) handleAdminSaveSettings(w http.ResponseWriter, r *http.Request) {
@@ -727,7 +630,7 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
-	ov := &overviewView{Groups: len(groups), TOTPEnabled: s.cfg.TOTPEnabled}
+	ov := &overviewView{Apps: len(s.appRoles.Apps), Groups: len(groups), TOTPEnabled: s.cfg.TOTPEnabled}
 	cardTargets := map[string]bool{}
 	for _, c := range codes {
 		cardTargets[normalizeGroupName(c.TargetGroup)] = true
@@ -789,6 +692,24 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ov.Sites = s.routeAccess()
+	// The Apps, Invitations and Cards pages' attention lines, so the
+	// Overview lists everything that needs an administrator.
+	if s.rolesOn() {
+		world, err := s.loadRolesWorld(ctx)
+		if err != nil {
+			s.adminError(w, r)
+			return
+		}
+		ov.Lines = append(closedAppLines(world), s.invitationLines(world)...)
+	}
+	stats, err := s.cardStats(ctx)
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	sortCards(codes)
+	ov.Lines = append(ov.Lines, cardLines(codes, stats)...)
+	ov.CardsTile = msgActiveCardsTile
 	s.renderAdmin(w, r, http.StatusOK, "admin_home", adminData{Title: "Overview", Overview: ov})
 }
 
@@ -816,6 +737,9 @@ func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
 // pages (?open=name) goes to that group's page.
 func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 	view, missing, routeGroupsOn, err := s.groupViews(r)
+	if err == nil {
+		err = s.fillGroupRoles(r, view)
+	}
 	if err != nil {
 		s.adminError(w, r)
 		return
@@ -829,28 +753,15 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{
-		Title: "Groups", Groups: view,
+		Title: "Groups", Groups: view, NoOrgName: msgNoOrgName,
 		MissingGroups: missing, RouteGroupsOn: routeGroupsOn,
 	})
 }
 
-// handleAdminGroup shows one group: its source, members, includes and label.
+// handleAdminGroup shows one group: its source, members, includes and label,
+// or a domain group's domains, and the app roles it holds.
 func (s *Server) handleAdminGroup(w http.ResponseWriter, r *http.Request) {
-	view, _, _, err := s.groupViews(r)
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	name := normalizeGroupName(r.PathValue("name"))
-	for i := range view {
-		if view[i].Name == name {
-			s.renderAdmin(w, r, http.StatusOK, "admin_group", adminData{
-				Title: name, Group: &view[i], OpenGroup: name,
-			})
-			return
-		}
-	}
-	http.Redirect(w, r, "/admin/groups", http.StatusFound)
+	s.renderGroup(w, r, http.StatusOK, normalizeGroupName(r.PathValue("name")), "")
 }
 
 // groupViews builds every group's view, the groups the routes require that
@@ -899,7 +810,8 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 		}
 		mv := make([]memberView, 0, len(members))
 		for _, m := range members {
-			mv = append(mv, memberView{Email: m, Permitted: s.policy.Allowed(m), AddedFrom: addedFrom[m]})
+			ok := s.policy.Allowed(m)
+			mv = append(mv, memberView{Email: m, Permitted: ok, Guest: !ok, AddedFrom: addedFrom[m]})
 		}
 		hosts := routeGroups[g.Name]
 		inc := map[string]bool{}
@@ -968,6 +880,7 @@ func (s *Server) feedViewFor(group string, syncStates map[string]store.GroupSync
 		fv.LastAttempt = s.stampMin(st.LastAttempt)
 		if !st.LastSuccess.IsZero() {
 			fv.LastSuccess = s.stampMin(st.LastSuccess)
+			fv.Since = st.LastSuccess.In(s.tzloc()).Format("2 January")
 		}
 		fv.Pending = st.Status == store.GroupSyncHeld
 		if fv.Pending {
@@ -991,7 +904,15 @@ func (s *Server) handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) 
 	if !s.checkCSRF(w, r) {
 		return
 	}
+	if r.PostFormValue("from") == "new" {
+		s.createGroupFromNewPage(w, r)
+		return
+	}
 	name := normalizeGroupName(r.PostFormValue("name"))
+	if name == "new" {
+		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{Title: "Invalid group name", Message: msgGroupNameNew})
+		return
+	}
 	if authz.IsReservedGroup(name) {
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title:   "Reserved group name",
@@ -1023,7 +944,23 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	name := normalizeGroupName(r.PathValue("name"))
-	if err := s.store.DeleteGroup(r.Context(), name); err != nil {
+	if err := s.store.DeleteGroup(r.Context(), name); errors.Is(err, store.ErrGroupHoldsRoles) {
+		n, err := s.store.GroupRoleCount(r.Context(), name)
+		if err != nil {
+			s.adminError(w, r)
+			return
+		}
+		label := name
+		if gs, err := s.store.ListGroups(r.Context()); err == nil {
+			for _, g := range gs {
+				if g.Name == name && g.Label != "" {
+					label = g.Label
+				}
+			}
+		}
+		s.renderGroup(w, r, http.StatusConflict, name, fmt.Sprintf(msgGroupHolds, label, countWords(n, "role", "roles")))
+		return
+	} else if err != nil {
 		s.adminError(w, r)
 		return
 	}
@@ -1129,339 +1066,6 @@ func (s *Server) handleAdminRemoveMember(w http.ResponseWriter, r *http.Request)
 }
 
 // --- Break-glass codes ---
-
-func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
-	codes, err := s.store.ListBreakGlassCodes(r.Context())
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	groups, err := s.store.ListGroups(r.Context())
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	names := make([]string, 0, len(groups))
-	for _, g := range groups {
-		names = append(names, g.Name)
-	}
-	refused := s.refusedTargets()
-	view := make([]codeView, 0, len(codes))
-	for _, c := range codes {
-		v := s.toCodeView(c)
-		v.Refused = refused[normalizeGroupName(c.TargetGroup)]
-		view = append(view, v)
-	}
-	s.renderAdmin(w, r, http.StatusOK, "admin_codes", adminData{
-		Title: "Break-glass codes", Codes: view, TargetOptions: s.targetOptions(names),
-	})
-}
-
-func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) {
-	if !s.checkCSRF(w, r) {
-		return
-	}
-	label := trimField(r.PostFormValue("label"))
-	// The form offers the known groups in a list and takes a new name in a
-	// second field; a typed name wins over the list.
-	group := normalizeGroupName(r.PostFormValue("group_new"))
-	if group == "" {
-		group = normalizeGroupName(r.PostFormValue("group"))
-	}
-	if label == "" || group == "" {
-		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
-			Title: "Missing fields", Message: "A label and a target group are both required.",
-		})
-		return
-	}
-	// The label becomes the session's principal, "breakglass:<label>", which
-	// apps read as Remote-User and Remote-Email. An "@" could make an app that
-	// takes the domain after the last "@" read the card as a department
-	// address, a comma could split a header list, and a line break has no
-	// place in a header.
-	if !validCardLabel(label) {
-		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
-			Title: "Invalid label", Message: "A label cannot contain \"@\", a comma or a line break.",
-		})
-		return
-	}
-	if authz.IsReservedGroup(group) {
-		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
-			Title:   "Reserved target group",
-			Message: "A break-glass code cannot target the reserved roles \"admin\", \"user\" or \"guest\". Use a dedicated group instead.",
-		})
-		return
-	}
-	if !authz.ValidGroupName(group) {
-		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
-			Title:   "Invalid target group",
-			Message: "A target group may use only lowercase letters, numbers, hyphens, and underscores — no spaces, commas, or other punctuation.",
-		})
-		return
-	}
-	if reason, refused := s.targetRefusal(group); refused {
-		msg := "A break-glass code cannot target \"" + group + "\", because an application reads that group as one of its own roles and a card would admit its holder in that role."
-		if reason == refusedFeed {
-			msg = "A break-glass code cannot target \"" + group + "\", because its members come from a feed and a card would admit its holder alongside them."
-		}
-		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
-			Title:   "Group " + reason,
-			Message: msg + " Choose a group that an app's sign-in rule names only to grant entry.",
-		})
-		return
-	}
-	tokenEnc, tokenHash, err := s.newToken()
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	rd := authz.SafeRedirect(trimField(r.PostFormValue("redirect")), s.cfg.Domain, "")
-	_, err = s.store.CreateBreakGlassCode(r.Context(), store.BreakGlassCode{
-		Label:       label,
-		Note:        trimField(r.PostFormValue("note")),
-		TargetGroup: group,
-		TokenEnc:    tokenEnc,
-		TokenHash:   tokenHash,
-		Redirect:    rd,
-	})
-	if err != nil {
-		// Most likely a duplicate label (UNIQUE constraint).
-		s.renderAdmin(w, r, http.StatusConflict, "admin_message", adminData{
-			Title: "Could not create code", Message: "A code with that label already exists. Labels must be unique.",
-		})
-		return
-	}
-	s.auditAdmin(r, store.AdminActionBreakCreate, label, "group="+group)
-	s.redirectDone(w, r, "/admin/break", "card-created", "")
-}
-
-func (s *Server) handleAdminBreakDetail(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	code, found, err := s.store.GetBreakGlassCode(r.Context(), id)
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	if !found {
-		http.NotFound(w, r)
-		return
-	}
-	events, err := s.store.ListBreakGlassEvents(r.Context(), id, 100, 0)
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	s.renderAdmin(w, r, http.StatusOK, "admin_code_detail", adminData{
-		Title: code.Label, Code: s.toCodeView(code), Events: events,
-		CodeBranding: s.codeBrandingView(r.Context(), id),
-	})
-}
-
-// codeBrandingView builds the per-code customisation form data: the override
-// values, the inherited (global) values shown as placeholders, and the
-// effective colours used to prefill the pickers.
-func (s *Server) codeBrandingView(ctx context.Context, codeID int64) codeBrandingView {
-	ov, err := s.store.GetCodeBranding(ctx, codeID)
-	if err != nil {
-		log.Printf("code branding %d: %v", codeID, err)
-	}
-	global := s.resolvedBranding(ctx)
-	eff := s.effectiveCardBranding(ctx, codeID)
-	pal := breakglass.DefaultPalette
-	return codeBrandingView{
-		Title:        ov.Title,
-		Body:         ov.Body,
-		Instructions: ov.Instructions,
-		InhTitle:     global.Title,
-		InhBody:      global.Body,
-		InhInstr:     global.Instructions,
-		CustomColors: trimField(ov.HeaderColor) != "" || trimField(ov.AccentColor) != "" ||
-			trimField(ov.Bar1Color) != "" || trimField(ov.Bar2Color) != "" || trimField(ov.Bar3Color) != "",
-		HeaderColor: orFallback(eff.HeaderColor, pal.Header),
-		AccentColor: orFallback(eff.AccentColor, pal.Accent),
-		Bar1Color:   orFallback(eff.Bar1Color, pal.Bar1),
-		Bar2Color:   orFallback(eff.Bar2Color, pal.Bar2),
-		Bar3Color:   orFallback(eff.Bar3Color, pal.Bar3),
-		HasLogo:     len(ov.Logo) > 0,
-		HasGlyph:    len(ov.Glyph) > 0,
-	}
-}
-
-// handleAdminSaveCodeBranding stores a code's per-code branding overrides.
-func (s *Server) handleAdminSaveCodeBranding(w http.ResponseWriter, r *http.Request) {
-	allowSlowUpload(w)
-	r.Body = http.MaxBytesReader(w, r.Body, maxBrandingUpload+64<<10)
-	if err := r.ParseMultipartForm(maxBrandingUpload); err != nil {
-		s.renderAdmin(w, r, http.StatusRequestEntityTooLarge, "admin_message", adminData{
-			Title: "Upload too large", Message: "The images in one upload must total less than 2 MB.",
-		})
-		return
-	}
-	if !s.checkCSRF(w, r) {
-		return
-	}
-	id, ok := pathID(r)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	// Colours only apply when the admin opts in; otherwise they inherit (empty).
-	var header, accent, bar1, bar2, bar3 string
-	if r.PostFormValue("custom_colors") != "" {
-		header = hexOrDefault(r.PostFormValue("header_color"), breakglass.DefaultPalette.Header)
-		accent = hexOrDefault(r.PostFormValue("accent_color"), breakglass.DefaultPalette.Accent)
-		bar1 = hexOrDefault(r.PostFormValue("bar1_color"), breakglass.DefaultPalette.Bar1)
-		bar2 = hexOrDefault(r.PostFormValue("bar2_color"), breakglass.DefaultPalette.Bar2)
-		bar3 = hexOrDefault(r.PostFormValue("bar3_color"), breakglass.DefaultPalette.Bar3)
-	}
-	if err := validateImageFields(r, "logo", "glyph"); err != nil {
-		s.brandingUploadError(w, r)
-		return
-	}
-	if err := s.store.SaveCodeBrandingMeta(r.Context(), id,
-		trimField(r.PostFormValue("title")),
-		trimField(r.PostFormValue("body")),
-		trimField(r.PostFormValue("instructions")),
-		header, accent, bar1, bar2, bar3); err != nil {
-		s.adminError(w, r)
-		return
-	}
-	if err := s.applyCodeImageField(r, id, store.BrandingLogo, "logo"); err != nil {
-		s.brandingUploadError(w, r)
-		return
-	}
-	if err := s.applyCodeImageField(r, id, store.BrandingGlyph, "glyph"); err != nil {
-		s.brandingUploadError(w, r)
-		return
-	}
-	s.auditAdmin(r, store.AdminActionCodeBranding, "code#"+strconv.FormatInt(id, 10), "")
-	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-branding", "")
-}
-
-// handleAdminCodeBrandingImage serves a code's override logo or glyph preview.
-func (s *Server) handleAdminCodeBrandingImage(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	b, err := s.store.GetCodeBranding(r.Context(), id)
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	var data []byte
-	var mime string
-	switch r.PathValue("which") {
-	case "logo":
-		data, mime = b.Logo, b.LogoType
-	case "glyph":
-		data, mime = b.Glyph, b.GlyphType
-	default:
-		http.NotFound(w, r)
-		return
-	}
-	if len(data) == 0 {
-		http.NotFound(w, r)
-		return
-	}
-	writeImage(w, mime, data)
-}
-
-func (s *Server) handleAdminBreakRevoke(w http.ResponseWriter, r *http.Request) {
-	if !s.checkCSRF(w, r) {
-		return
-	}
-	id, ok := pathID(r)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	if err := s.store.RevokeBreakGlassCode(r.Context(), id); err != nil {
-		s.adminError(w, r)
-		return
-	}
-	// Every session the card has granted ends with it.
-	if err := s.endSessions(r.Context(), cardKey(id), s.now()); err != nil {
-		s.adminError(w, r)
-		return
-	}
-	s.auditAdmin(r, store.AdminActionBreakRevoke, "code#"+strconv.FormatInt(id, 10), "")
-	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-revoked", "")
-}
-
-func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) {
-	if !s.checkCSRF(w, r) {
-		return
-	}
-	id, ok := pathID(r)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	tokenEnc, tokenHash, err := s.newToken()
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	if err := s.store.RemintBreakGlassCode(r.Context(), id, tokenEnc, tokenHash); err != nil {
-		s.adminError(w, r)
-		return
-	}
-	// The old card stops working, and so do the sessions it granted.
-	if err := s.endSessions(r.Context(), cardKey(id), s.now()); err != nil {
-		s.adminError(w, r)
-		return
-	}
-	s.auditAdmin(r, store.AdminActionBreakRemint, "code#"+strconv.FormatInt(id, 10), "")
-	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-reminted", "")
-}
-
-func (s *Server) handleAdminBreakQR(w http.ResponseWriter, r *http.Request) {
-	png, _, ok := s.codeImage(w, r)
-	if !ok {
-		return
-	}
-	writeImage(w, "image/png", png)
-}
-
-func (s *Server) handleAdminBreakPDF(w http.ResponseWriter, r *http.Request) {
-	png, code, ok := s.codeImage(w, r)
-	if !ok {
-		return
-	}
-	b := s.effectiveCardBranding(r.Context(), code.ID)
-	card := breakglass.Card{
-		Title:        b.Title,
-		Label:        code.Label,
-		Body:         b.Body,
-		Instructions: b.Instructions,
-		Note:         code.Note,
-		QRPNG:        png,
-		LogoData:     b.Logo,
-		LogoType:     b.LogoType,
-		GlyphData:    b.Glyph,
-		GlyphType:    b.GlyphType,
-		// Empty colours fall back to the RCH palette inside the renderer.
-		HeaderColor: b.HeaderColor,
-		AccentColor: b.AccentColor,
-		Bar1Color:   b.Bar1Color,
-		Bar2Color:   b.Bar2Color,
-		Bar3Color:   b.Bar3Color,
-	}
-	pdf, err := card.PDF()
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "application/pdf")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+pdfFilename(code.Label)+`"`)
-	w.Write(pdf)
-}
 
 // codeImage loads a code, decrypts its token, and renders the QR PNG of its
 // scan URL. Returns ok=false having already written a response on any failure

@@ -1,8 +1,8 @@
 {{define "title"}}{{.Title}}{{end}}
 {{define "content"}}
 {{with .Bulk}}
-<p><a href="/admin/groups/{{.Group}}">&larr; {{.Group}}</a></p>
-<h1>Add members to <code class="mono">{{.Group}}</code></h1>
+<p><a href="/admin/groups/{{.Group}}">&larr; {{.Label}}</a></p>
+<h1>Add members to {{.Label}}</h1>
 <p class="sub">Check the addresses below, then confirm. Untick any address you do not want to add. Addresses that are not on the allow-list start unticked.</p>
 
 {{if .TooMany}}<div class="notice warn">Only the first 1,000 addresses have been read. Add the rest in a second paste.</div>{{end}}
@@ -13,7 +13,7 @@
     <h2>To be added ({{len .Add}})</h2>
     {{if .Add}}
     {{range .Add}}
-    <label class="ck"><input type="checkbox" name="add" value="{{.Email}}"{{if .Permitted}} checked{{end}}> {{.Email}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</label>
+    <label class="ck"><input type="checkbox" name="add" value="{{.Email}}"{{if .Permitted}} checked{{end}}> {{.Email}}{{if .Guest}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</label>
     {{end}}
     {{else}}
     <p class="muted" style="margin:0">There are no new addresses to add.</p>
@@ -22,7 +22,7 @@
   {{if .Refused}}
   <div class="panel">
     <h2>Cannot be added ({{len .Refused}})</h2>
-    <p class="muted" style="margin:0 0 6px">The allow-list does not admit these addresses, and <code class="mono">{{.Group}}</code> is {{.RefusedReason}}, so the gateway does not add them: a person who can sign in only as a guest would otherwise be admitted in that role.</p>
+    <p class="muted" style="margin:0 0 6px">The allow-list does not admit these addresses, and {{.Label}} is {{.RefusedReason}}, so the gateway does not add them: a person who can sign in only as a guest would otherwise be admitted in that role.</p>
     <p class="muted" style="margin:0">{{range $i, $e := .Refused}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
   </div>
   {{end}}

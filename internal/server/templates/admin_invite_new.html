@@ -1,0 +1,55 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "groups_css"}}{{template "invites_css"}}{{end}}
+{{define "content"}}
+{{template "role_icons"}}
+{{$csrf := .CSRF}}
+{{with .NewInvite}}
+<a class="back" href="/admin/invitations">&larr; All invitations</a>
+{{with .Check}}
+<div class="ptitle"><div><h1>Check the invitations</h1><p>Nothing has been sent yet.</p></div></div>
+<form method="post" action="/admin/invitations">
+  <input type="hidden" name="csrf" value="{{$csrf}}">
+  <input type="hidden" name="addresses" value="{{$.NewInvite.Form.Addresses}}">
+  <input type="hidden" name="role" value="{{$.NewInvite.Form.Role}}">
+  <input type="hidden" name="access" value="{{$.NewInvite.Form.Access}}">
+  <input type="hidden" name="until" value="{{$.NewInvite.Form.Until}}">
+  <input type="hidden" name="message" value="{{$.NewInvite.Form.Message}}">
+  <section class="fsec">
+    <h2>{{.Heading}}</h2>
+    <div class="who">{{template "token" .Token}}<span class="muted">{{.For}}</span></div>
+    <div class="rlist tbl checkl">
+      {{range .Rows}}<div class="rrow{{if .LeftOut}} out{{end}}"><div title="{{.Email}}">{{.Email}}</div><div title="{{.Says}}">{{.Says}}</div></div>{{end}}
+    </div>
+    {{if .Nobody}}<p class="warnline">{{.Nobody}}</p>{{end}}
+  </section>
+  <div class="btnrow">{{if .Send}}<button type="submit">{{.Button}}</button>{{end}}<button type="submit" class="ghost" formaction="/admin/invitations/edit">Change the list</button></div>
+</form>
+{{else}}
+<div class="ptitle"><div><h1>Invite people</h1><p>Each person receives their own email, with a link that works only for their address.</p></div></div>
+<form class="newinvite" method="post" action="/admin/invitations/check">
+  <input type="hidden" name="csrf" value="{{$csrf}}">
+  <section class="fsec">
+    <h2><span class="step">1</span>Addresses</h2>
+    <textarea name="addresses" rows="3" placeholder="Paste one address or many" aria-label="Addresses">{{.Form.Addresses}}</textarea>
+    <p class="hint">Separate addresses with commas or new lines.</p>
+  </section>
+  <section class="fsec">
+    <h2><span class="step">2</span>Role</h2>
+    <p class="hint">An invited person is identified by their email address, so an invitation can give any role, including an app's administrator role.</p>
+    {{range .Choices}}<label class="choice wr"><input type="radio" name="role" value="{{.Value}}"{{if .Checked}} checked{{end}}><span class="r"></span><span class="cl inl">{{template "token" .Token}}<small>{{.Says}}</small></span>{{template "reach" .Reach}}</label>{{end}}
+  </section>
+  <section class="fsec">
+    <h2><span class="step">3</span>Length of access</h2>
+    <label class="choice"><input type="radio" name="access" value="until"{{if ne .Form.Access "perm"}} checked{{end}}><span class="r"></span><span class="cl"><b>Until a date</b><small>The role ends on the date, without anyone having to remove it.</small></span></label>
+    <input class="untildate" type="date" name="until" min="{{.Today}}" value="{{.Form.Until}}" aria-label="End date">
+    <label class="choice"><input type="radio" name="access" value="perm"{{if eq .Form.Access "perm"}} checked{{end}}><span class="r"></span><span class="cl"><b>Permanently</b><small>The person keeps the role until an administrator removes it.</small></span></label>
+  </section>
+  <section class="fsec">
+    <h2><span class="step">4</span>A message (optional)</h2>
+    <input type="text" name="message" maxlength="500" value="{{.Form.Message}}" placeholder="Added to the email, above the link" aria-label="A message (optional)">
+  </section>
+  <div class="btnrow"><button type="submit">Check the addresses</button><a href="/admin/invitations">Cancel</a></div>
+</form>
+{{end}}
+{{end}}
+{{end}}

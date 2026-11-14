@@ -18,7 +18,7 @@ func TestAdminActionsAreAudited(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 
-	tok := extractCSRF(t, c.get("/admin/break", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
 	rec := c.postForm("/admin/break", url.Values{
 		"csrf": {tok}, "label": {"Angio 1"}, "group": {"code_stroke_break_glass"},
 	})

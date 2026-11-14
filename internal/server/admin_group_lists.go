@@ -20,6 +20,7 @@ const maxBulkAddresses = 1000
 // bulkPlan sorts a pasted list of addresses for the confirmation page.
 type bulkPlan struct {
 	Group   string
+	Label   string       // the group's label, or its name when it has none
 	Add     []memberView // valid and not yet members; Permitted false = not on the allow-list
 	Already []string     // already members
 	Invalid []string     // not an email address
@@ -60,8 +61,15 @@ func (s *Server) groupExists(r *http.Request, name string) bool {
 // such as "Jane Citizen <jane@example.org>" are accepted, as people paste them
 // from mail clients.
 func (s *Server) planBulkAdd(r *http.Request, group, raw string) (*bulkPlan, error) {
-	plan := &bulkPlan{Group: group}
+	plan := &bulkPlan{Group: group, Label: group}
 	plan.RefusedReason, _ = s.targetRefusal(group)
+	if gs, err := s.store.ListGroups(r.Context()); err == nil {
+		for _, g := range gs {
+			if g.Name == group && g.Label != "" {
+				plan.Label = g.Label
+			}
+		}
+	}
 	members, err := s.store.ListGroupMembers(r.Context(), group)
 	if err != nil {
 		return nil, err
@@ -97,7 +105,8 @@ func (s *Server) planBulkAdd(r *http.Request, group, raw string) (*bulkPlan, err
 		case plan.RefusedReason != "" && !s.policy.Allowed(e):
 			plan.Refused = append(plan.Refused, e)
 		default:
-			plan.Add = append(plan.Add, memberView{Email: e, Permitted: s.policy.Allowed(e)})
+			ok := s.policy.Allowed(e)
+			plan.Add = append(plan.Add, memberView{Email: e, Permitted: ok, Guest: !ok})
 		}
 	}
 	return plan, nil

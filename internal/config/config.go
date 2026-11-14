@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -67,6 +68,22 @@ type Config struct {
 	// rules ("host<TAB>kind<TAB>value", .generated/caddy/route-access.tsv).
 	// When set, the admin overview shows a "who can reach what" table.
 	RouteAccessFile string
+
+	// AppRolesFile is the scaffold-rendered manifest of each app's roles
+	// ("app<TAB>role<TAB>label<TAB>hosts" lines). A guard that names an app
+	// (X-Auth-App) is decided by role assignments, and only against the apps
+	// and roles listed here. Empty turns the app-roles model off.
+	AppRolesFile string
+
+	// NetworkRanges are named networks a role can be given to, so a request
+	// from inside one is admitted without signing in (NETWORK_RANGES, e.g.
+	// "rch=10.0.0.0/8,172.16.0.0/12;mch=10.64.0.0/10"). The client address
+	// is the one the gateway already trusts for rate limits, never a header
+	// the client controls.
+	NetworkRanges map[string][]netip.Prefix
+	// NetworkNames are the networks' names as NETWORK_RANGES writes them,
+	// by their lower-case names, for the admin pages ("RCH network").
+	NetworkNames map[string]string
 
 	// GroupFeeds are groups filled from endpoints (GROUP_FEEDS, with tokens in
 	// GROUP_FEED_TOKEN_<GROUP>), fetched every FeedInterval. A failed fetch, an
@@ -253,6 +270,11 @@ func Load() (*Config, error) {
 	c.RouteGroupsFile = strings.TrimSpace(getenv("ROUTE_GROUPS_FILE", ""))
 	c.BreakGlassRefusedGroups = splitLowerList(getenv("BREAKGLASS_REFUSED_GROUPS", ""))
 	c.RouteAccessFile = strings.TrimSpace(getenv("ROUTE_ACCESS_FILE", ""))
+	c.AppRolesFile = strings.TrimSpace(getenv("APP_ROLES_FILE", ""))
+	if c.NetworkRanges, err = ParseNetworkRanges(getenv("NETWORK_RANGES", "")); err != nil {
+		return nil, err
+	}
+	c.NetworkNames = NetworkNamesAsWritten(getenv("NETWORK_RANGES", ""))
 	c.DisplayLocation = time.UTC
 	if c.DisplayTimezone != "" {
 		loc, lerr := time.LoadLocation(c.DisplayTimezone)
@@ -645,4 +667,75 @@ func splitLowerCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// NetworkNamesAsWritten returns each network's name in NETWORK_RANGES as
+// written, by its lower-case name: "RCH=10.0.0.0/8" names "rch" "RCH". It
+// reads only the names; ParseNetworkRanges checks the value.
+func NetworkNamesAsWritten(v string) map[string]string {
+	out := map[string]string{}
+	for _, entry := range strings.Split(v, ";") {
+		name, _, ok := strings.Cut(strings.TrimSpace(entry), "=")
+		if name = strings.TrimSpace(name); ok && name != "" {
+			out[strings.ToLower(name)] = name
+		}
+	}
+	return out
+}
+
+// ParseNetworkRanges parses NETWORK_RANGES: networks separated by ";", each
+// "name=prefix[,prefix...]". A name is lower-case letters, digits, "-" or
+// "_". A bare address is read as a single-host prefix. Empty means none.
+func ParseNetworkRanges(v string) (map[string][]netip.Prefix, error) {
+	out := map[string][]netip.Prefix{}
+	for _, entry := range strings.Split(v, ";") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, list, ok := strings.Cut(entry, "=")
+		name = strings.ToLower(strings.TrimSpace(name))
+		if !ok || !validNetworkName(name) {
+			return nil, fmt.Errorf("NETWORK_RANGES: %q must read name=prefix[,prefix...]", entry)
+		}
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("NETWORK_RANGES: network %q is listed twice", name)
+		}
+		var prefixes []netip.Prefix
+		for _, raw := range strings.Split(list, ",") {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
+			}
+			pfx, err := netip.ParsePrefix(raw)
+			if err != nil {
+				addr, aerr := netip.ParseAddr(raw)
+				if aerr != nil {
+					return nil, fmt.Errorf("NETWORK_RANGES: %q in network %q is not an address or prefix", raw, name)
+				}
+				pfx = netip.PrefixFrom(addr, addr.BitLen())
+			}
+			if pfx.Bits() == 0 {
+				return nil, fmt.Errorf("NETWORK_RANGES: %q in network %q would admit every address", raw, name)
+			}
+			prefixes = append(prefixes, pfx.Masked())
+		}
+		if len(prefixes) == 0 {
+			return nil, fmt.Errorf("NETWORK_RANGES: network %q has no prefixes", name)
+		}
+		out[name] = prefixes
+	}
+	return out, nil
+}
+
+func validNetworkName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
 }

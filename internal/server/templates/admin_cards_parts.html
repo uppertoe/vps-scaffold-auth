@@ -1,0 +1,191 @@
+{{/* Shared parts of the break-glass card pages: the styles of the card
+     list, the card page, the new-card form and the design editor, after
+     the prototype. A card's preview is its SVG drawing, from the same
+     layout as its PDF. */}}
+{{define "cards_css"}}<style>
+  .subtabs { display: flex; border-bottom: 1px solid var(--border); margin: -8px 0 24px; height: 40px; overflow-x: auto; }
+  .subtabs a { display: flex; align-items: center; padding: 0 12px; font-size: 14px; color: var(--muted); text-decoration: none; white-space: nowrap; }
+  .subtabs a[aria-current] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  .btnlink.wide { width: 100%; justify-content: center; }
+  .btnlink.red { background: var(--surface); color: var(--danger); border-color: var(--off-line); }
+  .cardimg { display: block; width: 100%; height: auto; background: #fff; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,.12), 0 8px 24px rgba(0,0,0,.08); }
+  .cardimg.off { filter: grayscale(1); opacity: .55; }
+  .cardimg.mini { border-radius: 2px; box-shadow: 0 0 0 1px var(--border); }
+
+  .clist .rrow { grid-template-columns: 40px minmax(0, 1.6fr) 140px 100px 140px 104px; height: 72px; }
+  .clist .rrow.colhead { height: 36px; }
+  .clist .rrow.colhead > div { font-size: 12px; font-weight: 600; color: var(--muted); }
+  .clist .none { color: var(--muted); }
+  .clist .rrow.colhead > div:first-child { padding-left: 0; }
+  .clist .rrow.app { grid-template-columns: minmax(0, 1fr) auto; height: 40px; }
+  .clist .rrow.app .name { grid-column: 1; }
+  .clist .rrow > div { min-width: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .clist .rrow.withdrawn > div:not(:last-child) { opacity: .5; }
+  .clist .loc b { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+  .clist .loc small { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .clist .never { color: var(--off-fg); }
+  .legacynote { font-size: 14px; color: var(--muted); margin: 0 0 12px; max-width: 70ch; }
+
+  .cardlayout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 32px; align-items: start; }
+  .cardlayout.reverse { grid-template-columns: minmax(0, 1fr) 300px; }
+  .previewcol { display: grid; gap: 8px; min-width: 0; }
+  .previewcol.sticky { position: sticky; top: 16px; }
+  .previewcol .caption { font-size: 13px; color: var(--muted); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .previewcol form { display: grid; gap: 8px; margin: 8px 0 0; }
+  .previewcol label { margin: 0; }
+  .previewcol button { margin: 0; }
+  .previewcol .small { font-size: 13px; }
+
+  .steps { list-style: none; margin: 0 0 24px; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+  .steps.one { grid-template-columns: 1fr; }
+  .steps li { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: 20px auto; column-gap: 12px; padding: 12px 16px; border-left: 1px solid var(--line); align-items: start; }
+  .steps li:first-child { border-left: 0; }
+  .steps i { grid-row: 1 / 3; width: 28px; height: 28px; border-radius: 50%; border: 1.5px dashed var(--input-border); display: grid; place-items: center; font-style: normal; font-size: 14px; color: var(--muted); }
+  .steps li.done i { border: 0; background: var(--ok-bg); color: var(--ok-fg); box-shadow: inset 0 0 0 1px var(--ok-line); }
+  .steps li.gone i { border: 0; background: var(--off-bg); color: var(--off-fg); }
+  .steps b { font-size: 14px; font-weight: 600; }
+  /* A step's instruction is what the administrator does next, so it wraps. */
+  .steps span { font-size: 13px; line-height: 18px; color: var(--muted); }
+
+  .cfacts { margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+  .cfacts > div { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 16px; align-items: center; min-height: 48px; padding: 0 16px; border-top: 1px solid var(--line); }
+  .cfacts > div:first-child { border-top: 0; }
+  .cfacts dt { font-size: 13px; color: var(--muted); }
+  .cfacts dd { margin: 0; display: flex; gap: 8px; align-items: center; font-size: 14px; min-width: 0; white-space: nowrap; overflow: hidden; }
+  .cfacts dd > span { overflow: hidden; text-overflow: ellipsis; }
+  .acthead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 24px 0 8px; }
+  .acthead h2 { margin: 0; }
+  .tbl.events .rrow { grid-template-columns: 112px 196px minmax(0, 1fr) 112px; }
+  .pill.tag { background: var(--tag-bg); color: var(--tag-fg); border-color: var(--tag-line); }
+  .pill.test { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+
+  .dangerpanel { margin-top: 32px; background: var(--surface); border: 1px solid var(--off-line); border-radius: 12px; padding: 20px 24px; }
+  .dangerpanel h2 { margin: 0 0 12px; }
+  .twocol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+  .twocol p { font-size: 14px; color: var(--muted); min-height: 60px; }
+  .twocol .confirmbox p { min-height: 0; }
+
+  .fsec { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; display: grid; gap: 8px; min-width: 0; }
+  .fsec h2 { margin: 0 0 4px; font-size: 15px; display: flex; gap: 10px; align-items: center; }
+  .fsec h2 span { width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 13px; flex: none; }
+  .fsec .hint { font-size: 13px; color: var(--muted); margin: 0; }
+  .fsec label.l { font-size: 13px; font-weight: 600; margin: 4px 0 0; }
+  .fsec input[type=text], .fsec textarea { margin: 0; }
+  .choice { position: relative; display: grid; grid-template-columns: 20px minmax(0, 1fr) 152px; gap: 12px; align-items: center; min-height: 52px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--surface); margin: 0; font-weight: 400; font-size: 14px; }
+  .choice.slim { grid-template-columns: 20px minmax(0, 1fr); }
+  .choice input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+  .choice .r { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--input-border); }
+  .choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  .choice:has(input:checked) .r { border: 5px solid var(--accent); }
+  .choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .choice:has(input:disabled) { cursor: not-allowed; opacity: .55; }
+  .choice .cl { display: flex; gap: 8px; align-items: center; min-width: 0; overflow: hidden; }
+  .choice .cl > b { font-size: 14px; font-weight: 600; flex: none; }
+  .choice .cl small { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .choice .stack { display: grid; min-width: 0; }
+  .choice .stack small { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .choice .stack small.mono { font-size: 12px; }
+  .pages { display: none; gap: 8px; }
+  .rec { font-size: 11px; font-weight: 600; color: var(--ok-fg); background: var(--ok-bg); border: 1px solid var(--ok-line); border-radius: 999px; padding: 0 6px; line-height: 18px; flex: none; }
+  .rec[hidden] { display: none; }
+  .dgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+  .dchoice { position: relative; display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); cursor: pointer; margin: 0; font-weight: 400; }
+  .dchoice input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .dchoice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  .dchoice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .dchoice b { display: block; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dchoice small { display: block; font-size: 12px; color: var(--muted); }
+  .dchoice > span { min-width: 0; }
+  .formbtns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .formbtns button { margin: 0; }
+  button.quietbtn { background: var(--surface); color: var(--text); border-color: var(--input-border); }
+  button.quietbtn:hover { background: var(--surface-2); }
+
+  .dtiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+  .dtile { display: grid; gap: 4px; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; color: var(--text); text-decoration: none !important; min-width: 0; }
+  .dtile:hover { border-color: var(--accent-line); }
+  .dtile .dt-art { width: 140px; margin: 0 auto 8px; }
+  .dtile > b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dtile > small { font-size: 12px; color: var(--muted); }
+
+  .presets { display: flex; gap: 8px; flex-wrap: wrap; }
+  .preset { display: inline-flex; gap: 4px; align-items: center; height: 32px; margin: 0; padding: 0 10px 0 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; font-size: 13px; font-weight: 400; }
+  .preset:hover { background: var(--surface-2); border-color: var(--border); }
+  .preset i { width: 14px; height: 14px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+  .preset span { margin-left: 4px; }
+  .cgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+  .cgrid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cfield { display: grid; gap: 4px; min-width: 0; }
+  .cfield label { margin: 0; font-size: 13px; }
+  .cinput { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 8px; }
+  .cinput input[type=color] { width: 40px; height: 38px; }
+  .cinput input[type=text] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  #de:has(input[name=stripe]:not(:checked)) .stripebars { opacity: .45; }
+  label.check { display: flex; gap: 8px; align-items: center; font-size: 14px; font-weight: 400; margin: 4px 0; }
+  label.check input { width: auto; margin: 0; }
+  .warnline { margin: 0; min-height: 20px; font-size: 13px; color: var(--off-fg); }
+  .seg2 { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--input-border); border-radius: 8px; overflow: hidden; max-width: 100%; }
+  .seg2 label { position: relative; display: flex; align-items: center; justify-content: center; height: 34px; padding: 0 14px; margin: 0; background: var(--surface); border-left: 1px solid var(--input-border); font-size: 13px; font-weight: 400; cursor: pointer; white-space: nowrap; }
+  .seg2 label:first-child { border-left: 0; }
+  .seg2 input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .seg2 label:has(input:checked) { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .seg2 label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .srchint, .ownfile { display: none; }
+  #de:has(input[name=logo_source][value=site]:checked) .srchint.site,
+  #de:has(input[name=logo_source][value=own]:checked) .srchint.own,
+  #de:has(input[name=logo_source][value=none]:checked) .srchint.none { display: block; }
+  #de:has(input[name=logo_source][value=own]:checked) .ownfile { display: block; }
+  #de:has(input[name=logo_source][value=none]:checked) .modes { display: none; }
+  .modes { display: grid; gap: 8px; }
+  .savebar { position: sticky; bottom: 0; display: flex; gap: 8px; align-items: center; min-height: 64px; padding: 8px 16px; background: var(--surface); border: 1px solid var(--accent-line); border-radius: 12px; box-shadow: 0 -4px 16px rgba(0,0,0,.06); flex-wrap: wrap; z-index: 2; }
+  .savebar span { flex: 1 1 240px; font-size: 14px; color: var(--muted); min-width: 0; }
+  .savebar button { margin: 0; }
+
+  @media (max-width: 860px) {
+    .cardlayout, .cardlayout.reverse { grid-template-columns: 1fr; }
+    .previewcol { max-width: 300px; margin: 0 auto; width: 100%; }
+    .previewcol.sticky { position: static; order: -1; }
+    .steps { grid-template-columns: 1fr; }
+    .steps li { border-left: 0; border-top: 1px solid var(--line); }
+    .steps li:first-child { border-top: 0; }
+    /* Each card is a block: the thumbnail, the location and the state on the
+       first line, then Last used, In 30 days and Last tested, labelled. */
+    .clist .rrow { grid-template-columns: 40px minmax(0, 1fr) auto; grid-template-rows: none; height: auto; min-height: 72px; padding: 10px 16px; row-gap: 2px; align-items: center; }
+    .clist .rrow > div:first-child { grid-row: 1 / span 4; align-self: start; }
+    .clist .rrow > div:last-child { grid-column: 3; grid-row: 1; }
+    .clist .rrow > div[data-label] { grid-column: 2 / -1; display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; font-size: 13px; }
+    .clist .rrow > div[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 12px; font-weight: 600; }
+    .clist .rrow.colhead { display: none; }
+    .tbl.events .rrow { height: auto; min-height: 48px; padding-block: 10px; row-gap: 2px; }
+    .tbl.events .rrow > div[data-label] { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+    .tbl.events .rrow > div[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 12px; font-weight: 600; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .tbl.events .rrow > div[data-label] > * { justify-self: start; }
+    .clist .rrow.app { grid-template-columns: minmax(0, 1fr) auto; height: 40px; }
+  .clist .rrow.app .name { grid-column: 1; }
+    .clist .rrow.app .host { display: none; }
+    .tbl.events .rrow { grid-template-columns: minmax(0, 1fr); }
+    .twocol { grid-template-columns: 1fr; }
+    .twocol p { min-height: 0; }
+    .cfacts > div { grid-template-columns: 1fr; gap: 2px; padding: 8px 16px; }
+    .cfacts dd { flex-wrap: wrap; white-space: normal; row-gap: 2px; }
+    .cfacts dd > span { overflow-wrap: anywhere; }
+    .choice { grid-template-columns: 20px minmax(0, 1fr); }
+    .choice .reach { display: none; }
+    .cgrid.three { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 480px) {
+    .cgrid { grid-template-columns: 1fr; }
+    .seg2 label { padding: 0 8px; }
+  }
+</style>{{end}}
+
+{{define "cards_tabs"}}<nav class="subtabs" aria-label="Break-glass cards"><a href="/admin/break"{{if eq . "cards"}} aria-current="page"{{end}}>Cards</a><a href="/admin/break/designs"{{if eq . "designs"}} aria-current="page"{{end}}>Card designs</a></nav>{{end}}
+
+{{define "card_row"}}<div class="rrow{{if not .Active}} withdrawn{{end}}">
+  <div><img class="cardimg mini" src="/admin/break/{{.ID}}/card.svg?thumb=1&amp;v={{.Version}}" alt="" width="40" height="56" loading="lazy"></div>
+  <div class="loc"><b><a href="/admin/break/{{.ID}}">{{.Label}}</a></b><small>{{if .Refused}}<span class="pill guest">{{.Refused}}</span> {{end}}{{if .Note}}{{.Note}}{{else if .Group}}Opens the group {{.Group}}{{else}}No note{{end}}</small></div>
+  <div data-label="Last used">{{if .LastUsed}}{{.LastUsed}}{{else}}<span class="none">Never</span>{{end}}</div>
+  <div data-label="In 30 days">{{if .Uses}}{{.Uses}}{{else}}<span class="none">None</span>{{end}}</div>
+  <div data-label="Last tested">{{if .Tested}}{{.Tested}}{{else if .Active}}<span class="never">Never</span>{{else}}<span class="none">Never</span>{{end}}</div>
+  <div>{{if .Active}}<span class="pill ok">Active</span>{{else}}<span class="pill off">Withdrawn</span>{{end}}</div>
+</div>{{end}}

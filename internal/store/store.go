@@ -50,6 +50,12 @@ const (
 	// OutcomeRefusedTarget records a scan of a card whose group has since
 	// become an application role or a feed group: nothing was granted.
 	OutcomeRefusedTarget = "refused_target"
+	// OutcomeTested records a scan by a signed-in gateway administrator,
+	// which grants nothing and marks the card tested.
+	OutcomeTested = "tested"
+	// OutcomeReplaced records a scan of a card's code from before it was
+	// replaced: nothing was granted.
+	OutcomeReplaced = "replaced"
 )
 
 // Human-login audit event types, recorded in auth_events.
@@ -106,6 +112,22 @@ const (
 	AdminActionBrandingUpdate     = "branding_update"
 	AdminActionCodeBranding       = "break_glass_branding"
 	AdminActionPasskeysRemove     = "passkeys_remove"
+	// App roles: an app role given to or taken from a holder (target
+	// "app:role", detail "kind ref"), and a domain rule added to or removed
+	// from a domain group (target the group, detail the domain), and a
+	// domain group's organisation name set (target the group, detail the
+	// name).
+	AdminActionRoleGive          = "role_give"
+	AdminActionRoleTake          = "role_take"
+	AdminActionGroupDomainAdd    = "group_domain_add"
+	AdminActionGroupDomainRemove = "group_domain_remove"
+	AdminActionGroupOrg          = "group_org"
+	// Card designs: a design created, saved or deleted (target the design's
+	// name), and a card given another design.
+	AdminActionDesignCreate = "card_design_create"
+	AdminActionDesignSave   = "card_design_save"
+	AdminActionDesignDelete = "card_design_delete"
+	AdminActionCardDesign   = "card_design_change"
 )
 
 // GroupSyncState is the outcome of the last sync of a feed-filled group.
@@ -180,8 +202,12 @@ type AdminEvent struct {
 
 // Group is a named, DB-managed group surfaced via Remote-Groups.
 type Group struct {
-	Name      string
-	Label     string
+	Name  string
+	Label string
+	Kind  string // GroupKindList or GroupKindDomain
+	// Org is a domain group's organisation name, such as RCH; empty for
+	// none.
+	Org       string
 	CreatedAt time.Time
 }
 
@@ -199,12 +225,23 @@ type BreakGlassCode struct {
 	Label       string
 	Note        string
 	TargetGroup string
-	TokenEnc    string
-	TokenHash   string
-	Redirect    string
-	Status      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// App and Role name the app role the card opens, under the app-roles
+	// model. Both are empty for a card that still targets a group.
+	App       string
+	Role      string
+	TokenEnc  string
+	TokenHash string
+	Redirect  string
+	Status    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	// DesignID is the card's design (0 for none, which draws the first
+	// design). PDFAt is when its PDF was last downloaded and TestedAt when an
+	// administrator last scanned it as a test; zero for never. A replaced
+	// card starts again with neither.
+	DesignID int64
+	PDFAt    time.Time
+	TestedAt time.Time
 }
 
 // BreakGlassEvent records one use (or attempted use) of a break-glass code.
@@ -397,7 +434,8 @@ type Store interface {
 	// CreateGroup inserts a group (no-op if it already exists).
 	CreateGroup(ctx context.Context, name, label string) error
 	// AddGroupInclude makes every member of included a member of group too;
-	// ErrIncludeCycle refuses a self-include or a cycle.
+	// ErrIncludeCycle refuses a self-include or a cycle, and ErrGroupKind
+	// an include where either group is not a list.
 	AddGroupInclude(ctx context.Context, group, included string) error
 	RemoveGroupInclude(ctx context.Context, group, included string) error
 	// ListGroupIncludes returns group -> included groups.
@@ -413,7 +451,11 @@ type Store interface {
 	// UpdateGroupLabel changes an existing group's display label. It reports
 	// whether the group exists.
 	UpdateGroupLabel(ctx context.Context, name, label string) (bool, error)
-	// DeleteGroup removes a group and (via cascade) its memberships.
+	// SetGroupOrg sets a domain group's organisation name (empty for none).
+	// It reports whether the domain group exists.
+	SetGroupOrg(ctx context.Context, name, org string) (bool, error)
+	// DeleteGroup removes a group and (via cascade) its memberships. A group
+	// a role assignment names is refused with ErrGroupHoldsRoles.
 	DeleteGroup(ctx context.Context, name string) error
 	// AddGroupMember adds an email to a group (idempotent).
 	AddGroupMember(ctx context.Context, group, email string) error
@@ -423,6 +465,64 @@ type Store interface {
 	ListGroupMembers(ctx context.Context, group string) ([]string, error)
 	// GroupsForEmail returns the group names an email belongs to.
 	GroupsForEmail(ctx context.Context, email string) ([]string, error)
+
+	// --- App roles (see roles.go) ---
+
+	// CreateGroupOfKind inserts a group of the given kind (GroupKindList or
+	// GroupKindDomain), ignoring a duplicate name as CreateGroup does. It
+	// refuses to change the kind of an existing group.
+	CreateGroupOfKind(ctx context.Context, name, label, kind string) error
+	// AddGroupDomain adds an email domain rule to a domain group. It refuses
+	// a list group (ErrGroupKind), a malformed domain (ErrInvalidDomain) and a
+	// public webmail domain (ErrWebmailDomain).
+	AddGroupDomain(ctx context.Context, group, domain string) error
+	RemoveGroupDomain(ctx context.Context, group, domain string) error
+	// ListGroupDomains returns domain group -> its domains, sorted.
+	ListGroupDomains(ctx context.Context) (map[string][]string, error)
+	// AddRoleAssignment gives an app role to a domain group, a list, a person,
+	// a network or guests (see RoleAssignment). Adding the same assignment
+	// again replaces its until, how and created_by.
+	AddRoleAssignment(ctx context.Context, a RoleAssignment) error
+	RemoveRoleAssignment(ctx context.Context, app, role, kind, ref string) error
+	// ApplyRoleChanges removes take and adds give (each checked as
+	// AddRoleAssignment checks it) and records events, in one transaction.
+	ApplyRoleChanges(ctx context.Context, give, take []RoleAssignment, events []AdminEvent) error
+	// GroupRoleCount returns how many role assignments name a group.
+	GroupRoleCount(ctx context.Context, group string) (int, error)
+	// ListRoleAssignments returns the assignments of one app, or of every app
+	// when app is empty, ordered by app, role, kind and ref.
+	ListRoleAssignments(ctx context.Context, app string) ([]RoleAssignment, error)
+	// SetBreakGlassRole points a card at an app role. Only the user role may
+	// be given to a card (ErrCardRole), because its holder is not identified.
+	SetBreakGlassRole(ctx context.Context, id int64, app, role string) error
+
+	// --- Invitations (see invitations.go) ---
+
+	// CreateInvitations inserts invitations and their admin-log records in
+	// one transaction, returning their IDs.
+	CreateInvitations(ctx context.Context, invs []Invitation, events []AdminEvent) ([]int64, error)
+	// ListInvitations returns every invitation, newest sent first.
+	ListInvitations(ctx context.Context) ([]Invitation, error)
+	GetInvitation(ctx context.Context, id int64) (Invitation, bool, error)
+	// InvitationByTokenHash finds the invitation a link names, in any state.
+	InvitationByTokenHash(ctx context.Context, tokenHash string) (Invitation, bool, error)
+	// ResendInvitation replaces the token and the expiry, so the old link
+	// stops working; WithdrawInvitation withdraws. Both refuse an accepted or
+	// withdrawn invitation with ErrInvitationClosed, and record e.
+	ResendInvitation(ctx context.Context, id int64, tokenHash string, sentAt, expiresAt time.Time, e AdminEvent) error
+	WithdrawInvitation(ctx context.Context, id int64, at time.Time, e AdminEvent) error
+	// MarkInvitationUndelivered records a refused email, unless the
+	// invitation has been resent since.
+	MarkInvitationUndelivered(ctx context.Context, id int64, tokenHash string) error
+	// MarkInvitationDelivered reopens an invitation whose email carrying
+	// tokenHash the mailer has accepted.
+	MarkInvitationDelivered(ctx context.Context, id int64, tokenHash string) error
+	// AcceptInvitation marks an open invitation for email accepted and gives
+	// the person its role, in one transaction with e.
+	AcceptInvitation(ctx context.Context, id int64, email string, now time.Time, e AdminEvent) (Invitation, error)
+	// MarkReminderSent records the reminder before an assignment's end, and
+	// reports false when it had been recorded already.
+	MarkReminderSent(ctx context.Context, app, role, ref string, until, at time.Time) (bool, error)
 
 	// --- Break-the-glass codes ---
 
@@ -556,6 +656,9 @@ type Store interface {
 	DeletePasskey(ctx context.Context, email string, id int64) (bool, error)
 	// DeletePasskeys removes all of email's passkeys and returns how many.
 	DeletePasskeys(ctx context.Context, email string) (int, error)
+
+	// Card designs, and each card's design, download and test.
+	CardDesignStore
 
 	// Close releases underlying resources.
 	Close() error

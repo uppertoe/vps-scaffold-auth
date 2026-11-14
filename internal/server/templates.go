@@ -50,6 +50,8 @@ type pageData struct {
 	// BreakToken is the scanned card's token, carried in the confirmation
 	// page's form so that the grant is a POST (break_confirm.html).
 	BreakToken string
+	// Scan is a card's scan page, drawn with the card's design (card_scan.go).
+	Scan *scanView
 	// CSRF is the double-submit token embedded in the emergency-access form on
 	// the denial page; /break/activate verifies it. Necessary because the offer
 	// cookie is SameSite=Lax, which is site- not origin-scoped: a sibling app on
@@ -59,6 +61,8 @@ type pageData struct {
 	// address has no dot before the "@": an example firstname.lastname
 	// address at the same domain, shown with a hint to sign in with one.
 	NameAddressExample string
+	// Invite is an invitation's page (invite_public.go).
+	Invite *invitePage
 	// IsAdmin surfaces an Admin link on the signed-in /welcome landing for a
 	// real (non-break-glass) admin session.
 	IsAdmin bool
@@ -73,6 +77,15 @@ type pageData struct {
 	// hint/placeholder: that door is deliberately for people who can't match the
 	// domain, so it must neither hint a domain nor presume one in the example.
 	RequireGroups string
+	// RoleGuard marks a login from a role guard that may not decline early,
+	// and RoleHintDomains are the domains it hints (see roleLoginHint). Both
+	// are carried to /request as hidden fields.
+	RoleGuard       bool
+	RoleHintDomains string
+	// RoleHint is the sentence that suggests the role's domains.
+	RoleHint string
+	// LinkText replaces the message page's "Back to sign in".
+	LinkText string
 	// EmailPlaceholder is the login field's example address, derived from the
 	// effective domain (the route requirement, else the configured allow-list)
 	// as you@<domain>; empty falls back to a generic example in the template.
@@ -112,8 +125,37 @@ func loadTemplates() (pages, error) {
 		}
 		out[name] = t
 	}
+	if err := addPages(out, base, publicInvitePages); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
+
+// addPages parses each page, with the shared files extra, on a clone of
+// base.
+func addPages(out pages, base *template.Template, names []string, extra ...string) error {
+	for _, name := range names {
+		t, err := base.Clone()
+		if err != nil {
+			return err
+		}
+		files := []string{"templates/" + name + ".html"}
+		for _, e := range extra {
+			files = append(files, "templates/"+e)
+		}
+		if _, err := t.ParseFS(templatesFS, files...); err != nil {
+			return err
+		}
+		out[name] = t
+	}
+	return nil
+}
+
+// publicInvitePages and adminInvitePages are the invitation pages.
+var (
+	publicInvitePages = []string{"invite"}
+	adminInvitePages  = []string{"admin_invites", "admin_invite_new"}
+)
 
 // loadEmailTemplate parses the OTP email body. It uses text/template (not
 // html/template) on purpose: html/template strips HTML comments, which would

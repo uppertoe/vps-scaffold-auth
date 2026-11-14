@@ -1,0 +1,32 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{end}}
+{{define "content"}}
+{{template "role_icons"}}
+{{with .Apps}}
+<div class="ptitle"><div><h1>Apps</h1><p>Each app's roles, and who holds them.</p></div></div>
+{{if .Attention}}
+<div class="attn">
+  {{range .Attention}}<div><i{{if .Bad}} class="bad"{{end}}></i><span>{{.Before}}<a href="{{.Link}}">{{.Name}}</a>{{.After}}</span></div>{{end}}
+</div>
+{{end}}
+<form class="toolbar" method="get" action="/admin/apps" role="search">
+  <input type="text" name="q" value="{{.Filter}}" placeholder="Filter by app, role or group" aria-label="Filter by app, role or group">
+  <input type="email" name="address" value="{{.Address}}" placeholder="name@example.org" aria-label="Address to check">
+  <button type="submit" class="ghost">Check an address</button>
+</form>
+{{if .Focus}}<div class="focus on"><span>{{.Focus}}</span><a href="/admin/apps{{if .Filter}}?q={{.Filter}}{{end}}">Clear</a></div>
+{{else}}<div class="focus off"><span>Check an address, or click a token, to see which roles it holds.</span></div>{{end}}
+{{if .Apps}}{{template "rolelist" .Apps}}{{else}}<div class="focus off"><span>No app matches the filter.</span></div>{{end}}
+{{with .Key}}
+<div class="rkey">
+  <div><span>{{range .Amber}}{{template "token" .}}{{end}}</span><span>Amber tokens admit strangers, or people who have not signed in.</span></div>
+  <div><span>{{range .Grey}}{{template "token" .}}{{end}}</span><span>Grey tokens admit signed-in staff: everyone at a domain, the people on a list, or people given the role directly.</span></div>
+  <div><span>{{template "token" .Card}}</span><span>Red tokens admit the holder of a break-glass card, who is not identified.</span></div>
+  <div><span><span class="tok static">{{template "ico" "k-lock"}}<span class="l">Open by design</span></span></span><span>The app's snippet declares these paths open, with a reason for each.</span></div>
+</div>
+<div class="rscale"><h4>Widest access, from the widest step to the narrowest</h4><div class="ladder">
+  {{range .Steps}}<div><span class="reach">{{template "ico" .Step.Icon}}<span class="meter">{{range .Bars}}<i{{if .}} class="f"{{end}}></i>{{end}}</span></span><b>{{.Step.Word}}</b><small title="{{.Step.Who}}">{{.Step.Who}}</small></div>{{end}}
+</div></div>
+{{end}}
+{{end}}
+{{end}}

@@ -111,9 +111,14 @@ const (
 // email-OTP login for an address the allow-list does not permit, reached from an
 // open-registration host. A guest renews like a normal session, but is admitted
 // only by routes that opt in (see authz.CanAccessApp) and is never an admin.
+// KindMember marks an email-OTP login for an address the allow-list does not
+// permit but that may sign in because it holds an app role, or has just
+// accepted an invitation: a role guard decides it by its roles like any
+// person's, while an older guard admits it only where it would admit a guest.
 const (
 	KindBreakGlass = "break_glass"
 	KindGuest      = "guest"
+	KindMember     = "member"
 )
 
 // Identity is the authenticated principal carried by the session cookie.
@@ -182,6 +187,9 @@ type State struct {
 	Email    string `json:"email"`
 	Redirect string `json:"rd"`
 	Remember bool   `json:"rem,omitempty"`
+	// Invite names the invitation a code accepts, when the code was sent from
+	// an invitation's page.
+	Invite int64 `json:"inv,omitempty"`
 }
 
 // Pending marks an admin who has passed the email step but still owes TOTP.

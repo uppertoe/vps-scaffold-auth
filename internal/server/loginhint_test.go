@@ -49,7 +49,7 @@ func TestRequestEarlyDeniesDomainMismatch(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("mismatch status = %d, want 403", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "only available to other.com") {
+	if !strings.Contains(rec.Body.String(), "This app admits only other.com email addresses.") {
 		t.Errorf("missing early-deny message:\n%s", rec.Body.String())
 	}
 	if sender.code() != "" {

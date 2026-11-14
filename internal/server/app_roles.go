@@ -1,0 +1,449 @@
+package server
+
+import (
+	"context"
+	"log"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
+	"github.com/uppertoe/vps-scaffold-auth/internal/roles"
+	"github.com/uppertoe/vps-scaffold-auth/internal/session"
+	"github.com/uppertoe/vps-scaffold-auth/internal/store"
+)
+
+// The app-roles guard. A guard that names an app sends X-Auth-App, and the
+// role its path needs in X-Auth-Role (the user role when absent), both with
+// header_up so a client's copies are replaced. /verify then decides by who
+// holds that role (roles.Held), not by X-Auth-Policy. A request carrying both
+// X-Auth-App (or X-Auth-Role) and X-Auth-Policy is refused: no shipped guard
+// sends both, so it is a misconfigured guard or a client adding a header.
+const (
+	headerApp   = "X-Auth-App"
+	headerRole  = "X-Auth-Role"
+	headerRoles = "Remote-Roles"
+)
+
+// roleCacheTTL is how long /verify trusts its in-memory copy of the role
+// assignments, domain rules and cards before reading them again. Changes made
+// through the admin pages call forgetRoles, so they apply at once.
+const roleCacheTTL = 15 * time.Second
+
+// roleState is the store's role data as /verify reads it.
+type roleState struct {
+	assignments []store.RoleAssignment
+	domains     map[string][]string
+	cards       map[int64]store.BreakGlassCode
+	// invited are the addresses with an open invitation, who may sign in.
+	invited map[string]bool
+	// invitedRoles are the app roles with an open invitation, keyed by
+	// roleKey.
+	invitedRoles map[string]bool
+}
+
+func roleKey(app, role string) string { return app + "\x00" + role }
+
+type roleCache struct {
+	mu    sync.Mutex
+	at    time.Time
+	state roleState
+	ok    bool
+}
+
+// loadAppRoles reads APP_ROLES_FILE once at start. A missing or unreadable
+// file leaves the manifest empty, so every guard that names an app is refused
+// until it is fixed; an empty setting turns the model off.
+func loadAppRoles(path, domain string) roles.Manifest {
+	if path == "" {
+		return roles.Manifest{}
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		log.Printf("app roles: %v; every guard that names an app will be refused", err)
+		return roles.Manifest{}
+	}
+	defer f.Close()
+	return roles.ParseManifest(f, domain, log.Printf)
+}
+
+// rolesOn reports whether the app-roles model is configured.
+func (s *Server) rolesOn() bool { return s.cfg.AppRolesFile != "" }
+
+// forgetRoles drops the cached role data, so the next decision reads it again.
+func (s *Server) forgetRoles() {
+	s.roleCache.mu.Lock()
+	s.roleCache.ok = false
+	s.roleCache.mu.Unlock()
+}
+
+// roleData returns the role assignments, domain rules and cards, from memory
+// when the copy is recent. A failed read keeps the last good copy; with none,
+// it returns an empty state, which admits nobody through a role.
+func (s *Server) roleData(ctx context.Context) roleState {
+	now := s.now()
+	s.roleCache.mu.Lock()
+	defer s.roleCache.mu.Unlock()
+	if s.roleCache.ok && now.Sub(s.roleCache.at) < roleCacheTTL && !now.Before(s.roleCache.at) {
+		return s.roleCache.state
+	}
+	as, err := s.store.ListRoleAssignments(ctx, "")
+	if err != nil {
+		log.Printf("app roles: reading assignments: %v", err)
+		return s.roleCache.state
+	}
+	domains, err := s.store.ListGroupDomains(ctx)
+	if err != nil {
+		log.Printf("app roles: reading domain rules: %v", err)
+		return s.roleCache.state
+	}
+	codes, err := s.store.ListBreakGlassCodes(ctx)
+	if err != nil {
+		log.Printf("app roles: reading cards: %v", err)
+		return s.roleCache.state
+	}
+	cards := make(map[int64]store.BreakGlassCode, len(codes))
+	for _, c := range codes {
+		cards[c.ID] = store.BreakGlassCode{ID: c.ID, App: c.App, Role: c.Role, Status: c.Status}
+	}
+	invites, err := s.store.ListInvitations(ctx)
+	if err != nil {
+		log.Printf("app roles: reading invitations: %v", err)
+		return s.roleCache.state
+	}
+	invited, invitedRoles := map[string]bool{}, map[string]bool{}
+	for _, v := range invites {
+		if v.Open(now) {
+			invited[v.Email] = true
+			invitedRoles[roleKey(v.App, v.Role)] = true
+		}
+	}
+	s.roleCache.state = roleState{assignments: as, domains: domains, cards: cards, invited: invited, invitedRoles: invitedRoles}
+	s.roleCache.at = now
+	s.roleCache.ok = true
+	return s.roleCache.state
+}
+
+// roleEnv is the decision environment for the current role data.
+func (s *Server) roleEnv(st roleState) roles.Env {
+	return roles.Env{Networks: s.cfg.NetworkRanges, Domains: st.domains, Now: s.now()}
+}
+
+// wantsRoles reports whether the guard named an app (or a role).
+func wantsRoles(r *http.Request) bool {
+	return r.Header.Get(headerApp) != "" || r.Header.Get(headerRole) != ""
+}
+
+// roleRequest reads and checks the app and role a guard asks for. It logs and
+// returns ok=false for a guard that also sends X-Auth-Policy, that names an
+// app or role the manifest does not declare, or that guards a host the
+// manifest does not give the app (see roleRequestProblem).
+func (s *Server) roleRequest(r *http.Request) (app, role string, ok bool) {
+	app, role, problem := s.roleRequestProblem(r)
+	if problem != "" {
+		log.Printf("warning: refusing a guard for app %q role %q on %q: %s", app, role, r.Header.Get("X-Forwarded-Host"), problem)
+		return "", "", false
+	}
+	return app, role, true
+}
+
+// roleRequestProblem is roleRequest's check without the log: the app and
+// role asked for, and why the request is refused, or "" when it is not. A
+// guard's host must be one of the app's hosts in the manifest, so a guard
+// copied onto another site cannot borrow an app's roles.
+func (s *Server) roleRequestProblem(r *http.Request) (app, role, problem string) {
+	app = strings.TrimSpace(r.Header.Get(headerApp))
+	role = strings.TrimSpace(r.Header.Get(headerRole))
+	if role == "" {
+		role = roles.UserRole
+	}
+	switch {
+	case r.Header.Get(headerPolicy) != "":
+		return app, role, "it sends both X-Auth-App and X-Auth-Policy"
+	case !s.appRoles.Has(app, role):
+		return app, role, "not in the app roles manifest"
+	case !s.appRoles.Apps[app].ServesHost(forwardedHost(r)):
+		return app, role, "the host is not one of the app's hosts in the app roles manifest"
+	}
+	return app, role, ""
+}
+
+// forwardedHost is the host the guard runs on, as Caddy sets it, lower-case
+// and without a port.
+func forwardedHost(r *http.Request) string {
+	h := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
+	}
+	return strings.ToLower(h)
+}
+
+// clientAddr is the client address the gateway trusts, as a netip.Addr.
+func clientAddr(r *http.Request) netip.Addr {
+	a, err := netip.ParseAddr(clientIP(r))
+	if err != nil {
+		return netip.Addr{}
+	}
+	return a
+}
+
+// heldRoles returns the roles a session holds in app. Lists come from the
+// session's groups, which are kept current by renewal (see groupsStale).
+func (s *Server) heldRoles(r *http.Request, id *session.Identity, app string) []string {
+	st := s.roleData(r.Context())
+	sub := roles.Subject{
+		Session:    true,
+		Email:      id.Email,
+		Guest:      id.Kind == session.KindGuest,
+		BreakGlass: id.Kind == session.KindBreakGlass,
+		Lists:      sessionLists(id),
+		Addr:       clientAddr(r),
+	}
+	if sub.BreakGlass {
+		if c, ok := st.cards[id.Card]; ok && c.Status == store.BreakGlassActive {
+			sub.CardApp, sub.CardRole = c.App, c.Role
+		}
+	}
+	return roles.Held(app, sub, st.assignments, s.roleEnv(st))
+}
+
+// sessionLists are the lists a session's person belongs to: its groups
+// without the tier token (user, admin or guest) and any other reserved name,
+// which BuildGroups never takes from a stored group, so a list assignment
+// matches real membership only.
+func sessionLists(id *session.Identity) map[string]bool {
+	out := map[string]bool{}
+	for _, g := range strings.Split(id.Groups, ",") {
+		if g = strings.TrimSpace(g); g != "" && !authz.IsReservedGroup(g) {
+			out[g] = true
+		}
+	}
+	return out
+}
+
+// verifyByRole decides a signed-in request whose guard names an app. It
+// mirrors the legacy path: a refusal re-reads the person's groups once, in
+// case an administrator has just added them to a list.
+func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *session.Identity, now time.Time, renewed bool) {
+	app, role, ok := s.roleRequest(r)
+	if !ok {
+		s.redirectToDenied(w, r)
+		return
+	}
+	if id.Kind == session.KindGuest {
+		id.Groups = s.guestGroupsNow(id)
+	}
+	held := s.heldRoles(r, id, app)
+	if !roles.Admits(held, role) {
+		if renewed || (!personSession(id) && id.Kind != session.KindGuest) || s.groupRecheck.fresh(id.Email, id.Groups, now) {
+			s.redirectToDenied(w, r)
+			return
+		}
+		gen := s.groupRecheck.generation()
+		current, ok := s.currentGroups(r, id)
+		if !ok {
+			s.redirectToDenied(w, r)
+			return
+		}
+		if current == id.Groups {
+			s.groupRecheck.confirm(id.Email, id.Groups, now, gen)
+			s.redirectToDenied(w, r)
+			return
+		}
+		var groups *string
+		if current != "" {
+			groups = &current
+		}
+		if !s.renewSessionWith(w, r, id, now, groups) {
+			return
+		}
+		if held = s.heldRoles(r, id, app); !roles.Admits(held, role) {
+			s.redirectToDenied(w, r)
+			return
+		}
+	}
+	if s.roleWantsAdminStep(id) {
+		// A gateway administrator without a recent second step holds no
+		// role above user, as the older guards gave them no admin tier
+		// (tierRole): a route that needs such a role sends them to the
+		// admin door, and elsewhere the app sees only the user role.
+		if role != roles.UserRole {
+			s.redirectToStepUp(w, r)
+			return
+		}
+		held = []string{roles.UserRole}
+	}
+	s.access.record(r.Context(), id.Email, r.Header.Get("X-Forwarded-Host"), id.Kind, now)
+	w.Header().Set("Remote-User", id.Email)
+	w.Header().Set("Remote-Email", id.Email)
+	w.Header().Set("Remote-Groups", id.Groups)
+	w.Header().Set(headerRoles, strings.Join(held, ","))
+	w.WriteHeader(http.StatusOK)
+}
+
+// roleWantsAdminStep reports whether a session is a gateway administrator's
+// whose second step is not recent. Such a session holds no app role above
+// user until the step is taken, so an app's admin pages keep the protection
+// the older groups=admin guard gave them.
+func (s *Server) roleWantsAdminStep(id *session.Identity) bool {
+	return id.Kind == "" && s.renewalRole(id) == authz.RoleAdmin && !s.adminStepFresh(id)
+}
+
+// verifyByNetwork admits a request with no session when its guard names an
+// app role that is given to a network the client is inside. It reports
+// whether it wrote a response; when it did not, the caller sends the request
+// to sign in as before.
+//
+// A guard that also sends X-Auth-Policy is refused. A guard naming an app or
+// role the manifest does not declare, or guarding a host that is not the
+// app's, admits nobody through a network and is sent to sign in like any
+// other (see roleLoginHint), so a visitor with no session cannot tell
+// declared names from undeclared ones; once signed in, it is refused.
+func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
+	app, role, ok := s.roleRequest(r)
+	if !ok {
+		if r.Header.Get(headerPolicy) == "" {
+			return false
+		}
+		s.redirectToDenied(w, r)
+		return true
+	}
+	st := s.roleData(r.Context())
+	held := roles.Held(app, roles.Subject{Addr: clientAddr(r)}, st.assignments, s.roleEnv(st))
+	if !roles.Admits(held, role) {
+		return false
+	}
+	// No identity: the app sees an empty Remote-User and the roles the
+	// network holds.
+	w.Header().Set(headerRoles, strings.Join(held, ","))
+	w.WriteHeader(http.StatusOK)
+	return true
+}
+
+// roleLoginHint is what a role guard adds to the login URL, in the parameters
+// a domain guard uses (see redirectToLogin). When the role is held only by
+// domain groups, it carries their domains as rqd, so the sign-in page hints
+// them and /request declines an address at none of them, exactly as for
+// protected_domains. Otherwise it carries rqr=1, which marks a role guard so
+// the page does not fall back to the allow-list's domains. When the role's
+// assignments are domain groups only and a card or an open invitation also
+// admits someone, it adds rhd, those domains, which the page hints but never
+// declines on; the domains are the ones rqd would otherwise carry. Any other
+// holder adds nothing, so an anonymous visitor learns of it no more than
+// rqr=1 says. An address that holds no role is sent no code and sees the
+// ordinary "check your email" page, so the page does not reveal who holds
+// the role. An app or role the manifest does not declare is answered as a
+// declared role with no hint, so names cannot be tried out. Like the domain
+// guard's hint, this is a courtesy and not a boundary: /verify decides.
+func (s *Server) roleLoginHint(r *http.Request) string {
+	app := strings.TrimSpace(r.Header.Get(headerApp))
+	role := strings.TrimSpace(r.Header.Get(headerRole))
+	if role == "" {
+		role = roles.UserRole
+	}
+	if r.Header.Get(headerPolicy) != "" {
+		return ""
+	}
+	if _, _, problem := s.roleRequestProblem(r); problem != "" {
+		return "&rqr=1"
+	}
+	st := s.roleData(r.Context())
+	domains, only := roles.SignInDomains(app, role, st.assignments, s.roleEnv(st))
+	domainsOnly := only
+	if only {
+		// A card or an open invitation for the role admits someone outside
+		// the domains too.
+		for _, c := range st.cards {
+			if c.App == app && c.Status == store.BreakGlassActive && (role == roles.UserRole || c.Role == role) {
+				only = false
+			}
+		}
+		for _, rl := range s.appRoles.Apps[app].RoleOrder {
+			if (rl == role || role == roles.UserRole) && st.invitedRoles[roleKey(app, rl)] {
+				only = false
+			}
+		}
+	}
+	hint := clampHint(strings.Join(domains, " "))
+	if hint != "" && only {
+		return "&rqd=" + url.QueryEscape(hint)
+	}
+	out := "&rqr=1"
+	if hint != "" && domainsOnly {
+		out += "&rhd=" + url.QueryEscape(hint)
+	}
+	return out
+}
+
+// mayHoldRoleNow reports whether email holds a role through a domain group,
+// a list or a current person assignment, reading its lists from the store.
+// With invitations, an open invitation counts too; sign-in never passes it,
+// since an invitation lets its address in only through its own code step,
+// which accepts it (and so gives the role) before the session is made.
+func (s *Server) mayHoldRoleNow(ctx context.Context, email string, invitations bool) bool {
+	if !s.rolesOn() {
+		return false
+	}
+	lists, err := s.store.GroupsForEmail(ctx, email)
+	if err != nil {
+		log.Printf("app roles: reading groups for sign-in: %v", err)
+		return false
+	}
+	set := make(map[string]bool, len(lists))
+	for _, l := range lists {
+		set[l] = true
+	}
+	st := s.roleData(ctx)
+	return (invitations && st.invited[email]) || roles.MaySignIn(email, set, st.assignments, s.roleEnv(st))
+}
+
+// mayHoldRoleSnapshot is mayHoldRoleNow from the session's own groups, with
+// no store read and without invitations, for the check made on every request
+// (policyWithdrawn).
+func (s *Server) mayHoldRoleSnapshot(ctx context.Context, id *session.Identity) bool {
+	if !s.rolesOn() {
+		return false
+	}
+	st := s.roleData(ctx)
+	return roles.MaySignIn(id.Email, sessionLists(id), st.assignments, s.roleEnv(st))
+}
+
+// loginRole is the sign-in decision: the allow-list and administrators as
+// before, and also an address that holds an app role, which signs in as a
+// member (and not as a guest, even on an open host). A member is decided by
+// its roles on a role guard, and is admitted by an older guard only where a
+// guest would be (see session.KindMember).
+func (s *Server) loginRole(ctx context.Context, email string, openHost bool) string {
+	role := s.policy.LoginRole(email, openHost)
+	if role == authz.RoleUser || role == authz.RoleAdmin {
+		return role
+	}
+	if s.mayHoldRoleNow(ctx, email, false) {
+		return authz.RoleMember
+	}
+	return role
+}
+
+// currentRole is policy.Role made role-aware: an address the allow-list
+// refuses but that holds an app role through a domain group, a list or a
+// current person assignment, or has an open invitation, is a member. With the
+// app-roles model off it is exactly policy.Role.
+func (s *Server) currentRole(ctx context.Context, email string) string {
+	role := s.policy.Role(email)
+	if role == authz.RoleDeny && s.mayHoldRoleNow(ctx, email, true) {
+		return authz.RoleMember
+	}
+	return role
+}
+
+// personSession reports whether a session is a person's own sign-in, by the
+// allow-list (kind "") or by an app role (KindMember), rather than a card or
+// a guest.
+func personSession(id *session.Identity) bool {
+	return id.Kind == "" || id.Kind == session.KindMember
+}

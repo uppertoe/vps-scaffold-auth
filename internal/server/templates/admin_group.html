@@ -1,21 +1,65 @@
 {{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "groups_css"}}{{end}}
 {{define "content"}}
 {{$csrf := .CSRF}}
 {{with .Group}}
 {{$group := .Name}}
-<a class="back" href="/admin/groups">&larr; Groups</a>
-<h1><code class="mono" style="font-size:inherit">{{.Name}}</code></h1>
-<p class="sub">{{if .Label}}{{.Label}}{{else}}This group has no label.{{end}}</p>
+<a class="back" href="/admin/groups">&larr; All groups</a>
+<h1>{{.Display}}</h1>
+<p class="sub">{{if eq .Kind "domain"}}Domain group{{else if .Feed}}List, filled from a feed{{else}}List, kept by hand{{end}}{{if .Label}} · <code class="mono">{{.Name}}</code>{{end}}</p>
 
+{{if $.RolesOn}}
+<section class="fsec">
+  <h2>Roles this group holds</h2>
+  {{if .Roles}}<div class="roleset">{{range .Roles}}<a class="apptok" href="/admin/apps/{{.App}}">{{template "app_icon"}}<span>{{.Label}}</span></a>{{end}}</div>
+  {{else}}<p class="muted" style="margin:0">No app gives this group a role yet.</p>{{end}}
+  <p class="hint">Roles are given on each app's page. A change to this group affects every role listed here.</p>
+</section>
+{{end}}
+
+{{if eq .Kind "domain"}}
+<section class="fsec" id="domains">
+  <h2>Domains</h2>
+  <p class="hint">Everyone whose email address ends with one of these domains belongs to the group.</p>
+  {{if .Domains}}
+  {{$g := .}}
+  <div class="glist">
+    {{range .Domains}}
+    <div class="grow"><code class="mono">@{{.}}</code>{{if ne $g.ConfirmDomain .}}<a class="btnlink quiet small" href="/admin/groups/{{$group}}?remove={{.}}#domains" aria-label="Remove @{{.}} from {{$g.Display}}">Remove</a>{{end}}</div>
+    {{if eq $g.ConfirmDomain .}}
+    <div class="confirmbox"><p>{{$g.ConfirmText}}</p><div class="acts"><form method="post" action="/admin/groups/{{$group}}/domains/delete"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="domain" value="{{.}}"><button type="submit" class="danger">{{$g.ConfirmButton}}</button></form><a class="btnlink quiet" href="/admin/groups/{{$group}}#domains">{{$g.ConfirmKeep}}</a></div></div>
+    {{end}}
+    {{end}}
+  </div>
+  {{else}}<p class="muted" style="margin:0">The group has no domains yet, so it admits nobody.</p>{{end}}
+  <form class="inlineform" method="post" action="/admin/groups/{{$group}}/domains">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input type="text" name="domain" class="mono" required placeholder="example.org.au" aria-label="Domain to add">
+    <button type="submit" class="ghost">Add the domain</button>
+  </form>
+</section>
+<section class="fsec">
+  <h2><label for="org-{{$group}}">{{.OrgText.Label}}</label></h2>
+  <p class="hint">{{.OrgText.Hint}}</p>
+  <form class="inlineform" method="post" action="/admin/groups/{{$group}}/org">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input type="text" id="org-{{$group}}" name="org" maxlength="80" value="{{.Org}}">
+    <button type="submit" class="ghost">{{.OrgText.Button}}</button>
+  </form>
+</section>
+{{end}}
+
+{{if ne .Kind "domain"}}
 <dl class="facts">
   <div><dt>Members</dt><dd>{{if .NotYetCreated}}<span class="pill tag" title="The feed has not answered yet. The group is created by its first successful sync.">not created yet</span>{{else}}{{len .Members}}{{end}}</dd></div>
   <div><dt>Membership</dt><dd>{{if .Feed}}Filled from a feed{{else}}Managed here{{end}}</dd></div>
-  <div><dt>Used by</dt>{{if .Hosts}}<dd>{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}</dd>{{else if .Unused}}<dd><span class="pill tag" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">Not used by any app</span></dd>{{else}}<dd class="none">No app</dd>{{end}}</div>
-  <div><dt>Also admitted by</dt>{{if .IncludedIn}}<dd>{{range $i, $g := .IncludedIn}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}</dd>{{else}}<dd class="none">No other group</dd>{{end}}</div>
+  <div><dt>Used by</dt>{{if $.RolesOn}}{{if .UsedBy}}<dd>{{.UsedBy}}</dd>{{else}}<dd class="none">No roles</dd>{{end}}{{else if .Hosts}}<dd>{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}</dd>{{else if .Unused}}<dd><span class="pill tag" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">Not used by any app</span></dd>{{else}}<dd class="none">No app</dd>{{end}}</div>
+  <div><dt>Also admitted by</dt>{{if .IncludedInRefs}}<dd>{{range $i, $g := .IncludedInRefs}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g.Name}}">{{$g.Label}}</a>{{end}}</dd>{{else}}<dd class="none">No other group</dd>{{end}}</div>
 </dl>
+{{end}}
 
 {{with .Feed}}
-<div class="panel">
+<section class="fsec">
   <div class="head">
     <h2>Feed</h2>
     <form method="post" action="/admin/groups/{{$group}}/sync">
@@ -55,111 +99,105 @@
     </details>
   </div>
   {{end}}
-</div>
+</section>
 {{end}}
 
 {{if not .NotYetCreated}}
-<div class="panel">
+{{if ne .Kind "domain"}}
+<section class="fsec">
   <h2>Members</h2>
   {{if not .Feed}}
-  <form method="post" action="/admin/groups/{{.Name}}/members">
+  <form class="addmembers" method="post" action="/admin/groups/{{.Name}}/members">
     <input type="hidden" name="csrf" value="{{$csrf}}">
-    <label for="add-{{.Name}}" style="margin-top:0">Add members</label>
+    <label for="add-{{.Name}}">Add members</label>
     <textarea id="add-{{.Name}}" name="emails" rows="2" required placeholder="name@example.org"></textarea>
     <p class="hint">Add one address, or paste several, one per line or separated by commas.</p>
-    <button type="submit" style="margin-top:12px">Add members</button>
+    <div class="btnrow"><button type="submit">Add members</button></div>
   </form>
   {{end}}
   {{if .Members}}
   {{if .Feed}}
   <ul class="addresses">
-    {{range .Members}}<li>{{.Email}}{{if .AddedFrom}} <span class="pill tag" title="The roster holds this person as {{.AddedFrom}}. The feed also lists this form of the address, because a renumbered account is often renamed back.">added from {{.AddedFrom}}</span>{{end}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</li>{{end}}
+    {{range .Members}}<li>{{.Email}}{{if .AddedFrom}} <span class="pill tag" title="The roster holds this person as {{.AddedFrom}}. The feed also lists this form of the address, because a renumbered account is often renamed back.">added from {{.AddedFrom}}</span>{{end}}{{if .Guest}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</li>{{end}}
   </ul>
   {{else}}
-  <div class="tablewrap" style="margin-top:22px">
-  <table>
-    <tbody>
+  {{$display := .Display}}
+  <div class="glist">
     {{range .Members}}
-      <tr>
-        <td>{{.Email}}{{if not .Permitted}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</td>
-        <td class="actions">
-          <form class="inline" method="post" action="/admin/groups/{{$group}}/members/delete">
-            <input type="hidden" name="csrf" value="{{$csrf}}">
-            <input type="hidden" name="email" value="{{.Email}}">
-            <button type="submit" class="ghost" aria-label="Remove {{.Email}} from {{$group}}">Remove</button>
-          </form>
-        </td>
-      </tr>
+    <div class="grow"><span>{{.Email}}{{if .Guest}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</span>
+      <form class="inline" method="post" action="/admin/groups/{{$group}}/members/delete">
+        <input type="hidden" name="csrf" value="{{$csrf}}">
+        <input type="hidden" name="email" value="{{.Email}}">
+        <button type="submit" class="ghost small" aria-label="Remove {{.Email}} from {{$display}}">Remove</button>
+      </form>
+    </div>
     {{end}}
-    </tbody>
-  </table>
   </div>
   {{end}}
   {{else}}
-  <p class="muted" style="margin:{{if .Feed}}0{{else}}18px 0 0{{end}}">No members.</p>
+  <p class="muted" style="margin:0">No members.</p>
   {{end}}
-</div>
+</section>
 
 {{if or .Includes (not .Feed)}}
-<div class="panel">
+<section class="fsec">
   <h2>Also admits the members of</h2>
-  {{if .Includes}}
-  <div class="tablewrap">
-  <table>
-    <tbody>
-    {{range .Includes}}
-    <tr>
-      <td><a href="/admin/groups/{{.}}"><code class="mono">{{.}}</code></a></td>
-      <td class="actions">
-        <form class="inline" method="post" action="/admin/groups/{{$group}}/includes/delete">
-          <input type="hidden" name="csrf" value="{{$csrf}}">
-          <input type="hidden" name="included" value="{{.}}">
-          <button type="submit" class="ghost">Stop including</button>
-        </form>
-      </td>
-    </tr>
+  {{if .IncludeRefs}}
+  <div class="glist">
+    {{range .IncludeRefs}}
+    <div class="grow"><a href="/admin/groups/{{.Name}}">{{.Label}}</a>
+      <form class="inline" method="post" action="/admin/groups/{{$group}}/includes/delete">
+        <input type="hidden" name="csrf" value="{{$csrf}}">
+        <input type="hidden" name="included" value="{{.Name}}">
+        <button type="submit" class="ghost small">Stop including</button>
+      </form>
+    </div>
     {{end}}
-    </tbody>
-  </table>
   </div>
   {{else}}
   <p class="muted" style="margin:0">No other groups are included.</p>
   {{end}}
-  {{if and .IncludeOptions (not .Feed)}}
-  <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/includes" style="margin-top:{{if .Includes}}34px{{else}}14px{{end}}">
+  {{if and .OptionRefs (not .Feed)}}
+  <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/includes">
     <input type="hidden" name="csrf" value="{{$csrf}}">
-    <select name="included" aria-label="Group to include in {{.Name}}" required>
+    <select name="included" aria-label="Group to include in {{.Display}}" required>
       <option value="">Choose a group to include</option>
-      {{range .IncludeOptions}}<option value="{{.}}">{{.}}</option>{{end}}
+      {{range .OptionRefs}}<option value="{{.Name}}">{{.Label}}</option>{{end}}
     </select>
     <button type="submit" class="ghost">Include</button>
   </form>
   {{end}}
-</div>
+</section>
+{{end}}
 {{end}}
 
-<div class="panel">
-  <h2>Label</h2>
-  <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/label" style="margin:0">
+<section class="fsec">
+  <h2><label for="label-{{.Name}}">{{$.NameText.Heading}}</label></h2>
+  <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/label">
     <input type="hidden" name="csrf" value="{{$csrf}}">
-    <input name="label" type="text" maxlength="200" value="{{.Label}}" aria-label="Label for {{.Name}}" placeholder="Label (optional)">
-    <button type="submit" class="ghost">Save label</button>
+    <input id="label-{{.Name}}" name="label" type="text" maxlength="200" value="{{.Label}}">
+    <button type="submit" class="ghost">{{$.NameText.Button}}</button>
   </form>
-</div>
+</section>
 
 {{if not .Feed}}
-<div class="panel danger-zone">
+<section class="fsec danger-zone">
   <details class="confirm">
     <summary>Delete this group</summary>
     <div class="confirmbody">
-      <p>Deleting <code class="mono">{{.Name}}</code> removes {{if eq (len .Members) 1}}its member{{else}}all {{len .Members}} of its members{{end}} from it. Apps that require this group will then refuse {{if eq (len .Members) 1}}that person{{else}}them{{end}}.</p>
+      {{if .HoldsText}}<p>{{.HoldsText}}</p>
+      <div class="roleset">{{range .Roles}}<a class="apptok" href="/admin/apps/{{.App}}">{{template "app_icon"}}<span>{{.Label}}</span></a>{{end}}</div>
+      {{else}}
+      {{if eq .Kind "domain"}}<p>Deleting {{.Display}} removes its domains. Nobody is admitted through it afterwards.</p>
+      {{else}}<p>Deleting {{.Display}} removes {{if eq (len .Members) 1}}its member{{else}}all {{len .Members}} of its members{{end}} from it. Apps that require this group will then refuse {{if eq (len .Members) 1}}that person{{else}}them{{end}}.</p>{{end}}
       <form class="inline" method="post" action="/admin/groups/{{.Name}}/delete">
         <input type="hidden" name="csrf" value="{{$csrf}}">
-        <button type="submit" class="danger">Delete {{.Name}}</button>
+        <button type="submit" class="danger">Delete {{.Display}}</button>
       </form>
+      {{end}}
     </div>
   </details>
-</div>
+</section>
 {{end}}
 {{end}}
 {{end}}

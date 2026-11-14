@@ -53,9 +53,18 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 		groups = &g
 	}
 	// id.Kind is passed through, so a guest stays a guest across renewals (and
-	// so stays confined to guests=allow routes). The passkey and the time of
-	// sign-in pass through too.
-	grant := session.Grant{Kind: id.Kind, TOTP: id.TOTP, PK: id.PK, Auth: id.Auth, Card: id.Card, Step: id.Step}
+	// so stays confined to guests=allow routes). The one change is between a
+	// person's own kinds: an address that now holds a role but is off the
+	// allow-list becomes a member, and a member the allow-list now admits
+	// becomes an ordinary session. The passkey and the time of sign-in pass
+	// through too.
+	kind := id.Kind
+	if role == authz.RoleMember {
+		kind = session.KindMember
+	} else if kind == session.KindMember {
+		kind = ""
+	}
+	grant := session.Grant{Kind: kind, TOTP: id.TOTP, PK: id.PK, Auth: id.Auth, Card: id.Card, Step: id.Step}
 	if grant.Auth == 0 {
 		// A session from before the sign-in time was recorded. Its sign-in
 		// time is unknown, so it is recorded as long ago, never as now: a
@@ -70,6 +79,7 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 	// Reflect the freshly computed set in this response too, not just the
 	// renewed cookie, so a demotion takes effect immediately.
 	id.Groups = *groups
+	id.Kind = kind
 	return true
 }
 
@@ -128,6 +138,11 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		// to login — they are already signed in; logging in again wouldn't help and
 		// would clobber a working (e.g. break-glass) session. Their cookie is left
 		// untouched, so access to apps they *are* allowed on keeps working.
+		// A guard that names an app is decided by app roles (app_roles.go).
+		if wantsRoles(r) {
+			s.verifyByRole(w, r, id, now, renewed)
+			return
+		}
 		policy := r.Header.Get(headerPolicy)
 		s.warnLegacyPolicy(r)
 		reqDomains, reqGroups, allowGuests, ok := parsePolicy(policy)
@@ -144,11 +159,14 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		// A guest's groups are filtered again on each request, so a group
 		// that has become an application role since sign-in is not honoured.
-		if id.Kind == session.KindGuest {
+		// A member (signed in by an app role) is no more than a guest here:
+		// it is admitted only where guests are, or by a group it is in.
+		if id.Kind == session.KindGuest || id.Kind == session.KindMember {
 			id.Groups = s.guestGroupsNow(id)
 		}
 		allowed := func(id *session.Identity) bool {
-			return authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass, id.Kind == session.KindGuest,
+			return authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass,
+				id.Kind == session.KindGuest || id.Kind == session.KindMember,
 				reqDomains, reqGroups, allowGuests)
 		}
 		if !allowed(id) && s.wantsAdminStep(id, reqGroups) {
@@ -167,10 +185,10 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			// does not slide their session forward, and the "unchanged" result
 			// is remembered briefly (groupRecheck) so repeated refusals stay in
 			// memory.
-			// Only normal and guest sessions are re-read: any other kind
-			// (break-glass, or one a later build adds) stays refused, so the
-			// exclusion does not hang on a single check.
-			if renewed || (id.Kind != "" && id.Kind != session.KindGuest) || strings.TrimSpace(reqGroups) == "" ||
+			// Only normal, member and guest sessions are re-read: any other
+			// kind (break-glass, or one a later build adds) stays refused, so
+			// the exclusion does not hang on a single check.
+			if renewed || (!personSession(id) && id.Kind != session.KindGuest) || strings.TrimSpace(reqGroups) == "" ||
 				s.groupRecheck.fresh(id.Email, id.Groups, now) {
 				s.redirectToDenied(w, r)
 				return
@@ -220,6 +238,11 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	// planted by a sibling host) are left alone: the clear carries the shared
 	// Domain, so it would delete the visitor's real cookie and leave the
 	// planted one, turning a one-app nuisance into a sign-out everywhere.
+	// A guard that names an app may admit a request with no session from a
+	// network its role is given to.
+	if wantsRoles(r) && s.verifyByNetwork(w, r) {
+		return
+	}
 	n := 0
 	for _, ck := range r.Cookies() {
 		if ck.Name == session.SessionCookie {
@@ -245,7 +268,11 @@ func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	// in handleVerify. A group-only route (admin/collaborator door) declares no
 	// domain, so nothing is carried and it neither hints nor declines.
 	reqDomains, reqGroups, _, _ := parsePolicy(r.Header.Get(headerPolicy))
-	if v := clampHint(reqDomains); v != "" {
+	if wantsRoles(r) {
+		// A role guard sends no X-Auth-Policy; its hint comes from who
+		// holds the role (roleLoginHint).
+		loginURL += s.roleLoginHint(r)
+	} else if v := clampHint(reqDomains); v != "" {
 		loginURL += "&rqd=" + url.QueryEscape(v)
 		// Optional friendly label to display instead of enumerating domains.
 		if lbl := clampHint(r.Header.Get(headerDomainLabel)); lbl != "" {
@@ -297,6 +324,11 @@ func (s *Server) handleDenied(w http.ResponseWriter, r *http.Request) {
 	if id, ok := s.readSession(r, now); ok {
 		switch id.Kind {
 		case session.KindBreakGlass:
+			// A card that opens an app names that app.
+			if v, ok := s.wrongAppPage(r.Context(), id, rd); ok {
+				s.render(w, http.StatusForbidden, "break_confirm", pageData{Scan: v})
+				return
+			}
 			data.BreakGlass = true
 			// principal is "breakglass:<label>"; show the human label.
 			data.Identity = strings.TrimPrefix(id.Email, "breakglass:")
@@ -349,6 +381,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, "")
 	data := pageData{Redirect: rd, RequireGroups: clampHint(r.URL.Query().Get("rqg"))}
 	applyAccessHint(&data, r.URL.Query().Get("rqd"), r.URL.Query().Get("dlabel"))
+	applyRoleHint(&data, r.URL.Query().Get("rqr"), r.URL.Query().Get("rhd"))
 	s.applyAltLogin(&data, r.URL.Query().Get("alt"), r.URL.Query().Get("altlabel"))
 	s.render(w, http.StatusOK, "login", data)
 }
@@ -367,6 +400,21 @@ func applyAccessHint(d *pageData, rqd, label string) {
 	}
 }
 
+// applyRoleHint records a role guard's hint (see roleLoginHint) on the page,
+// so it survives to /request as hidden fields. rhd is hinted and never
+// declined on. A role guard whose holders are all domain groups carries rqd
+// instead, which applyAccessHint handles and which wins here.
+func applyRoleHint(d *pageData, rqr, rhd string) {
+	if clampHint(rqr) == "" || d.RequireDomains != "" {
+		return
+	}
+	d.RoleGuard = true
+	if rhd = clampHint(rhd); rhd != "" {
+		d.RoleHintDomains = rhd
+		d.RoleHint = fmt.Sprintf(msgRoleHint, withArticle(formatDomains(rhd)))
+	}
+}
+
 // applyLoginBranding fills the domain-derived UX fields on the login page from
 // the configured ALLOWED_EMAIL_DOMAINS, so a DIRECT visit (no route rqd) still
 // tells the user which domain to use. It runs after applyAccessHint, so a
@@ -381,6 +429,14 @@ func (s *Server) applyLoginBranding(d *pageData) {
 	// A group-gated door declares no domain on purpose (it's the entrance for
 	// people who can't match one), so never presume the allow-list here.
 	if d.RequireGroups != "" {
+		return
+	}
+	// Nor at a role guard, where the allow-list says nothing about who holds
+	// the role; only the domains of its domain groups are suggested.
+	if d.RoleGuard {
+		if dom := firstDomain(d.RoleHintDomains); dom != "" && d.EmailPlaceholder == "" {
+			d.EmailPlaceholder = "you@" + dom
+		}
 		return
 	}
 	// Open registration accepts any domain, so there is no domain to advertise:
@@ -466,7 +522,7 @@ func formatDomains(s string) string {
 	fields := strings.FieldsFunc(s, func(r rune) bool {
 		return r == ',' || r == ' ' || r == ';' || r == '\n' || r == '\r' || r == '\t'
 	})
-	return strings.ToLower(strings.Join(fields, ", "))
+	return strings.ToLower(joinOr(fields))
 }
 
 // handleRoot handles a bare hit to the auth host. An already-signed-in visitor
@@ -577,11 +633,13 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	rqd := clampHint(r.PostFormValue("rqd"))
 	dlabel := clampHint(r.PostFormValue("dlabel"))
 	rqg := clampHint(r.PostFormValue("rqg"))
+	rqr, rhd := r.PostFormValue("rqr"), r.PostFormValue("rhd")
 	alt, altLabel := r.PostFormValue("alt"), r.PostFormValue("altlabel")
 
 	if !validEmail(emailAddr) {
 		data := pageData{Error: "Please enter a valid email address.", Redirect: rd, Remember: remember, RequireGroups: rqg}
 		applyAccessHint(&data, rqd, dlabel)
+		applyRoleHint(&data, rqr, rhd)
 		s.applyAltLogin(&data, alt, altLabel)
 		s.render(w, http.StatusBadRequest, "login", data)
 		return
@@ -597,7 +655,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// handleVerify with Caddy's trusted header_up.
 	if rqd != "" && !authz.CanAccessApp(emailAddr, "", false, false, rqd, "", false) {
 		data := pageData{
-			Error:    "This app is only available to " + domainLabel(rqd, dlabel) + " email addresses. Please sign in with one of those.",
+			Error:    fmt.Sprintf(msgDeclineDomain, domainLabel(rqd, dlabel), withArticle(domainLabel(rqd, dlabel))),
 			Redirect: rd, Remember: remember, RequireGroups: rqg,
 		}
 		applyAccessHint(&data, rqd, dlabel)
@@ -634,7 +692,20 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// code's was reset (or that never spent a send token) would answer the
 	// next wrong guess differently, and that difference is allow-list
 	// membership.
-	permitted := s.policy.LoginRole(emailAddr, s.isOpenHost(rd)) != authz.RoleDeny
+	permitted := s.loginRole(r.Context(), emailAddr, s.isOpenHost(rd)) != authz.RoleDeny
+	s.issueCode(r, emailAddr, permitted, now)
+
+	if err := s.sessions.SetState(w, session.State{Email: emailAddr, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
+		return
+	}
+	s.render(w, http.StatusOK, "code", pageData{Email: emailAddr, Redirect: rd, Remember: remember})
+}
+
+// issueCode sends a sign-in code to a permitted address, or stores a decoy
+// for any other, under the cooldown and the send limits (see handleRequest).
+// An invitation's page sends its code through here too.
+func (s *Server) issueCode(r *http.Request, emailAddr string, permitted bool, now time.Time) {
 	// Suppress a re-request while the last code is still fresh: a code minted
 	// within the cooldown window has expires_at > now + OTPTTL - cooldown.
 	// Deriving issue time from expiry is exact because SaveCode sets
@@ -681,12 +752,6 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			log.Printf("store decoy code for %s: %v", emailAddr, err)
 		}
 	}
-
-	if err := s.sessions.SetState(w, session.State{Email: emailAddr, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
-		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
-		return
-	}
-	s.render(w, http.StatusOK, "code", pageData{Email: emailAddr, Redirect: rd, Remember: remember})
 }
 
 // knownDeviceWindow is how far back a successful sign-in from the same client
@@ -905,6 +970,9 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	// pass the check; a correct code is refunded below, so people signing in
 	// behind one hospital NAT spend nothing.
 	if !s.wrongCodes.Allow(clientIP(r)) {
+		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusTooManyRequests, st, rd, "Too many attempts. Please wait and try again.", false) {
+			return
+		}
 		s.render(w, http.StatusTooManyRequests, "code", pageData{
 			Error: "Too many attempts. Please wait and try again.", Email: st.Email, Redirect: rd,
 		})
@@ -921,12 +989,15 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	switch res {
 	case store.ConsumeOK:
 		s.wrongCodes.Refund(clientIP(r))
+		if st.Invite != 0 {
+			s.acceptInvite(r, st.Invite, st.Email, now)
+		}
 		// Re-derive "open host" from the destination exactly as /request did. rd
 		// is client-influenced (the posted copy wins), so this is not what keeps
 		// strangers out: a guest session is the same whichever host minted it,
 		// and the boundary is CanAccessApp admitting guests only on routes that
 		// opt in. The host check only decides where a guest login is offered.
-		role := s.policy.LoginRole(st.Email, s.isOpenHost(rd))
+		role := s.loginRole(r.Context(), st.Email, s.isOpenHost(rd))
 		if role == authz.RoleDeny {
 			s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeDenied)
 			s.sessions.ClearState(w)
@@ -942,6 +1013,9 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		s.completeLogin(w, r, st.Email, role, rd, st.Remember, false, 0, now)
 	case store.ConsumeMismatch:
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeWrongCode)
+		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusUnauthorized, st, rd, msgInviteWrongCode, false) {
+			return
+		}
 		s.render(w, http.StatusUnauthorized, "code", pageData{
 			Error: "Incorrect code. Please try again.", Email: st.Email, Redirect: rd,
 		})
@@ -951,12 +1025,18 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeLockedOut)
 		s.sessions.ClearState(w)
+		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusUnauthorized, st, rd, msgInviteCodeTooMany, true) {
+			return
+		}
 		s.render(w, http.StatusUnauthorized, "login", pageData{
-			Error: "Too many incorrect attempts. Please request a new code.", Redirect: rd,
+			Error: msgLoginTooMany, Redirect: rd,
 		})
 	default: // ConsumeExpired, ConsumeNoCode
 		s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeExpired)
 		s.sessions.ClearState(w)
+		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusUnauthorized, st, rd, "Your code has expired. Please request a new one.", true) {
+			return
+		}
 		s.render(w, http.StatusUnauthorized, "login", pageData{
 			Error: "Your code has expired. Please request a new one.", Redirect: rd,
 		})
@@ -1147,6 +1227,10 @@ func (s *Server) servedTarget(rawURL string) (string, bool) {
 // since it just served the login page. This makes a missing or misconfigured
 // destination land safely instead of on a TLS error.
 func (s *Server) loginRedirect(rd string) string {
+	// An invitation's code step ends on the auth host's own page for it.
+	if strings.HasPrefix(rd, s.cfg.PublicURL+inviteDonePath) {
+		return rd
+	}
 	if target, ok := s.servedTarget(rd); ok {
 		return target
 	}
@@ -1200,10 +1284,15 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	}
 	groups := s.computeGroups(r.Context(), emailAddr, s.tierRole(&session.Identity{TOTP: grant.TOTP, Step: grant.Step}, role))
 	// The kind follows the role: a guest login is marked so /verify confines it
-	// to routes that opt in, and renewal keeps it a guest.
+	// to routes that opt in, and renewal keeps it a guest. A member (signed in
+	// by an app role) is marked so an older guard treats it as a guest would
+	// be treated, while a role guard decides it by its roles.
 	kind := ""
-	if role == authz.RoleGuest {
+	switch role {
+	case authz.RoleGuest:
 		kind = session.KindGuest
+	case authz.RoleMember:
+		kind = session.KindMember
 	}
 	// A guest never gets the remember-me lifetime. Sessions are stateless, so
 	// the only ways to end one guest's access are emptying
@@ -1262,9 +1351,16 @@ func (s *Server) adminStepFresh(id *session.Identity) bool {
 // who has not passed the second step recently is an ordinary user: every
 // site that admits staff admits them at once, and only the admin pages and
 // admin-only routes send them to the admin door.
+//
+// A member's groups carry the guest tier token: an app behind an older guard
+// that admits guests reads the leading "guest" as someone outside the
+// department, which a member is.
 func (s *Server) tierRole(id *session.Identity, role string) string {
 	if role == authz.RoleAdmin && !s.adminStepFresh(id) {
 		return authz.RoleUser
+	}
+	if role == authz.RoleMember {
+		return authz.RoleGuest
 	}
 	return role
 }
@@ -1275,11 +1371,23 @@ func (s *Server) tierRole(id *session.Identity, role string) string {
 // with a recent second step lacks the admin group it should carry). Each
 // renews the session at once, so the admin group leaves or reaches the apps'
 // headers at the next request rather than at the next scheduled renewal.
+//
+// A person's sign-in whose kind no longer matches the allow-list is stale
+// too: a normal session whose address has left the allow-list but holds an
+// app role becomes a member at once, and a member whose address the
+// allow-list now admits becomes an ordinary session at once.
 func (s *Server) tierStale(id *session.Identity) bool {
-	if id.Kind != "" {
-		return false
+	switch id.Kind {
+	case "":
+		role := s.renewalRole(id)
+		if role == authz.RoleMember {
+			return true
+		}
+		return authz.HasGroup(id.Groups, authz.RoleAdmin) != (s.tierRole(id, role) == authz.RoleAdmin)
+	case session.KindMember:
+		return s.policy.Role(id.Email) != authz.RoleDeny
 	}
-	return authz.HasGroup(id.Groups, authz.RoleAdmin) != (s.tierRole(id, s.renewalRole(id)) == authz.RoleAdmin)
+	return false
 }
 
 // policyWithdrawn reports whether the current policy refuses a normal or
@@ -1289,7 +1397,7 @@ func (s *Server) tierStale(id *session.Identity) bool {
 // lookup in memory. Break-glass sessions are not policy logins and end at
 // their own short lifetime or when their card is revoked.
 func (s *Server) policyWithdrawn(id *session.Identity) bool {
-	if id.Kind != "" && id.Kind != session.KindGuest {
+	if !personSession(id) && id.Kind != session.KindGuest {
 		return false
 	}
 	return s.renewalRole(id) == authz.RoleDeny
@@ -1331,7 +1439,7 @@ func (s *Server) stepUpURL(rd string) string {
 // normal login, a break-glass grant, or a guest. /verify refuses any other.
 func knownSessionKind(kind string) bool {
 	switch kind {
-	case "", session.KindBreakGlass, session.KindGuest:
+	case "", session.KindBreakGlass, session.KindGuest, session.KindMember:
 		return true
 	}
 	return false
@@ -1364,7 +1472,15 @@ func (s *Server) renewalRole(id *session.Identity) string {
 		}
 		return authz.RoleDeny
 	}
-	return s.policy.Role(id.Email)
+	// A member whom the allow-list now admits renews as an ordinary user or
+	// administrator (renewSessionWith changes its kind).
+	role := s.policy.Role(id.Email)
+	if role == authz.RoleDeny && personSession(id) && s.mayHoldRoleSnapshot(context.Background(), id) {
+		// Not on the allow-list, but holds an app role through a domain group,
+		// a list or a current person assignment (app_roles.go): a member.
+		return authz.RoleMember
+	}
+	return role
 }
 
 // isOpenHost reports whether a (validated) post-login destination is on a host
@@ -1501,40 +1617,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.loginURL(rd), http.StatusFound)
 }
 
-// handleBreakGlassScan answers the address printed on a card. It grants
-// nothing: it shows a page whose one button posts the token to /break. Link
-// previews, chat apps and mail scanners (Safe Links among them) fetch a
-// shared card's address on their own, and before this page each fetch was a
-// grant, with its audit row and notification. The fetch is recorded as
-// "viewed", so a card whose address is being passed around still shows up.
-func (s *Server) handleBreakGlassScan(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r)
-	ua := clampUserAgent(r.UserAgent())
-	if !s.viewLimiter.Allow(ip) {
-		s.breakTooMany(w)
-		return
-	}
-	token := r.PathValue("token")
-	code, ok := s.activeCard(w, r, token, ip, ua)
-	if !ok {
-		return
-	}
-	// A card whose group has become an application role shows the same page
-	// as any card that is not active; the grant records and reports it.
-	if _, refused := s.targetRefusal(code.TargetGroup); refused {
-		s.cardNotAvailable(w)
-		return
-	}
-	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
-		CodeID: code.ID, Label: code.Label, ClientIP: ip,
-		UserAgent: ua, Outcome: store.OutcomeViewed,
-	}); err != nil {
-		// Nothing is granted here, so a failed write cannot hide a grant.
-		log.Printf("break-glass record viewed event for %q: %v", code.Label, err)
-	}
-	s.render(w, http.StatusOK, "break_confirm", pageData{BreakToken: token})
-}
-
 // handleBreakGlass grants emergency access from a card, once the person has
 // pressed the button on the scan's page. It is public (the token in the form
 // is the only credential, by design), instant (no second factor), rate-limited
@@ -1644,8 +1726,7 @@ func (s *Server) activeCard(w http.ResponseWriter, r *http.Request, token, ip, u
 
 func (s *Server) cardNotAvailable(w http.ResponseWriter) {
 	s.render(w, http.StatusNotFound, "message", pageData{
-		Title:   "Access code not available",
-		Message: "This emergency access code is not active. Please contact an administrator.",
+		Title: msgCardUnknownTitle, Message: msgCardUnknownBody, LinkText: msgCardUnknownLink,
 	})
 }
 
@@ -1789,10 +1870,7 @@ func (s *Server) handleBreakGlassActivate(w http.ResponseWriter, r *http.Request
 	// made from the old code is refused like a revoked card.
 	if !ok || code.Status != store.BreakGlassActive || offer.Gen != cardGeneration(code) {
 		log.Printf("break-glass activate denied (inactive, unknown or re-minted code %d) from %s", offer.CodeID, ip)
-		s.render(w, http.StatusNotFound, "message", pageData{
-			Title:   "Access code not available",
-			Message: "This emergency access code is not active. Please contact an administrator.",
-		})
+		s.cardNotAvailable(w)
 		return
 	}
 

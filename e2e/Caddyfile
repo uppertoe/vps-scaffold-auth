@@ -42,6 +42,17 @@ either.{$DOMAIN} {
 	import protected_access "example.net" "reports" whoami:80
 }
 
+# A role guard: the Manager role of the e2e app, which the test gives to one
+# person through the admin pages.
+roles.{$DOMAIN} {
+	import role "e2e" "manager" whoami:80
+}
+
+# A role guard for a role that nobody holds.
+editors.{$DOMAIN} {
+	import role "e2e" "editor" whoami:80
+}
+
 # A hand-rolled guard with a misspelt rule: must close, not open.
 broken.{$DOMAIN} {
 	route {

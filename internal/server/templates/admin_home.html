@@ -5,15 +5,17 @@
 
 {{with .Overview}}
 <div class="stats">
+  {{if $.RolesOn}}<a class="stat" href="/admin/apps"><span class="n">{{.Apps}}</span><span class="l">Apps, with each one's roles and who holds them</span></a>{{end}}
   <a class="stat" href="/admin/groups"><span class="n">{{.Groups}}</span><span class="l">Groups</span></a>
   <a class="stat" href="/admin/groups"><span class="n">{{.Members}}</span><span class="l">Group memberships</span></a>
-  <a class="stat" href="/admin/break"><span class="n">{{.ActiveCards}}</span><span class="l">Active break-glass codes</span></a>
+  <a class="stat" href="/admin/break"><span class="n">{{.ActiveCards}}</span><span class="l">{{.CardsTile}}</span></a>
 </div>
 
 <div class="panel">
   <h2>Needs attention</h2>
   {{if .Attention}}
   <ul class="todo">
+    {{range .Lines}}<li{{if .Bad}} class="bad"{{end}}>{{.Before}}{{if .Link}}<a href="{{.Link}}">{{.Name}}</a>{{end}}{{.After}}</li>{{end}}
     {{if .MissingGroups}}
     <li>Apps require {{if eq (len .MissingGroups) 1}}a group that has{{else}}groups that have{{end}} not been created:
       {{range $i, $g := .MissingGroups}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}.
@@ -43,7 +45,7 @@
   {{else}}
   <p class="muted" style="margin:0">Nothing needs attention.</p>
   {{end}}
-  {{if not .RouteGroupsOn}}
+  {{if and (not .RouteGroupsOn) (not $.RolesOn)}}
   <p class="muted" style="margin:12px 0 0">The gateway has not been given the list of groups the apps use (ROUTE_GROUPS_FILE), so it cannot check for missing or unused groups.</p>
   {{end}}
 </div>

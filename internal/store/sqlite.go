@@ -41,6 +41,10 @@ func OpenSQLite(path string) (*SQLite, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.migrateInvitations(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -94,6 +98,31 @@ CREATE TABLE IF NOT EXISTS group_includes (
 	PRIMARY KEY (group_name, included)
 );
 CREATE INDEX IF NOT EXISTS idx_group_includes_included ON group_includes(included);
+-- A domain group admits everyone whose address is at one of its domains. It
+-- has no members; a list group (the default) has no domains.
+CREATE TABLE IF NOT EXISTS group_domains (
+	group_name TEXT NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+	domain     TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (group_name, domain)
+);
+-- Who holds each app role. kind is domain_group, list, person, network or
+-- guests; ref names the group, the address or the network, and is empty for
+-- guests. until (Unix seconds, 0 for none) ends a person's assignment; how
+-- records whether an administrator added the person or an invitation did.
+-- No foreign key on ref: a group's deletion is refused while it is assigned.
+CREATE TABLE IF NOT EXISTS role_assignments (
+	app        TEXT NOT NULL,
+	role       TEXT NOT NULL,
+	kind       TEXT NOT NULL,
+	ref        TEXT NOT NULL DEFAULT '',
+	until      INTEGER NOT NULL DEFAULT 0,
+	how        TEXT NOT NULL DEFAULT '',
+	created_by TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (app, role, kind, ref)
+);
+CREATE INDEX IF NOT EXISTS idx_role_assignments_ref ON role_assignments(kind, ref);
 -- The last sync of each feed-filled group, for the admin pages. Not tied to
 -- groups by a foreign key: a feed's state outlives a deleted group row.
 CREATE TABLE IF NOT EXISTS group_sync_state (
@@ -257,6 +286,14 @@ CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 	}); err != nil {
 		return err
 	}
+	if err := s.ensureColumns("groups", []column{
+		{"kind", "TEXT NOT NULL DEFAULT 'list'"},
+		// A domain group's organisation name, such as RCH, which a
+		// withdrawn card's page names. NULL for none.
+		{"org", "TEXT"},
+	}); err != nil {
+		return err
+	}
 	if err := s.ensureColumns("group_sync_state", []column{
 		{"held_since", "INTEGER NOT NULL DEFAULT 0"},
 		{"kept_hash", "TEXT NOT NULL DEFAULT ''"},
@@ -264,7 +301,7 @@ CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 	}); err != nil {
 		return err
 	}
-	return s.ensureColumns("break_glass_codes", []column{
+	if err := s.ensureColumns("break_glass_codes", []column{
 		{"ov_title", "TEXT NOT NULL DEFAULT ''"},
 		{"ov_body", "TEXT NOT NULL DEFAULT ''"},
 		{"ov_instructions", "TEXT NOT NULL DEFAULT ''"},
@@ -277,7 +314,12 @@ CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 		{"ov_logo_type", "TEXT NOT NULL DEFAULT ''"},
 		{"ov_glyph", "BLOB"},
 		{"ov_glyph_type", "TEXT NOT NULL DEFAULT ''"},
-	})
+		{"app", "TEXT"},
+		{"role", "TEXT"},
+	}); err != nil {
+		return err
+	}
+	return s.migrateCardDesigns()
 }
 
 type column struct{ name, def string }
@@ -688,7 +730,7 @@ func (s *SQLite) ClearTOTPFailures(ctx context.Context, email string) error {
 
 // ListGroups returns all groups ordered by name.
 func (s *SQLite) ListGroups(ctx context.Context) ([]Group, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, label, created_at FROM groups ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT name, label, kind, COALESCE(org, ''), created_at FROM groups ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -697,7 +739,7 @@ func (s *SQLite) ListGroups(ctx context.Context) ([]Group, error) {
 	for rows.Next() {
 		var g Group
 		var created int64
-		if err := rows.Scan(&g.Name, &g.Label, &created); err != nil {
+		if err := rows.Scan(&g.Name, &g.Label, &g.Kind, &g.Org, &created); err != nil {
 			return nil, err
 		}
 		g.CreatedAt = time.Unix(created, 0)
@@ -725,6 +767,21 @@ func (s *SQLite) UpdateGroupLabel(ctx context.Context, name, label string) (bool
 	return n > 0, err
 }
 
+// SetGroupOrg sets a domain group's organisation name; an empty name is
+// stored as NULL. It reports whether the domain group exists.
+func (s *SQLite) SetGroupOrg(ctx context.Context, name, org string) (bool, error) {
+	var v any
+	if org != "" {
+		v = org
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE groups SET org = ? WHERE name = ? AND kind = ?`, v, name, GroupKindDomain)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // ErrIncludeCycle is returned when including a group would make a group
 // include itself, directly or through others.
 var ErrIncludeCycle = errors.New("group include would create a cycle")
@@ -735,6 +792,17 @@ var ErrIncludeCycle = errors.New("group include would create a cycle")
 func (s *SQLite) AddGroupInclude(ctx context.Context, group, included string) error {
 	if group == included {
 		return ErrIncludeCycle
+	}
+	// Only a list includes another list: a domain group holds domains, not
+	// people, so it neither includes nor is included.
+	for _, g := range []string{group, included} {
+		kind, ok, err := s.groupKind(ctx, g)
+		if err != nil {
+			return err
+		}
+		if ok && kind != GroupKindList {
+			return ErrGroupKind
+		}
 	}
 	// Check and insert in one transaction, so two opposite includes posted at
 	// once cannot both pass the check.
@@ -793,6 +861,9 @@ func (s *SQLite) ListGroupIncludes(ctx context.Context) (map[string][]string, er
 // AddGroupMembers adds several addresses to a group in one transaction and
 // returns the ones that were not already members.
 func (s *SQLite) AddGroupMembers(ctx context.Context, group string, emails []string) ([]string, error) {
+	if err := s.refuseDomainGroup(ctx, group); err != nil {
+		return nil, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -821,6 +892,9 @@ func (s *SQLite) AddGroupMembers(ctx context.Context, group string, emails []str
 // the audit events, in one transaction: the change and its record succeed or
 // fail together.
 func (s *SQLite) ApplyGroupSync(ctx context.Context, group string, add, remove []string, events []AdminEvent) error {
+	if err := s.refuseDomainGroup(ctx, group); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -945,14 +1019,34 @@ func unixOrZero(t time.Time) int64 {
 	return t.Unix()
 }
 
-// DeleteGroup removes a group; memberships cascade.
+// DeleteGroup removes a group; memberships, includes and domain rules
+// cascade. A group that a role assignment names is refused with
+// ErrGroupHoldsRoles, checked in the same transaction as the delete.
 func (s *SQLite) DeleteGroup(ctx context.Context, name string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM groups WHERE name = ?`, name)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	n, err := groupRoleCountIn(ctx, tx, name)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrGroupHoldsRoles
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM groups WHERE name = ?`, name); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
-// AddGroupMember adds an email to a group (idempotent).
+// AddGroupMember adds an email to a group (idempotent). A domain group has
+// no members, so it is refused with ErrGroupKind.
 func (s *SQLite) AddGroupMember(ctx context.Context, group, email string) error {
+	if err := s.refuseDomainGroup(ctx, group); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO group_members (group_name, email, created_at) VALUES (?, ?, ?)
 		 ON CONFLICT(group_name, email) DO NOTHING`,
@@ -1015,18 +1109,24 @@ func (s *SQLite) GroupsForEmail(ctx context.Context, email string) ([]string, er
 
 // --- Break-the-glass codes ---
 
-const bgColumns = `id, label, note, target_group, token_enc, token_hash, redirect, status, created_at, updated_at`
+const bgColumns = `id, label, note, target_group, COALESCE(app, ''), COALESCE(role, ''), token_enc, token_hash, redirect, status, created_at, updated_at, COALESCE(design_id, 0), pdf_at, tested_at`
 
 func scanBreakGlass(sc interface{ Scan(...any) error }) (BreakGlassCode, error) {
 	var c BreakGlassCode
-	var created, updated int64
-	err := sc.Scan(&c.ID, &c.Label, &c.Note, &c.TargetGroup, &c.TokenEnc, &c.TokenHash,
-		&c.Redirect, &c.Status, &created, &updated)
+	var created, updated, pdfAt, testedAt int64
+	err := sc.Scan(&c.ID, &c.Label, &c.Note, &c.TargetGroup, &c.App, &c.Role, &c.TokenEnc, &c.TokenHash,
+		&c.Redirect, &c.Status, &created, &updated, &c.DesignID, &pdfAt, &testedAt)
 	if err != nil {
 		return BreakGlassCode{}, err
 	}
 	c.CreatedAt = time.Unix(created, 0)
 	c.UpdatedAt = time.Unix(updated, 0)
+	if pdfAt > 0 {
+		c.PDFAt = time.Unix(pdfAt, 0)
+	}
+	if testedAt > 0 {
+		c.TestedAt = time.Unix(testedAt, 0)
+	}
 	return c, nil
 }
 
@@ -1038,9 +1138,9 @@ func (s *SQLite) CreateBreakGlassCode(ctx context.Context, c BreakGlassCode) (in
 	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO break_glass_codes
-		 (label, note, target_group, token_enc, token_hash, redirect, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.Label, c.Note, c.TargetGroup, c.TokenEnc, c.TokenHash, c.Redirect, c.Status, now, now)
+		 (label, note, target_group, app, role, token_enc, token_hash, redirect, status, created_at, updated_at, design_id)
+		 VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, NULLIF(?, 0))`,
+		c.Label, c.Note, c.TargetGroup, c.App, c.Role, c.TokenEnc, c.TokenHash, c.Redirect, c.Status, now, now, c.DesignID)
 	if err != nil {
 		return 0, err
 	}
@@ -1100,12 +1200,27 @@ func (s *SQLite) RevokeBreakGlassCode(ctx context.Context, id int64) error {
 	return err
 }
 
-// RemintBreakGlassCode replaces a code's token and reactivates it.
+// RemintBreakGlassCode replaces a code's token and reactivates it. The old
+// token's hash is kept, so a scan of the old card can say it was replaced,
+// and the new card starts with no PDF downloaded and no test.
 func (s *SQLite) RemintBreakGlassCode(ctx context.Context, id int64, newTokenEnc, newTokenHash string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE break_glass_codes SET token_enc = ?, token_hash = ?, status = ?, updated_at = ? WHERE id = ?`,
-		newTokenEnc, newTokenHash, BreakGlassActive, time.Now().Unix(), id)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR REPLACE INTO break_glass_retired (token_hash, code_id, retired_at)
+		 SELECT token_hash, id, ? FROM break_glass_codes WHERE id = ?`, now, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE break_glass_codes SET token_enc = ?, token_hash = ?, status = ?, updated_at = ?, pdf_at = 0, tested_at = 0 WHERE id = ?`,
+		newTokenEnc, newTokenHash, BreakGlassActive, now, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RecordBreakGlassEvent appends an audit event.

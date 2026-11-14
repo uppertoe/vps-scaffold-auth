@@ -57,7 +57,7 @@ func TestAdminNoticeComesFromTheActionNotTheURL(t *testing.T) {
 		t.Error("?done= in the URL produced a notice")
 	}
 	// A real action does, once.
-	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 	rec := c.postForm("/admin/groups/team/members", url.Values{"csrf": {tok}, "email": {"a@example.com"}})
 	if loc := rec.Header().Get("Location"); rec.Code != http.StatusFound || loc != "/admin/groups/team" {
 		t.Fatalf("add member = %d %q", rec.Code, loc)
@@ -79,7 +79,7 @@ func TestAdminAddMemberRefusesBadEmailWithWarning(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 
 	rec := c.postForm("/admin/groups/team/members", url.Values{"csrf": {tok}, "email": {"not an email"}})
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/groups/team" {
@@ -125,7 +125,7 @@ func TestCreateGroupCapsLabel(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 	c.postForm("/admin/groups", url.Values{"csrf": {tok}, "name": {"team"}, "label": {"  " + strings.Repeat("x", 500) + "  "}})
 	groups, _ := srv.store.ListGroups(context.Background())
 	if len(groups) != 1 {
@@ -190,7 +190,7 @@ func TestMembershipChangesClearGroupRecheck(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/groups", nil).Body.String())
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
 	for _, step := range []struct {
 		path string
 		form url.Values
