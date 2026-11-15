@@ -83,6 +83,14 @@ func (s *Server) handleAdminApps(w http.ResponseWriter, r *http.Request) {
 		v.Address = addr
 		focus.address = addr
 		focus.heldByAddress, focus.heldVia, v.Focus = s.checkAddress(r.Context(), world, addr)
+	} else if raw := strings.TrimSpace(q.Get("address")); raw != "" {
+		// An address that is not a full one is said to be so, rather than
+		// the check being left without an answer.
+		if rs := []rune(raw); len(rs) > 254 {
+			raw = string(rs[:254])
+		}
+		v.Address = raw
+		v.Focus = fmt.Sprintf(msgCheckNotAddress, raw)
 	} else if kind, ref, ok := parseHolderID(v.Holder); ok && kind != store.AssignPerson {
 		focus.holderKind, focus.holderRef = kind, ref
 		v.Focus = s.holderFocus(world, kind, ref)

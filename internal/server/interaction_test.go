@@ -183,3 +183,12 @@ func TestNetworkRefusalHoldsWithPeople(t *testing.T) {
 		t.Errorf("the save stored %+v", as)
 	}
 }
+
+// An address that is not a full one is answered on the overview.
+func TestCheckAddressNotFull(t *testing.T) {
+	_, _, c := appsAdmin(t)
+	page := html.UnescapeString(c.get("/admin/apps?address=not-an-address", nil).Body.String())
+	if !strings.Contains(page, fmt.Sprintf(msgCheckNotAddress, "not-an-address")) {
+		t.Error("the overview does not say the address is not a full one")
+	}
+}

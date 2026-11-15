@@ -18,6 +18,9 @@ const msgAddTokenTitle = "Give this role to a group, a list, a setting or a pers
 // The picker's link to the invitation form, which preselects the role.
 const msgPickerInvite = "Invite by email"
 
+// The overview's sentence when the address checked is not a full address.
+const msgCheckNotAddress = "%s is not a full email address. Enter an address such as name@example.org."
+
 // The wording of a refused person, which the app page has always used. Kept
 // here so the picker's script and the server say the same thing.
 const (
