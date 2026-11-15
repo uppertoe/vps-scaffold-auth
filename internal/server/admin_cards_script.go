@@ -7,7 +7,8 @@ import "html/template"
 // change; the page's Content-Security-Policy allows it by its hash (see
 // renderAdmin). Without a script, each form has a button that shows the
 // preview for its values, and the presets and choices work as plain form
-// controls.
+// controls. The design editor also asks before it is left with edits that
+// have not been saved.
 
 const cardFormScript template.JS = `(function () {
   var f = document.getElementById("nc");
@@ -81,7 +82,16 @@ const designScript template.JS = `(function () {
       setColour("header", b.getAttribute("data-header"));
       setColour("accent", b.getAttribute("data-accent"));
       f.elements.stripe.checked = b.getAttribute("data-stripe") === "1";
+      dirty = true;
       update();
     });
   });
+  // Leaving the design with edits that have not been saved is asked about
+  // first; saving it and Discard are not.
+  var dirty = false;
+  f.addEventListener("input", function () { dirty = true; });
+  f.addEventListener("change", function () { dirty = true; });
+  document.addEventListener("submit", function () { dirty = false; });
+  f.querySelectorAll(".savebar a").forEach(function (a) { a.addEventListener("click", function () { dirty = false; }); });
+  addEventListener("beforeunload", function (e) { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 })();`
