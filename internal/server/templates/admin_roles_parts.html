@@ -81,14 +81,24 @@
   .morepop .tok { max-width: 100%; }
   .tok[hidden], .tok.capped { display: none; }
   .tok.add { background: transparent; border: 1px dashed var(--accent-line); color: var(--accent); }
-  .tok.padd { border: 1.5px dashed var(--accent); }
+  /* Without the script a full row is cut off at its edge, so its plus token
+     stays at the right-hand end, in view. */
+  .rwho .tok.add { position: sticky; right: 0; background: var(--surface); box-shadow: -8px 0 0 var(--surface); }
+  /* A holder about to be given the role has a dashed accent border; one
+     about to have it taken away has a dashed red border and is struck
+     through. Each keeps its control to undo the change: the cross takes
+     back an addition, and the arrow keeps a holder. */
+  .tok.padd { border: 1.5px dashed var(--accent); max-width: 320px; }
   .tok.static { cursor: default; }
   .tok .tick { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
-  .tok:has(.tick:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .tok:has(.tick:focus-visible), .tok.proxy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .tok .x { color: var(--faint); font-size: 15px; line-height: 1; }
   .tok .x::before { content: "\00d7"; }
-  .tok:has(.tick:not(:checked)) { text-decoration: line-through; opacity: .55; }
-  .tok:has(.tick:not(:checked)) .x::before { content: "\21ba"; }
+  .tok:not(.pdel):has(.tick:not(:checked)), .tok.pdel:has(.tick:checked) { border: 1.5px dashed var(--off-fg); opacity: .7; }
+  .tok:not(.pdel):has(.tick:not(:checked)) .l, .tok.pdel:has(.tick:checked) .l { text-decoration: line-through; }
+  .tok:not(.pdel):has(.tick:not(:checked)) .x::before, .tok.pdel:has(.tick:checked) .x::before { content: "\21ba"; }
+  .tok.padd:has(.tick:not(:checked)) { border-color: var(--input-border); }
+  button.tok.proxy { font: inherit; font-size: 13px; line-height: normal; }
 
   .reach { display: grid; grid-template-columns: 16px minmax(0, 1fr) 40px; gap: 8px; align-items: center; font-size: 13px; color: var(--ink); white-space: nowrap; }
   .reach .w { overflow: hidden; text-overflow: ellipsis; }
@@ -164,6 +174,9 @@
   .pickwrap { display: none; position: fixed; inset: 0; z-index: 20; background: var(--scrim); align-items: flex-start; justify-content: center; padding: 96px 16px 16px; overflow-y: auto; }
   .pickwrap:target { display: flex; }
   .pickwrap > a.away { position: fixed; inset: 0; }
+  /* With the script, an open picker hangs under its row, which is lifted
+     above the shade (see rolesScript). */
+  .rrow.lift { position: relative; z-index: 21; background: var(--surface); border-radius: 8px; box-shadow: 0 0 0 2px var(--accent-line); }
   .pop { position: relative; width: 400px; max-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .16); padding: 8px; }
   .pop .phead { padding: 8px 8px 4px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pop .kind { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); height: 28px; display: flex; align-items: flex-end; padding: 0 8px 4px; }
@@ -178,6 +191,12 @@
   .opt small { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .opt .oline { display: flex; gap: 8px; align-items: center; min-width: 0; }
   .pop .jump { display: flex; align-items: center; height: 40px; padding: 0 8px; font-size: 14px; gap: 8px; }
+  .pop .addperson { display: grid; grid-template-columns: minmax(0, 1fr) 136px auto; gap: 8px; padding: 4px 8px; align-items: center; }
+  .pop .addperson input { height: 36px; padding: 0 10px; font-size: 14px; margin: 0; min-width: 0; }
+  .pop .addperson button { margin: 0; height: 36px; padding: 0 14px; }
+  .pop .pmsg { margin: 4px 8px 0; font-size: 13px; line-height: 18px; color: var(--muted); }
+  .pop .pmsg.bad { color: var(--off-fg); }
+  .pop .pmsg[hidden] { display: none; }
   .pop .pfoot { display: flex; justify-content: flex-end; padding: 8px 8px 4px; margin-top: 4px; border-top: 1px solid var(--line); }
   .pop .pfoot .btnlink { height: 34px; }
 
@@ -218,6 +237,8 @@
     .tbl .rrow > div[data-label] > * { min-width: 0; justify-self: start; max-width: 100%; }
     .rrow.app .bydesign .bdt { display: none; }
     .addline { grid-template-columns: 1fr; }
+    .pop .addperson { grid-template-columns: minmax(0, 1fr) auto; }
+    .pop .addperson input[type=email] { grid-column: 1 / -1; }
     .rkey > div { grid-template-columns: 1fr; height: auto; gap: 4px; padding-block: 8px; }
     .rkey > div > span:last-child { white-space: normal; }
     .ladder { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 12px; }
@@ -245,7 +266,7 @@
 
 {{define "ico"}}<svg class="ico" aria-hidden="true"><use href="#{{.}}"/></svg>{{end}}
 
-{{define "token"}}{{if .Field}}<label class="tok{{if .Tone}} {{.Tone}}{{end}}{{if .Widest}} widest{{end}}{{if eq .Pending "add"}} padd{{end}}" title="{{.Title}}"><input type="checkbox" class="tick" name="{{.Field}}" value="{{.Value}}"{{if .Checked}} checked{{end}} data-held="{{if .Held}}1{{else}}0{{end}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}<span class="x" aria-hidden="true"></span></label>{{else if .Href}}<a class="tok{{if .Tone}} {{.Tone}}{{end}}{{if .On}} on{{end}}{{if .Widest}} widest{{end}}{{if .Capped}} capped{{end}}" href="{{.Href}}" title="{{.Title}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</a>{{else}}<span class="tok static{{if .Tone}} {{.Tone}}{{end}}{{if .On}} on{{end}}{{if .Widest}} widest{{end}}{{if .Capped}} capped{{end}}" title="{{.Title}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</span>{{end}}{{end}}
+{{define "token"}}{{if .Field}}<label class="tok{{if .Tone}} {{.Tone}}{{end}}{{if .Widest}} widest{{end}}{{if eq .Pending "add"}} padd{{end}}{{if eq .Pending "take"}} pdel{{end}}" title="{{.Title}}"{{if .Level}} data-level="{{.Level}}"{{end}}><input type="checkbox" class="tick" name="{{.Field}}" value="{{.Value}}"{{if .Checked}} checked{{end}} data-held="{{if .Held}}1{{else}}0{{end}}">{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}<span class="x" aria-hidden="true"></span></label>{{else if .Href}}<a class="tok{{if .Tone}} {{.Tone}}{{end}}{{if .On}} on{{end}}{{if .Widest}} widest{{end}}{{if .Capped}} capped{{end}}" href="{{.Href}}" title="{{.Title}}"{{if .Level}} data-level="{{.Level}}"{{end}}>{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</a>{{else}}<span class="tok static{{if .Tone}} {{.Tone}}{{end}}{{if .On}} on{{end}}{{if .Widest}} widest{{end}}{{if .Capped}} capped{{end}}" title="{{.Title}}"{{if .Level}} data-level="{{.Level}}"{{end}}>{{template "ico" .Icon}}<span class="l">{{.Label}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</span>{{end}}{{end}}
 
 {{define "reach"}}<div class="reach{{if .Closed}} closed{{end}}" title="{{.Title}}">{{if .Closed}}{{template "ico" "k-none"}}<span class="w">Closed</span>{{else}}{{template "ico" .Step.Icon}}<span class="w">{{.Step.Word}}</span>{{end}}<span class="meter">{{range .Bars}}<i{{if .}} class="f"{{end}}></i>{{end}}</span></div>{{end}}
 
@@ -254,9 +275,9 @@
   {{range .}}
   {{if not .Editable}}<div class="rrow app"><div class="name"><b>{{.Label}}</b><span class="host">{{.Host}}</span>{{if .Open}}<span class="bydesign" title="{{.Open}}: {{.OpenTitle}}" tabindex="0">{{template "ico" "k-lock"}}<span class="bdt">{{.Open}}</span></span>{{end}}</div><a class="edit" href="/admin/apps/{{.Name}}">Edit</a></div>{{end}}
   {{range .Rows}}
-  <div class="rrow{{if .Mark}} {{.Mark}}{{end}}">
+  <div class="rrow{{if .Mark}} {{.Mark}}{{end}}"{{if .Editable}} data-role="{{.Role}}"{{end}}>
     <div class="rrole" title="{{.Label}}{{if .Paths}}: {{.Paths}}{{end}}"><b>{{.Label}}</b><span{{if .PathsMono}} class="p"{{end}}>{{.Paths}}</span></div>
-    <div class="rwho" data-fit>{{range .Tokens}}{{template "token" .}}{{end}}{{if .Tokens}}<button type="button" class="tok more" aria-expanded="false"{{if .More}} title="{{.MoreTitle}}"{{else}} hidden{{end}}>{{.More}}</button>{{end}}{{if and .Nobody (not .Editable)}}<span class="nobody">{{.NobodyText}}</span>{{end}}{{if .Editable}}<a class="tok add" href="#{{.PickID}}" title="Give this role to a group, a list or a setting">{{template "ico" "k-plus"}}<span class="l">{{.AddText}}</span></a>{{end}}</div>
+    <div class="rwho" data-fit>{{range .Tokens}}{{template "token" .}}{{end}}{{if .Tokens}}<button type="button" class="tok more" aria-expanded="false"{{if .More}} title="{{.MoreTitle}}"{{else}} hidden{{end}}>{{.More}}</button>{{end}}{{if and .Nobody (not .Editable)}}<span class="nobody">{{.NobodyText}}</span>{{end}}{{if .Editable}}<a class="tok add" href="#{{.PickID}}" title="{{.AddTitle}}">{{template "ico" "k-plus"}}<span class="l">{{.AddText}}</span></a>{{end}}</div>
     {{template "reach" .Reach}}
   </div>
   {{end}}

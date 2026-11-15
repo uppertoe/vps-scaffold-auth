@@ -70,12 +70,13 @@ func openInvitation(t *testing.T, srv *Server, addr string, sent time.Time) {
 }
 
 // An app page's Withdraw opens a confirmation in the row, which names the
-// address; the page keeps its add line and its pickers' close control.
+// address; each role's picker has its own fields to add a person, and its
+// close control.
 func TestAppPageWithdrawIsConfirmed(t *testing.T) {
 	srv, _, c := appsAdmin(t)
 	openInvitation(t, srv, "k.lee@monash.org", srv.now())
 	page := html.UnescapeString(c.get("/admin/apps/enquiries", nil).Body.String())
-	for _, want := range []string{`href="/admin/apps/enquiries?withdraw=1#invite-1"`, `name="person"`, ">" + msgPickerDone + "<", `aria-modal="true"`} {
+	for _, want := range []string{`href="/admin/apps/enquiries?withdraw=1#invite-1"`, `name="pa.user"`, `name="pa.admin"`, ">" + msgPickerDone + "<", `aria-modal="true"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("app page lacks %q", want)
 		}

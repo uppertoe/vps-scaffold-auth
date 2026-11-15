@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -223,6 +224,9 @@ type tokenView struct {
 	// Widest marks the holder that sets the row's widest access, so a narrow
 	// row keeps it in view.
 	Widest bool
+	// Level is the holder's step on the access scale, which the app page's
+	// script reads to redraw a row's widest access as changes are made.
+	Level int
 }
 
 // rank is how long a token stays when a row is too narrow for all of
@@ -259,6 +263,7 @@ func (s *Server) holderToken(w *rolesWorld, kind, ref string) tokenView {
 		t.Count = fmt.Sprint(w.members[ref])
 	}
 	t.Title = t.Label + ": " + s.holderWho(w, kind, ref) + "."
+	t.Level = holderLevel[kind]
 	return t
 }
 
@@ -438,17 +443,24 @@ type roleRowView struct {
 	// holders it stands for.
 	More, MoreTitle string
 	PickID, AddText string
+	AddTitle        string
 	Picker          *pickerView
 }
 
 // pickerView offers the holders a role does not have yet.
 type pickerView struct {
 	ID, Title string
+	Role      string
 	Sections  []pickerSection
-	// PeopleHref jumps to the form that adds a person. CardHref, for the
-	// user role only, opens the new-card form with the app chosen.
-	PeopleHref string
+	// InviteHref opens the invitation form with this role chosen. CardHref,
+	// for the user role only, opens the new-card form with the app chosen.
+	InviteHref string
 	CardHref   string
+	// Today is the earliest end date a person can be given, and the
+	// Msg fields are the wording the picker's script shows.
+	Today                                  string
+	MsgPending, MsgNotAddress, MsgPastDate string
+	MsgBadDate, MsgUntil, InviteText       string
 }
 
 type pickerSection struct {
@@ -485,9 +497,30 @@ type rowFocus struct {
 func (f *rowFocus) active() bool { return f != nil && (f.holderKind != "" || f.address != "") }
 
 // pending is the unsaved state of an app page: holders about to be given or
-// taken away, by role, as "kind:ref".
+// taken away, by role, as "kind:ref", and people about to be given a role
+// (people) or to have it taken away (unpeople).
 type pending struct {
-	give, take map[string]map[string]bool
+	give, take       map[string]map[string]bool
+	people, unpeople []store.RoleAssignment
+}
+
+// count is the number of unsaved changes.
+func (p *pending) count() int {
+	if p == nil {
+		return 0
+	}
+	n := len(p.people) + len(p.unpeople)
+	for _, m := range []map[string]map[string]bool{p.give, p.take} {
+		for _, ids := range m {
+			n += len(ids)
+		}
+	}
+	return n
+}
+
+// any reports whether there is anything unsaved.
+func (p *pending) any() bool {
+	return p != nil && len(p.give)+len(p.take)+len(p.people)+len(p.unpeople) > 0
 }
 
 // taking reports whether the holder is about to be taken from the role.
@@ -579,7 +612,7 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 		row.Tokens = append(row.Tokens, t)
 	}
 	if len(people) > 0 {
-		t := tokenView{Icon: iconPerson, Label: capFirst(countWords(len(people), "person", "people"))}
+		t := tokenView{Icon: iconPerson, Label: capFirst(countWords(len(people), "person", "people")), Level: holderLevel[store.AssignPerson]}
 		var lines []string
 		for _, pa := range people {
 			line := pa.Ref
@@ -599,8 +632,32 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 		row.Tokens = append(row.Tokens, t)
 		level = max(level, holderLevel[store.AssignPerson])
 	}
+	if editable && p != nil {
+		// People about to be given the role, and people about to have it
+		// taken away, each as their own token that can be undone.
+		for _, pa := range p.people {
+			if pa.Role != role {
+				continue
+			}
+			t := tokenView{Icon: iconPerson, Label: pa.Ref, Field: "p." + role, Value: pa.Ref + "|" + s.lastDay(pa.Until),
+				Checked: true, Pending: "add", Title: "Give the role to " + pa.Ref, Level: holderLevel[store.AssignPerson]}
+			if !pa.Until.IsZero() {
+				t.Count = fmt.Sprintf(msgPersonUntil, s.longDate(pa.Until.Add(-time.Second)))
+				t.Title += ", " + t.Count
+			}
+			row.Tokens = append(row.Tokens, t)
+			level = max(level, holderLevel[store.AssignPerson])
+		}
+		for _, pa := range p.unpeople {
+			if pa.Role != role {
+				continue
+			}
+			row.Tokens = append(row.Tokens, tokenView{Icon: iconPerson, Label: pa.Ref, Field: "take", Value: role + "|" + pa.Kind + "|" + pa.Ref,
+				Checked: true, Pending: "take", Title: "Take the role from " + pa.Ref})
+		}
+	}
 	if cards := w.cardsFor(a.Name, role); len(cards) > 0 {
-		row.Tokens = append(row.Tokens, tokenView{Icon: iconCard, Tone: "card", Label: capFirst(countWords(len(cards), "card", "cards")), Title: strings.Join(cards, ", ")})
+		row.Tokens = append(row.Tokens, tokenView{Icon: iconCard, Tone: "card", Label: capFirst(countWords(len(cards), "card", "cards")), Title: strings.Join(cards, ", "), Level: 1})
 		level = max(level, 1)
 	}
 	for i, l := range tokLevel {
@@ -649,6 +706,7 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 	if editable {
 		row.PickID = "pick-" + role
 		row.AddText = "Add"
+		row.AddTitle = msgAddTokenTitle
 		if row.Nobody {
 			row.AddText = "Give this role"
 		}
@@ -690,7 +748,11 @@ func capTokens(row *roleRowView) {
 // picker lists the networks, guests, domain groups and lists that do not
 // hold the role yet, under the prototype's headings.
 func (s *Server) picker(w *rolesWorld, a *roles.App, role string, inRow map[string]bool, p *pending) *pickerView {
-	pv := &pickerView{ID: "pick-" + role, Title: a.Label + ": " + a.Roles[role], PeopleHref: "#people"}
+	pv := &pickerView{ID: "pick-" + role, Role: role, Title: a.Label + ": " + a.Roles[role],
+		InviteHref: "/admin/invitations/new?role=" + url.QueryEscape(a.Name+":"+role),
+		Today:      s.now().In(s.tzloc()).Format("2006-01-02"),
+		MsgPending: msgPersonPending, MsgNotAddress: msgPersonNotAddress, MsgPastDate: msgPersonPastDate,
+		MsgBadDate: msgPersonBadDate, MsgUntil: msgPersonUntil, InviteText: msgPickerInvite}
 	if role == roles.UserRole && len(a.CardPages) > 0 {
 		pv.CardHref = "/admin/break/new?app=" + a.Name
 	}

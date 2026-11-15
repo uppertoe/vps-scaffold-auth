@@ -18,8 +18,8 @@
   {{range .Block.Rows}}<input type="hidden" name="roles" value="{{.Role}}">{{end}}
   {{template "rolelist" .Blocks}}
   <div class="changes {{if .Pending}}some{{else}}none{{end}}">
-    <span data-none>Give a role to a group or setting with the plus token, or take it away with a token's cross. Nothing is saved until you review the changes.</span>
-    <span data-some hidden></span>
+    <span data-none{{if .PendingText}} hidden{{end}}>Give a role to a group or setting with the plus token, or take it away with a token's cross. Nothing is saved until you review the changes.</span>
+    <span data-some{{if not .PendingText}} hidden{{end}}>{{.PendingText}}</span>
     <a class="ghostlink" data-discard href="/admin/apps/{{$app}}"{{if not .Pending}} hidden{{end}}>Discard</a>
     <button type="submit">Review and save</button>
   </div>
@@ -33,13 +33,20 @@
       {{range .Options}}<label class="opt"><input type="checkbox" class="tick" name="{{.Field}}" value="{{.Value}}" data-held="0"><span class="box"></span><span class="oline">{{template "token" .Token}}<small>{{.Who}}</small></span></label>{{end}}
       {{end}}
       <div class="kind">People and cards</div>
-      <div class="jump"><a href="{{.PeopleHref}}">Add or invite a person</a></div>
+      <div class="addperson" data-addperson="{{.Role}}" data-msg-pending="{{.MsgPending}}" data-msg-address="{{.MsgNotAddress}}" data-msg-past="{{.MsgPastDate}}" data-msg-date="{{.MsgBadDate}}" data-msg-until="{{.MsgUntil}}">
+        <input type="email" name="pa.{{.Role}}" placeholder="name@example.org" aria-label="Address to add" autocomplete="off">
+        <input type="date" name="pu.{{.Role}}" min="{{.Today}}" aria-label="End date (optional)" title="End date (optional)">
+        <button type="submit" class="ghost" formaction="/admin/apps/{{$app}}/edit#roles" formnovalidate>Add</button>
+      </div>
+      <p class="pmsg" role="status" aria-live="polite" hidden></p>
+      <div class="jump"><a href="{{.InviteHref}}">{{.InviteText}}</a></div>
       {{if .CardHref}}<div class="jump"><a href="{{.CardHref}}">Create a break-glass card for this role</a></div>{{end}}
       <div class="pfoot"><a class="btnlink quiet" href="#roles" data-close>{{$.App.PickerDone}}</a></div>
     </div>
   </div>
   {{end}}{{end}}
 </form>
+<div hidden data-reaches>{{range .Reaches}}<div data-level="{{.Level}}">{{template "reach" .Reach}}</div>{{end}}</div>
 
 <h2 class="sec" id="people">People given a role directly</h2>
 <p class="secnote">People added here, or by invitation, hold the role in this app only.</p>
@@ -59,14 +66,6 @@
   {{else}}
   <div class="rrow empty"><div class="muted">Nobody has been given a role here directly.</div></div>
   {{end}}
-  <form class="addline" method="post" action="/admin/apps/{{$app}}/review">
-    <input type="hidden" name="csrf" value="{{$csrf}}">
-    <input type="email" name="person" required placeholder="name@example.org" aria-label="Address to add">
-    <select name="person_role" aria-label="Role">{{range .Roles}}<option value="{{.Role}}">{{.Label}}</option>{{end}}</select>
-    <input type="date" name="until" aria-label="End date (optional)" title="End date (optional)">
-    <button type="submit" class="ghost">Add</button>
-    {{if $.RolesOn}}<a class="ghostbtn" href="{{.InviteHref}}">Invite by email</a>{{end}}
-  </form>
 </div>
 
 <h2 class="sec">Groups and settings</h2>
