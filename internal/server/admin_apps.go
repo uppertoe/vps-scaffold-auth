@@ -83,6 +83,14 @@ func (s *Server) handleAdminApps(w http.ResponseWriter, r *http.Request) {
 		v.Address = addr
 		focus.address = addr
 		focus.heldByAddress, focus.heldVia, v.Focus = s.checkAddress(r.Context(), world, addr)
+	} else if raw := strings.TrimSpace(q.Get("address")); raw != "" {
+		// An address that is not a full one is said to be so, rather than
+		// the check being left without an answer.
+		if rs := []rune(raw); len(rs) > 254 {
+			raw = string(rs[:254])
+		}
+		v.Address = raw
+		v.Focus = fmt.Sprintf(msgCheckNotAddress, raw)
 	} else if kind, ref, ok := parseHolderID(v.Holder); ok && kind != store.AssignPerson {
 		focus.holderKind, focus.holderRef = kind, ref
 		v.Focus = s.holderFocus(world, kind, ref)
@@ -295,11 +303,15 @@ type appView struct {
 	// head their table.
 	Ignored                  []orphanRow
 	IgnoredHead, IgnoredNote string
-	// InviteHref opens the Invite people form with this app's user role.
-	InviteHref string
+	// Reaches are the widest-access cell for each step, 0 to 6, which the
+	// page's script copies into a row as its changes are made.
+	Reaches []levelReach
 	// Pending is set while the page shows unsaved changes.
 	Pending bool
-	Review  *reviewView
+	// PendingText counts the unsaved changes in the changes bar, as the
+	// page's script does, so the page says it without the script too.
+	PendingText string
+	Review      *reviewView
 	// Confirm is the invitation whose withdrawal is being confirmed
 	// (?withdraw=id), with the confirmation's wording.
 	Confirm                                 int64
@@ -309,6 +321,11 @@ type appView struct {
 }
 
 type roleOption struct{ Role, Label string }
+
+type levelReach struct {
+	Level int
+	Reach reachView
+}
 
 type personRow struct {
 	Email, Role, RoleLabel, How, HowTitle, Until string
@@ -389,7 +406,7 @@ func (s *Server) renderApp(w http.ResponseWriter, r *http.Request, status int, a
 }
 
 func (s *Server) appPage(w *rolesWorld, a *roles.App, p *pending) *appView {
-	v := &appView{Name: a.Name, Label: a.Label, Source: a.Source, OrphanNote: msgOrphanRole, Pending: p != nil && (len(p.give)+len(p.take) > 0),
+	v := &appView{Name: a.Name, Label: a.Label, Source: a.Source, OrphanNote: msgOrphanRole, Pending: p.any(),
 		IgnoredHead: msgIgnoredHeading, IgnoredNote: msgIgnoredNote}
 	if len(a.Hosts) > 0 {
 		v.Host = a.Hosts[0]
@@ -403,6 +420,9 @@ func (s *Server) appPage(w *rolesWorld, a *roles.App, p *pending) *appView {
 	v.OpenText = "None"
 	if n := len(a.OpenPaths()); n > 0 {
 		v.OpenText = capFirst(countWords(n, "path", "paths")) + ", listed below"
+	}
+	if n := p.count(); n > 0 {
+		v.PendingText = capFirst(numberWord(n)) + pluralWord(n, " change has", " changes have") + " not been saved."
 	}
 	v.Block = s.appBlock(w, a, true, nil, p)
 	v.Blocks = []appBlockView{v.Block}
@@ -440,7 +460,9 @@ func (s *Server) appPage(w *rolesWorld, a *roles.App, p *pending) *appView {
 	}
 	sort.SliceStable(v.People, func(i, j int) bool { return v.People[i].Email < v.People[j].Email })
 	v.People = append(v.People, s.invitedRows(w, a)...)
-	v.InviteHref = "/admin/invitations/new?role=" + url.QueryEscape(a.Name+":"+roles.UserRole)
+	for l := 0; l <= 6; l++ {
+		v.Reaches = append(v.Reaches, levelReach{Level: l, Reach: s.reach(l)})
+	}
 	sort.Slice(order, func(i, j int) bool {
 		ki, _, _ := parseHolderID(order[i])
 		kj, _, _ := parseHolderID(order[j])
@@ -587,7 +609,8 @@ func (s *Server) handleAdminAppReview(w http.ResponseWriter, r *http.Request) {
 	}
 	changes, warning := s.changesFromForm(r, world, a)
 	if warning != "" {
-		s.renderApp(w, r, http.StatusBadRequest, a, nil, nil, warning)
+		// The changes that can be made stay on the page, unsaved.
+		s.renderApp(w, r, http.StatusBadRequest, a, pendingOf(changes), nil, warning)
 		return
 	}
 	if len(changes) == 0 {
@@ -597,8 +620,9 @@ func (s *Server) handleAdminAppReview(w http.ResponseWriter, r *http.Request) {
 	s.renderApp(w, r, http.StatusOK, a, pendingOf(changes), s.review(world, a, changes), "")
 }
 
-// handleAdminAppEdit is "Keep editing": the app page again, with the changes
-// under review still shown as unsaved.
+// handleAdminAppEdit is the app page again, with changes still shown as
+// unsaved: "Keep editing" sends the changes under review ("c"), and a
+// picker's Add, without the page's script, sends the app page's own form.
 func (s *Server) handleAdminAppEdit(w http.ResponseWriter, r *http.Request) {
 	if !s.checkCSRF(w, r) {
 		return
@@ -613,15 +637,32 @@ func (s *Server) handleAdminAppEdit(w http.ResponseWriter, r *http.Request) {
 			changes = append(changes, c)
 		}
 	}
-	s.renderApp(w, r, http.StatusOK, a, pendingOf(changes), nil, "")
+	world, err := s.loadRolesWorld(r.Context())
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	more, warning := s.changesFromForm(r, world, a)
+	changes = append(changes, more...)
+	status := http.StatusOK
+	if warning != "" {
+		status = http.StatusBadRequest
+	}
+	s.renderApp(w, r, status, a, pendingOf(changes), nil, warning)
 }
 
-// pendingOf is the unsaved state the app page shows for changes. People are
-// left out: they are listed in their own table, and are added again there.
+// pendingOf is the unsaved state the app page shows for changes: holders
+// about to be given or taken away, and people about to be given a role or
+// have it taken away, each on the role's row.
 func pendingOf(changes []roleChange) *pending {
 	p := &pending{give: map[string]map[string]bool{}, take: map[string]map[string]bool{}}
 	for _, c := range changes {
 		if c.A.Kind == store.AssignPerson {
+			if c.Give {
+				p.people = append(p.people, c.A)
+			} else {
+				p.unpeople = append(p.unpeople, c.A)
+			}
 			continue
 		}
 		m := p.take
@@ -637,11 +678,22 @@ func pendingOf(changes []roleChange) *pending {
 }
 
 // changesFromForm reads the app page's forms: the holders ticked for each
-// role ("roles" and "r.<role>"), a person to add ("person", "person_role",
-// "until"), and assignments to take away ("take", role|kind|ref). It returns
-// a warning, and no changes, for a person who cannot be added.
+// role ("roles" and "r.<role>"); people about to be given a role, as tokens
+// on its row ("p.<role>", address|day) or as typed in its picker ("pa.<role>"
+// and "pu.<role>"); a person from the older single form ("person",
+// "person_role", "until"); and assignments to take away ("take",
+// role|kind|ref). Each change is checked here and again when it is saved. A
+// change that cannot be made is left out, and the first such change's
+// refusal is returned with the others, so the page can show them still
+// unsaved.
 func (s *Server) changesFromForm(r *http.Request, w *rolesWorld, a *roles.App) ([]roleChange, string) {
 	var out []roleChange
+	warning := ""
+	refuse := func(msg string) {
+		if warning == "" {
+			warning = msg
+		}
+	}
 	current := map[string]store.RoleAssignment{}
 	for _, as := range w.assigned2(a.Name) {
 		current[as.Role+"|"+as.Kind+"|"+as.Ref] = as
@@ -657,7 +709,8 @@ func (s *Server) changesFromForm(r *http.Request, w *rolesWorld, a *roles.App) (
 				continue
 			}
 			if !roles.Honoured(store.RoleAssignment{Kind: kind, Role: role}) {
-				return nil, msgNetworkUserOnly
+				refuse(msgNetworkUserOnly)
+				continue
 			}
 			want[holderID(kind, ref)] = true
 		}
@@ -683,38 +736,81 @@ func (s *Server) changesFromForm(r *http.Request, w *rolesWorld, a *roles.App) (
 			out = append(out, roleChange{Give: true, A: store.RoleAssignment{App: a.Name, Role: role, Kind: kind, Ref: ref}})
 		}
 	}
+	people := map[string]bool{} // role|address, so a person is added once
+	addPerson := func(role, raw, day string) {
+		if _, ok := a.Roles[role]; !ok {
+			return
+		}
+		c, msg := s.personChange(a, role, raw, day)
+		if msg != "" {
+			refuse(msg)
+			return
+		}
+		if k := role + "|" + c.A.Ref; !people[k] {
+			people[k] = true
+			out = append(out, c)
+		}
+	}
+	for _, role := range a.RoleOrder {
+		for _, v := range r.PostForm["p."+role] {
+			addr, day, _ := strings.Cut(v, "|")
+			addPerson(role, addr, day)
+		}
+		if raw := strings.TrimSpace(r.PostFormValue("pa." + role)); raw != "" {
+			addPerson(role, raw, r.PostFormValue("pu."+role))
+		}
+	}
 	if raw := strings.TrimSpace(r.PostFormValue("person")); raw != "" {
-		addr := normalizeEmail(raw)
 		role := r.PostFormValue("person_role")
 		if _, ok := a.Roles[role]; !ok {
 			role = roles.UserRole
 		}
-		if !plainAddress(addr) {
-			return nil, "The person has not been added. Enter a full email address, such as name@example.org."
-		}
-		pa := store.RoleAssignment{App: a.Name, Role: role, Kind: store.AssignPerson, Ref: addr, How: store.AssignedByAdmin}
-		if d := strings.TrimSpace(r.PostFormValue("until")); d != "" {
-			day, err := time.ParseInLocation("2006-01-02", d, s.tzloc())
-			if err != nil {
-				return nil, "The person has not been added. Enter the end date as a day, month and year."
-			}
-			pa.Until = day.AddDate(0, 0, 1)
-			if !pa.Until.After(s.now()) {
-				return nil, "The person has not been added, because the end date has passed."
-			}
-		}
-		out = append(out, roleChange{Give: true, A: pa})
+		addPerson(role, raw, r.PostFormValue("until"))
 	}
+	taken := map[string]bool{}
 	for _, v := range r.PostForm["take"] {
 		f := strings.SplitN(v, "|", 3)
-		if len(f) != 3 {
+		if len(f) != 3 || taken[v] {
 			continue
 		}
 		if as, ok := current[f[0]+"|"+f[1]+"|"+f[2]]; ok {
+			taken[v] = true
 			out = append(out, roleChange{A: as})
 		}
 	}
-	return out, ""
+	return out, warning
+}
+
+// personChange is a person about to be given a role, with an end date given
+// as a day ("2006-01-02") or none. The role then ends at the start of the
+// next day. It returns the refusal for an address or a day that cannot be
+// used.
+func (s *Server) personChange(a *roles.App, role, raw, day string) (roleChange, string) {
+	addr := normalizeEmail(strings.TrimSpace(raw))
+	if !plainAddress(addr) {
+		return roleChange{}, msgPersonNotAddress
+	}
+	pa := store.RoleAssignment{App: a.Name, Role: role, Kind: store.AssignPerson, Ref: addr, How: store.AssignedByAdmin}
+	if d := strings.TrimSpace(day); d != "" {
+		t, err := time.ParseInLocation("2006-01-02", d, s.tzloc())
+		if err != nil {
+			return roleChange{}, msgPersonBadDate
+		}
+		pa.Until = t.AddDate(0, 0, 1)
+		if !pa.Until.After(s.now()) {
+			return roleChange{}, msgPersonPastDate
+		}
+	}
+	return roleChange{Give: true, A: pa}, ""
+}
+
+// lastDay is the day a person's role is last held, as a form writes it: the
+// day before Until, which is the start of the day after.
+func (s *Server) lastDay(until time.Time) string {
+	if until.IsZero() {
+		return ""
+	}
+	return until.Add(-time.Second).In(s.tzloc()).Format("2006-01-02")
 }
 
 // assigned2 returns every assignment of an app, declared roles or not.
