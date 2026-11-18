@@ -179,6 +179,9 @@ type PasskeyChallenge struct {
 	// before this challenge was minted, so the passkey may be added although
 	// the sign-in is not recent.
 	Confirmed bool `json:"ok,omitempty"`
+	// Computer records that the challenge was minted for a computer, whose
+	// passkey must be held by the computer itself.
+	Computer bool `json:"pc,omitempty"`
 }
 
 // State is the short-lived login progress carried between /request and

@@ -5,7 +5,7 @@
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 {{with .Passkey}}
 <div class="err" id="passkey-error" hidden>Your passkey could not be used. Please try again, or enter the code from your authenticator app.</div>
-<form id="passkey-login" method="post" action="/passkey/login" hidden data-challenge="{{.Challenge}}" data-rpid="{{.RPID}}">
+<form id="passkey-login" method="post" action="/passkey/login" hidden data-challenge="{{.Challenge}}" data-rpid="{{.RPID}}"{{if .Allow}} data-allow="{{.Allow}}"{{end}}>
   <input type="hidden" name="rd" value="{{$.Redirect}}">
   <input type="hidden" name="remember">
   <input type="hidden" name="id">

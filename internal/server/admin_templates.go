@@ -62,10 +62,12 @@ type adminData struct {
 	// Admin-action audit page.
 	AdminEvents []adminEventView
 	// Access page, filtered to one person, with passkeys on.
-	PasskeysOn      bool
-	Passkeys        []passkeyRow
-	PasskeyRenew    string
-	PasskeysRemoved bool
+	PasskeysOn   bool
+	Passkeys     []passkeyRow
+	PasskeyRenew string
+	// PasskeyDeviceHeading heads the passkeys' Device column.
+	PasskeyDeviceHeading string
+	PasskeysRemoved      bool
 	// App roles: the Apps overview, one app's page, and whether the model is
 	// on (which shows the Apps menu item). Script is a page's inline script,
 	// allowed by its hash (see rolesScript).

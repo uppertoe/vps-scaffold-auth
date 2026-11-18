@@ -216,6 +216,7 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 		data.PasskeysOn = true
 		data.Passkeys = s.passkeyRows(keys)
 		data.PasskeyRenew = renewWithin(s.cfg.SessionRenew)
+		data.PasskeyDeviceHeading = msgPkDeviceHeading
 		data.PasskeysRemoved = q.Get("passkeys_removed") == "1"
 	}
 	s.renderAdmin(w, r, http.StatusOK, "admin_access", data)

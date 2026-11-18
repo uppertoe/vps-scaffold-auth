@@ -168,5 +168,10 @@
   <input type="hidden" name="authenticatorData">
   <input type="hidden" name="publicKey">
   <input type="hidden" name="publicKeyAlg">
+  <input type="hidden" name="attachment">
+  <input type="hidden" name="transports">
 {{end}}
-{{define "pk-register-attrs"}}data-challenge="{{.Challenge}}" data-rpid="{{.RPID}}" data-rpname="{{.RPName}}" data-userid="{{.UserID}}" data-username="{{.UserName}}" data-exclude="{{.Exclude}}"{{end}}
+{{define "pk-register-attrs"}}data-challenge="{{.Challenge}}" data-rpid="{{.RPID}}" data-rpname="{{.RPName}}" data-userid="{{.UserID}}" data-username="{{.UserName}}" data-exclude="{{.Exclude}}"{{if .Computer}} data-device="computer"{{end}}{{end}}
+
+{{/* The kind of device a passkey row names, with its icon. */}}
+{{define "pk-device-icon"}}{{if .}}<svg class="fact-icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M2 20h20"></path></svg>{{else}}<svg class="fact-icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2"></rect><path d="M11 18h2"></path></svg>{{end}}{{end}}

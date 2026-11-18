@@ -29,7 +29,9 @@ import (
 // Passkeys (PASSKEYS_ENABLED). A person signs in with an email code as
 // before; on a phone, the gateway then offers to add a passkey, and the next
 // sign-in on that phone needs only the phone's face, fingerprint or PIN
-// check. The rules that hold the design together:
+// check. On a computer, a person may add a passkey held by the computer
+// itself (Touch ID, Windows Hello), but only when they ask for one on the
+// passkeys page. The rules that hold the design together:
 //
 //   - Passkeys are bound to the sign-in host (the relying-party ID is the host
 //     of AUTH_PUBLIC_URL), so no other application on the domain can ask the
@@ -51,6 +53,36 @@ import (
 //   - Passkeys need a script, and are the only reason the sign-in pages carry
 //     one: /passkey.js, served from this host, and allowed by script-src 'self'
 //     on the pages that use it and nowhere else.
+//
+// On a computer, the further rules:
+//
+//   - The department's computers cannot hold a passkey, and their browsers
+//     would offer to use a phone over Bluetooth or a QR code instead, which
+//     those computers block. A computer is therefore never offered a passkey
+//     unasked: there is no offer after an email code, and the passkeys page
+//     adds one only once the person has chosen to, after a warning to do so
+//     only on a computer nobody else signs in to.
+//   - A computer's passkey is held by the computer. The ceremony asks for a
+//     platform authenticator, with the "client-device" hint, and a
+//     registration whose browser reports the passkey anywhere else (a phone
+//     over "hybrid", a security key) is refused (HeldByThisDevice). The report
+//     is not signed, so this stops a mistaken choice, not a hostile script;
+//     who may add a passkey is decided, as on a phone, by the session.
+//   - The gateway never asks a computer for a phone's passkey. A computer
+//     that holds one of the gateway's passkeys is known by passkeyHereCookie,
+//     set when the passkey is added or used there; only such a computer is
+//     asked for a passkey at sign-in, and only for those passkeys, as held by
+//     the computer ("internal"), or quietly in the email field (conditional
+//     mediation). Every other computer's sign-in page is as it was. A synced
+//     passkey that happens to be on the computer may work; nothing fetches
+//     one from a phone.
+//   - The cookie only steers what the browser is asked for and which row the
+//     passkeys page calls "This computer". Everything it names is checked as
+//     any other sign-in is, so a planted or stale cookie gains nothing.
+//   - The other rules hold on a computer as on a phone: the same host, the
+//     same recent sign-in and second factor to add one, the same admin grade,
+//     the same sessions that name their passkey, the same single-use
+//     challenges.
 
 const (
 	passkeyChallengeTTL = 10 * time.Minute
@@ -60,6 +92,12 @@ const (
 	// person who chose "Not now" can still add a passkey later; a phone still
 	// holding the old cookie has it cleared.
 	passkeyOfferedCookie = "vps_auth_pk_offered"
+	// passkeyHereCookie names the passkeys this device holds, as the
+	// credential IDs it added or used here, newest first.
+	passkeyHereCookie = "vps_auth_pk_here"
+	passkeyHereTTL    = 400 * 24 * time.Hour
+	passkeyHereMax    = 8    // credential IDs kept
+	passkeyHereBytes  = 2400 // and their total length, within a cookie's 4 KB
 )
 
 //go:embed static/passkey.js
@@ -75,6 +113,15 @@ type passkeyPage struct {
 	UserName  string
 	Exclude   string // comma-separated credential IDs the phone must not duplicate
 	Phone     bool
+	// Computer marks a page drawn for a computer, and AddComputer the
+	// passkeys page once the person has chosen to add a passkey there.
+	Computer    bool
+	AddComputer bool
+	// Allow lists, comma-separated, the passkeys a computer's sign-in may ask
+	// for: those passkeyHereCookie names. Empty, a computer is asked for none.
+	Allow string
+	// Text is the wording for computers (passkey_computer_text.go).
+	Text *passkeyText
 	// Next is where Continue and Not now lead.
 	Next string
 	// The passkeys page.
@@ -97,6 +144,11 @@ type passkeyRow struct {
 	Name  string
 	Added string
 	Used  string
+	// Kind is "This computer", "A phone" and so on, for the person's own
+	// page; Device is "Computer" or "Phone", for the administrator's.
+	Kind     string
+	Device   string
+	Computer bool
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
@@ -116,15 +168,15 @@ func (s *Server) relyingParty() passkey.RelyingParty {
 }
 
 // isPhone reports whether the request comes from a phone. Passkeys are
-// offered only there: the department's computers cannot hold one, and on a
-// computer the browser would offer to use a phone over Bluetooth, which those
-// computers do not allow. This decides what is offered, never what is
-// permitted.
+// offered unasked only there: the department's computers cannot hold one, and
+// on a computer the browser would offer to use a phone over Bluetooth, which
+// those computers do not allow. A computer adds one only when the person asks
+// (renderPasskeys). This decides what is offered, never what is permitted.
 func isPhone(r *http.Request) bool {
-	if r.Header.Get("Sec-CH-UA-Mobile") == "?1" {
-		return true
-	}
-	ua := r.UserAgent()
+	return r.Header.Get("Sec-CH-UA-Mobile") == "?1" || isPhoneUA(r.UserAgent())
+}
+
+func isPhoneUA(ua string) bool {
 	return strings.Contains(ua, "iPhone") || (strings.Contains(ua, "Android") && strings.Contains(ua, "Mobile"))
 }
 
@@ -191,8 +243,9 @@ func newChallenge() ([]byte, error) {
 
 // passkeyLoginOptions mints the sign-in challenge for the login page. It is
 // called from render, before the page is written. Whether to show the "Sign
-// in with a passkey" link is left to passkey.js, which shows it only on a
-// phone that can hold a passkey.
+// in with a passkey" link is left to passkey.js, which shows it on a phone
+// that can hold a passkey, and on a computer only for the passkeys the page
+// lists as held there (Allow).
 func (s *Server) passkeyLoginOptions(w http.ResponseWriter) *passkeyPage {
 	ch, err := newChallenge()
 	if err != nil {
@@ -239,7 +292,8 @@ func (s *Server) passkeyRegisterOptionsFor(w http.ResponseWriter, r *http.Reques
 	}
 	// The account ID rides in the challenge cookie, so the one stored is the
 	// one the server chose, not whatever the browser posts back.
-	if err := s.sessions.SetPasskeyChallenge(w, true, session.PasskeyChallenge{Challenge: ch, Email: email, Handle: handle, Confirmed: confirmed}, passkeyChallengeTTL, s.now()); err != nil {
+	computer := !isPhone(r)
+	if err := s.sessions.SetPasskeyChallenge(w, true, session.PasskeyChallenge{Challenge: ch, Email: email, Handle: handle, Confirmed: confirmed, Computer: computer}, passkeyChallengeTTL, s.now()); err != nil {
 		return nil, err
 	}
 	return &passkeyPage{
@@ -249,7 +303,9 @@ func (s *Server) passkeyRegisterOptionsFor(w http.ResponseWriter, r *http.Reques
 		UserID:    b64(handle),
 		UserName:  email,
 		Exclude:   strings.Join(exclude, ","),
-		Phone:     isPhone(r),
+		Phone:     !computer,
+		Computer:  computer,
+		Text:      pkText,
 	}, nil
 }
 
@@ -387,8 +443,12 @@ func (s *Server) renderPasskeys(w http.ResponseWriter, r *http.Request, id *sess
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}
-	pp := &passkeyPage{Phone: isPhone(r)}
-	if pp.Phone {
+	phone := isPhone(r)
+	// On a computer, a passkey is added only once the person has chosen to;
+	// confirmed follows that choice, through the code confirmation.
+	addComputer := !phone && (confirmed || r.URL.Query().Get("add") == "computer")
+	pp := &passkeyPage{Phone: phone, Computer: !phone, Text: pkText}
+	if phone || addComputer {
 		switch {
 		case confirmed || s.mayAddPasskeyNow(id, role):
 			reg, err := s.passkeyRegisterOptionsFor(w, r, id.Email, confirmed)
@@ -402,10 +462,15 @@ func (s *Server) renderPasskeys(w http.ResponseWriter, r *http.Request, id *sess
 			pp.NeedCode = true
 		default:
 			pp.NeedEmail = true
-			pp.ReauthURL = s.loginURL(s.passkeysURL())
+			back := s.passkeysURL()
+			if addComputer {
+				back += "?add=computer"
+			}
+			pp.ReauthURL = s.loginURL(back)
 		}
 	}
-	pp.Rows = s.passkeyRows(list)
+	pp.AddComputer = addComputer
+	pp.Rows = s.ownPasskeyRows(r, id, list)
 	pp.Removed = r.URL.Query().Get("removed") == "1"
 	pp.Next = s.passkeysURL()
 	s.render(w, http.StatusOK, "passkeys", pageData{Passkey: pp, CSRF: csrf, Identity: id.Email})
@@ -508,6 +573,23 @@ func (s *Server) handlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
 		s.passkeyNotAdded(w, r, id.Email, rd)
 		return
 	}
+	// A computer's passkey must be held by the computer, not saved to a phone
+	// over Bluetooth or a QR code. A phone's registration is taken as it
+	// comes, as it always was.
+	device := store.DevicePhone
+	if ch.Computer {
+		device = store.DeviceComputer
+		if !reg.HeldByThisDevice() {
+			log.Printf("passkey registration for %s refused: held elsewhere (%q, %v)", id.Email, reg.Attachment, reg.Transports)
+			s.recordAuth(r, id.Email, store.AuthEventPasskeyAdd, store.AuthOutcomeBadPasskey)
+			s.render(w, http.StatusBadRequest, "message", pageData{
+				Title:    "Your passkey has not been added",
+				Message:  msgPkComputerRefused,
+				Redirect: s.passkeysURL(),
+			})
+			return
+		}
+	}
 	handle := ch.Handle
 	if len(handle) == 0 {
 		s.passkeyNotAdded(w, r, id.Email, rd)
@@ -521,15 +603,19 @@ func (s *Server) handlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
 		SignCount:    cred.SignCount,
 		Label:        passkeyLabel(cred.AAGUID, r),
 		AdminGrade:   adminGrade,
+		Device:       device,
+		Attachment:   reg.Attachment,
+		Transports:   strings.Join(reg.Transports, ","),
 		CreatedAt:    now,
 	}); err != nil {
 		log.Printf("store passkey for %s: %v", id.Email, err)
 		s.passkeyNotAdded(w, r, id.Email, rd)
 		return
 	}
+	s.rememberPasskeyHere(w, r, cred.ID)
 	s.recordAuth(r, id.Email, store.AuthEventPasskeyAdd, store.AuthOutcomeOK)
 	s.notifyPasskeyAdded(r, id.Email, now)
-	s.render(w, http.StatusOK, "passkey_added", pageData{Identity: id.Email, Redirect: s.loginRedirect(rd), Passkey: &passkeyPage{Next: s.passkeysURL()}})
+	s.render(w, http.StatusOK, "passkey_added", pageData{Identity: id.Email, Redirect: s.loginRedirect(rd), Passkey: &passkeyPage{Next: s.passkeysURL(), Computer: ch.Computer, Text: pkText}})
 }
 
 func (s *Server) passkeyNotAdded(w http.ResponseWriter, r *http.Request, email, rd string) {
@@ -583,7 +669,39 @@ func parseRegistration(r *http.Request) (passkey.Registration, bool) {
 	if !ok1 || !ok2 || !ok3 || !ok4 || err != nil {
 		return passkey.Registration{}, false
 	}
-	return passkey.Registration{CredentialID: id, ClientDataJSON: cd, AuthenticatorData: ad, PublicKey: pk, PublicKeyAlg: alg}, true
+	return passkey.Registration{
+		CredentialID: id, ClientDataJSON: cd, AuthenticatorData: ad, PublicKey: pk, PublicKeyAlg: alg,
+		Attachment: parseAttachment(r.PostFormValue("attachment")),
+		Transports: parseTransports(r.PostFormValue("transports")),
+	}, true
+}
+
+// parseAttachment keeps an attachment WebAuthn defines, and drops anything
+// else as unreported.
+func parseAttachment(v string) string {
+	switch v = strings.TrimSpace(v); v {
+	case "platform", "cross-platform":
+		return v
+	}
+	return ""
+}
+
+// parseTransports keeps the transports WebAuthn defines, once each, in the
+// order reported.
+func parseTransports(v string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, t := range strings.Split(v, ",") {
+		t = strings.TrimSpace(t)
+		switch t {
+		case "internal", "hybrid", "usb", "nfc", "ble", "smart-card":
+			if !seen[t] {
+				seen[t] = true
+				out = append(out, t)
+			}
+		}
+	}
+	return out
 }
 
 // handlePasskeyLogin signs a person in with a passkey.
@@ -599,7 +717,7 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 		if msg == "" {
 			msg = "Your passkey could not be used to sign in. Please try again, or sign in with an email code."
 		}
-		s.render(w, http.StatusUnauthorized, "login", pageData{Error: msg, Redirect: rd, Remember: remember, Passkey: &passkeyPage{Unknown: unknown}})
+		s.renderLogin(w, r, http.StatusUnauthorized, pageData{Error: msg, Redirect: rd, Remember: remember, Passkey: &passkeyPage{Unknown: unknown}})
 	}
 	// Charged up front and refunded on success, as for email codes.
 	ip := clientIP(r)
@@ -630,6 +748,7 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	if !found {
 		log.Printf("passkey sign-in with an unknown credential from %s", ip)
 		unknown = b64(credID)
+		s.forgetPasskeyHere(w, r, credID)
 		failed("This passkey can no longer be used to sign in. Please sign in with an email code.")
 		return
 	}
@@ -660,11 +779,13 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	role := s.loginRole(r.Context(), pk.Email, s.isOpenHost(rd))
 	if role != authz.RoleUser && role != authz.RoleAdmin && role != authz.RoleMember {
 		s.recordAuth(r, pk.Email, store.AuthEventPasskey, store.AuthOutcomeDenied)
-		s.render(w, http.StatusForbidden, "login", pageData{Error: "This account is not permitted.", Redirect: rd})
+		s.renderLogin(w, r, http.StatusForbidden, pageData{Error: "This account is not permitted.", Redirect: rd})
 		return
 	}
 	s.wrongCodes.Refund(ip)
 	s.recordAuth(r, pk.Email, store.AuthEventPasskey, store.AuthOutcomeOK)
+	// A passkey that has just signed in here is one this device holds.
+	s.rememberPasskeyHere(w, r, credID)
 	// A passkey used at the admin door signs the person in afresh. If the
 	// session it replaces was a remembered one of the same person, the new one
 	// is remembered too, so that opening the admin pages does not shorten it.
@@ -698,12 +819,18 @@ func (s *Server) handlePasskeyRemove(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	held, _, err := s.store.GetPasskey(r.Context(), pid)
+	if err != nil {
+		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+		return
+	}
 	removed, err := s.store.DeletePasskey(r.Context(), id.Email, pid)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}
 	if removed {
+		s.forgetPasskeyHere(w, r, held.CredentialID)
 		// The sessions the passkey started end now, not at their renewal.
 		if err := s.endSessions(r.Context(), passkeyKey(pid), s.now()); err != nil {
 			log.Printf("end sessions of passkey %d: %v", pid, err)
@@ -759,11 +886,19 @@ func (s *Server) passkeyStillValid(r *http.Request, id *session.Identity) bool {
 	return ok && p.Email == id.Email
 }
 
+// passkeyRows lists passkeys for the administrator's page, and is the base of
+// the person's own (ownPasskeyRows).
 func (s *Server) passkeyRows(list []store.Passkey) []passkeyRow {
 	today := s.now().In(s.loc).Format("2006-01-02")
 	out := make([]passkeyRow, 0, len(list))
 	for _, p := range list {
 		row := passkeyRow{ID: p.ID, Name: p.Label, Added: p.CreatedAt.In(s.loc).Format("2 January 2006")}
+		row.Computer = p.Device == store.DeviceComputer
+		if row.Computer {
+			row.Device, row.Kind = msgPkDeviceComputer, msgPkAComputer
+		} else {
+			row.Device, row.Kind = msgPkDevicePhone, msgPkAPhone
+		}
 		switch {
 		case p.LastUsedAt.IsZero():
 			row.Used = "Not used yet"
@@ -780,6 +915,136 @@ func (s *Server) passkeyRows(list []store.Passkey) []passkeyRow {
 	return out
 }
 
+// ownPasskeyRows lists a person's passkeys for their own page, naming the
+// one this device holds, as far as the gateway can tell: the passkey that
+// started this session, or one that passkeyHereCookie names.
+func (s *Server) ownPasskeyRows(r *http.Request, id *session.Identity, list []store.Passkey) []passkeyRow {
+	here := map[string]bool{}
+	for _, c := range s.passkeysHere(r) {
+		here[c] = true
+	}
+	rows := s.passkeyRows(list)
+	for i, p := range list {
+		if p.ID != id.PK && !here[b64(p.CredentialID)] {
+			continue
+		}
+		if rows[i].Computer {
+			rows[i].Kind = msgPkThisComputer
+		} else {
+			rows[i].Kind = msgPkThisPhone
+		}
+	}
+	return rows
+}
+
+// passkeysHere reads passkeyHereCookie: the credential IDs this device has
+// added or used, newest first, each a well-formed ID and at most
+// passkeyHereMax of them.
+func (s *Server) passkeysHere(r *http.Request) []string {
+	ck, err := r.Cookie(passkeyHereCookie)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, v := range strings.Split(ck.Value, ".") {
+		if b, ok := unb64(v); ok && len(b) <= 1023 && len(out) < passkeyHereMax {
+			out = append(out, b64(b))
+		}
+	}
+	return out
+}
+
+func (s *Server) setPasskeysHere(w http.ResponseWriter, ids []string) {
+	ck := &http.Cookie{
+		Name: passkeyHereCookie, Path: "/", Secure: !s.cfg.CookieInsecure, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	}
+	if len(ids) == 0 {
+		ck.MaxAge = -1
+	} else {
+		ck.Value, ck.MaxAge = strings.Join(ids, "."), int(passkeyHereTTL.Seconds())
+	}
+	http.SetCookie(w, ck)
+}
+
+// rememberPasskeyHere records that this device holds credID, newest first.
+// Older IDs are dropped past passkeyHereMax or passkeyHereBytes.
+func (s *Server) rememberPasskeyHere(w http.ResponseWriter, r *http.Request, credID []byte) {
+	first := b64(credID)
+	if len(first) > passkeyHereBytes {
+		return
+	}
+	ids, size := []string{first}, len(first)
+	for _, c := range s.passkeysHere(r) {
+		if c == first || len(ids) == passkeyHereMax || size+1+len(c) > passkeyHereBytes {
+			continue
+		}
+		ids, size = append(ids, c), size+1+len(c)
+	}
+	s.setPasskeysHere(w, ids)
+}
+
+// forgetPasskeyHere drops credID from passkeyHereCookie, if it is there.
+func (s *Server) forgetPasskeyHere(w http.ResponseWriter, r *http.Request, credID []byte) {
+	gone := b64(credID)
+	have := s.passkeysHere(r)
+	ids := make([]string, 0, len(have))
+	for _, c := range have {
+		if c != gone {
+			ids = append(ids, c)
+		}
+	}
+	if len(ids) != len(have) {
+		s.setPasskeysHere(w, ids)
+	}
+}
+
+// renderLogin draws the sign-in page. On a computer that holds passkeys of
+// the gateway's (passkeyHereCookie), the page may ask for those; on any
+// other computer it asks for none, as before computers could hold one.
+func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, status int, data pageData) {
+	if s.cfg.PasskeysEnabled && !isPhone(r) {
+		unknown := ""
+		if data.Passkey != nil {
+			unknown = data.Passkey.Unknown
+		}
+		var allow []string
+		for _, c := range s.passkeysHere(r) {
+			if c != unknown {
+				allow = append(allow, c)
+			}
+		}
+		if len(allow) > 0 {
+			data.Passkey = &passkeyPage{Unknown: unknown, Allow: strings.Join(allow, ",")}
+		}
+	}
+	s.render(w, status, "login", data)
+}
+
+// adminPasskeysHere lists, comma-separated, the passkeys of email's that this
+// computer holds (passkeyHereCookie) and that stand in for the admin second
+// step: the passkeys the admin door may ask a computer for.
+func (s *Server) adminPasskeysHere(r *http.Request, email string) string {
+	here := map[string]bool{}
+	for _, c := range s.passkeysHere(r) {
+		here[c] = true
+	}
+	if len(here) == 0 {
+		return ""
+	}
+	list, err := s.store.ListPasskeys(r.Context(), email)
+	if err != nil {
+		log.Printf("passkeys for %s: %v", email, err)
+		return ""
+	}
+	var out []string
+	for _, p := range list {
+		if c := b64(p.CredentialID); p.AdminGrade && here[c] {
+			out = append(out, c)
+		}
+	}
+	return strings.Join(out, ",")
+}
+
 // passkeyProviders names the common passkey providers by the identifier
 // (AAGUID) they report. A name is only a label for the person's own list; an
 // unknown or withheld identifier falls back to the kind of phone.
@@ -790,6 +1055,10 @@ var passkeyProviders = map[string]string{
 	"bada5566-a7aa-401f-bd96-45619a55120d": "1Password",
 	"d548826e-79b4-db40-a3d8-11116f7e8349": "Bitwarden",
 	"53414d53-554e-4700-0000-000000000000": "Samsung Pass",
+	"08987058-cadc-4b81-b6e1-30de50dcbe96": "Windows Hello",
+	"9ddd1817-af5a-4672-a2b9-3e3dd95000a9": "Windows Hello",
+	"6028b017-b1d4-4c02-b4b3-afcdafc96bb2": "Windows Hello",
+	"adce0002-35bc-c60a-648b-0b25f1f05503": "Chrome on Mac",
 }
 
 func passkeyLabel(aaguid [16]byte, r *http.Request) string {
@@ -802,6 +1071,12 @@ func passkeyLabel(aaguid [16]byte, r *http.Request) string {
 		return "Passkey on an iPhone"
 	case strings.Contains(ua, "Android"):
 		return "Passkey on an Android phone"
+	case strings.Contains(ua, "Macintosh"):
+		return msgPkLabelMac
+	case strings.Contains(ua, "Windows"):
+		return msgPkLabelWindows
+	case !isPhoneUA(ua):
+		return msgPkLabelComputer
 	}
 	return "Passkey"
 }
@@ -874,13 +1149,20 @@ func (s *Server) renderPasskeyNoticeHTML(heading, first, ok, notYou, link string
 	return `<p>` + esc(first) + `</p><p>` + esc(ok) + `</p><p>` + esc(notYou) + `</p><p><a href="` + esc(link) + `">Your passkeys</a></p>`
 }
 
-// passkeyDevice names the kind of phone for the notice, or "" if unknown.
+// passkeyDevice names the kind of phone or computer for the notice, or "" if
+// unknown.
 func passkeyDevice(ua string) string {
 	switch {
 	case strings.Contains(ua, "iPhone"):
 		return "an iPhone"
 	case strings.Contains(ua, "Android"):
 		return "an Android phone"
+	case strings.Contains(ua, "Macintosh"):
+		return msgPkNoticeMac
+	case strings.Contains(ua, "Windows"):
+		return msgPkNoticeWindows
+	case ua != "" && !isPhoneUA(ua):
+		return msgPkNoticeOther
 	}
 	return ""
 }

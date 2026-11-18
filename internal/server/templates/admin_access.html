@@ -52,9 +52,9 @@
   {{if .Passkeys}}
   <p>This person has {{len .Passkeys}} {{if eq (len .Passkeys) 1}}passkey{{else}}passkeys{{end}}.</p>
   <div class="tablewrap"><table class="stack">
-    <thead><tr><th>Passkey</th><th>Added</th><th>Last used</th></tr></thead>
+    <thead><tr><th>Passkey</th><th>{{$.PasskeyDeviceHeading}}</th><th>Added</th><th>Last used</th></tr></thead>
     <tbody>
-    {{range .Passkeys}}<tr><td>{{.Name}}</td><td class="when" data-label="Added">{{.Added}}</td><td class="when" data-label="Last used">{{.Used}}</td></tr>{{end}}
+    {{range .Passkeys}}<tr><td>{{.Name}}</td><td data-label="{{$.PasskeyDeviceHeading}}">{{.Device}}</td><td class="when" data-label="Added">{{.Added}}</td><td class="when" data-label="Last used">{{.Used}}</td></tr>{{end}}
     </tbody>
   </table></div>
   <form method="post" action="/admin/passkeys/remove" style="margin-top:12px">
