@@ -363,7 +363,12 @@ Set `PASSKEYS_ENABLED=true` to let people sign in on their phones with a
 passkey instead of an emailed code. After an emailed code on a phone, the
 gateway offers to add one; `/passkeys` lists and removes a person's passkeys,
 and an administrator removes all of one person's passkeys from the access
-page. Passkeys are bound to the auth host (the relying-party ID is the host of
+page. On a computer, `/passkeys?add=computer` adds a passkey held by the
+computer (Touch ID, Windows Hello) only when the person asks, and a
+registration the browser reports as held elsewhere (`hybrid`, a security key,
+no `internal` transport) is refused. Only a computer marked by the
+`vps_auth_pk_here` cookie, set when it adds or uses a passkey, is asked for a
+passkey at sign-in, and only for those passkeys. Passkeys are bound to the auth host (the relying-party ID is the host of
 `AUTH_PUBLIC_URL`), accept only ES256 with user verification and no
 attestation, and need no new dependency: the verifier is `internal/passkey`.
 
