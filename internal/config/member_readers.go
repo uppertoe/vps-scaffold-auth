@@ -21,12 +21,12 @@ type MemberReader struct {
 	Groups []string // the groups the app may read
 	// FromFile is true for an app from MEMBER_READERS_FILE: each of its
 	// groups is served only once an administrator has approved the pair on
-	// the Access page. An app in MEMBER_READERS is operator-reviewed and
+	// the App feeds page. An app in MEMBER_READERS is operator-reviewed and
 	// needs no approval.
 	FromFile bool
 }
 
-// UnusableMemberReader is a read the gateway refuses that the Access page
+// UnusableMemberReader is a read the gateway refuses that the App feeds page
 // lists: an app without a usable token, whose every read is refused as an
 // unknown token, or (Problem ProblemEnvWins) an app in MEMBER_READERS whose
 // readers-file rows name groups MEMBER_READERS does not, which it may not
@@ -172,7 +172,7 @@ func readMemberReadersFile(path string, logf func(string, ...any)) (map[string][
 	return groups, order, true
 }
 
-// Problems shown on the Access page for an app whose reads the gateway
+// Problems shown on the App feeds page for an app whose reads the gateway
 // refuses (see UnusableMemberReader).
 const (
 	ProblemNoToken      = "The gateway has no token for this app."
@@ -212,10 +212,10 @@ func tokenProblem(token string, secrets []string) string {
 //
 // An app in MEMBER_READERS keeps exactly the groups listed there: that entry
 // is the reviewed scope, so the file's rows for the app are ignored, logged,
-// and listed on the Access page. An app only in the file needs its token as
+// and listed on the App feeds page. An app only in the file needs its token as
 // an app in MEMBER_READERS does. Every token, from either source, must also
 // pass tokenProblem; an app whose token does not is left without access,
-// logged once and listed on the Access page, and is never fatal, so the
+// logged once and listed on the App feeds page, and is never fatal, so the
 // other apps and sign-in carry on. (MEMBER_READERS's own checks, a token of
 // 32 or more characters that no other app in it shares, stay fatal in
 // parseMemberReaders.)

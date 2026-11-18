@@ -185,9 +185,9 @@ func TestMembersReadsAreAudited(t *testing.T) {
 	sender := srv.sender.(*captureSender)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	page := c.get("/admin/access", nil).Body.String()
-	if !strings.Contains(page, "Apps that read group members") || !strings.Contains(page, `<td class="num" data-label="Reads">3</td>`) || !strings.Contains(page, `<code class="mono">172.18.0.5</code>`) {
-		t.Error("the access log does not show the reads")
+	page := c.get("/admin/app-feeds", nil).Body.String()
+	if !strings.Contains(page, "<h1>Feeds to apps</h1>") || !strings.Contains(page, `<td class="num" data-label="Reads">3</td>`) || !strings.Contains(page, `<code class="mono">172.18.0.5</code>`) {
+		t.Error("the App feeds page does not show the reads")
 	}
 }
 
@@ -250,11 +250,12 @@ func TestMembersEndpointFromTheReadersFile(t *testing.T) {
 
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, srv.sender.(*captureSender), "admin@example.com", nil)
-	page := c.get("/admin/access", nil).Body.String()
-	if !strings.Contains(page, "Apps that read group members") || !strings.Contains(page, `<code class="mono">notoken</code>`) ||
+	page := c.get("/admin/app-feeds", nil).Body.String()
+	if !strings.Contains(page, "<h1>Feeds to apps</h1>") || !strings.Contains(page, `<code class="mono">notoken</code>`) ||
 		!strings.Contains(page, "MEMBER_READER_TOKEN_NOTOKEN") || !strings.Contains(page, "The gateway has no token for this app.") ||
-		!strings.Contains(page, `<code class="mono">rch-staff</code>`) || !strings.Contains(page, "This is a domain group, which has no member list to read.") {
-		t.Error("the Access page does not show the app without a token")
+		!strings.Contains(page, `<span class="l">rch-staff</span>`) || !strings.Contains(page, "This is a domain group, which has no member list to read.") ||
+		strings.Count(page, `<span class="l">Not usable</span>`) != 2 {
+		t.Error("the App feeds page does not show the app without a token")
 	}
 }
 
@@ -328,12 +329,20 @@ func TestMembersFileReadsNeedApproval(t *testing.T) {
 
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	page := c.get("/admin/access", nil).Body.String()
-	if !strings.Contains(page, "Waiting for an administrator&#39;s approval.") || !strings.Contains(page, `action="/admin/member-readers/approve"`) ||
-		!strings.Contains(page, "Approving lets digest read the email addresses of everyone in coordinators.") {
-		t.Fatal("the Access page does not offer the approval")
+	page := c.get("/admin/app-feeds", nil).Body.String()
+	ask := `href="/admin/app-feeds?confirm=approve&amp;app=digest&amp;group=coordinators"`
+	if !strings.Contains(page, "Waiting to start") || !strings.Contains(page, ask) || strings.Contains(page, `action="/admin/member-readers/approve"`) {
+		t.Fatal("the App feeds page does not offer the approval")
 	}
-	csrf := adminCSRF(t, c, "/admin/access")
+	// Asking draws the confirmation in place, and changes nothing.
+	page = c.get("/admin/app-feeds?confirm=approve&app=digest&group=coordinators", nil).Body.String()
+	if !strings.Contains(page, "Starting the feed sends Digest the email address of everyone in coordinators, and keeps Digest up to date as the group changes.") || strings.Count(page, `action="/admin/member-readers/approve"`) != 1 {
+		t.Fatal("the App feeds page does not confirm the approval")
+	}
+	if list, _ := srv.store.ListMemberReaderApprovals(ctx); len(list) != 0 {
+		t.Fatalf("asking approved: %+v", list)
+	}
+	csrf := adminCSRF(t, c, "/admin/app-feeds?confirm=approve&app=digest&group=coordinators")
 	// Only a pair the file lists can be approved.
 	c.postForm("/admin/member-readers/approve", url.Values{"csrf": {csrf}, "app": {"digest"}, "group": {"reviewers"}})
 	c.postForm("/admin/member-readers/approve", url.Values{"csrf": {csrf}, "app": {"other"}, "group": {"reviewers"}})
@@ -342,13 +351,18 @@ func TestMembersFileReadsNeedApproval(t *testing.T) {
 	}
 
 	rec := c.postForm("/admin/member-readers/approve", url.Values{"csrf": {csrf}, "app": {"digest"}, "group": {"coordinators"}})
-	if rec.Code != http.StatusFound {
-		t.Fatalf("approve = %d", rec.Code)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/app-feeds" {
+		t.Fatalf("approve = %d %s", rec.Code, rec.Header().Get("Location"))
 	}
-	page = c.get("/admin/access", nil).Body.String()
-	if !strings.Contains(page, "digest can now read the members of coordinators.") || !strings.Contains(page, "Approved by admin@example.com on ") ||
-		!strings.Contains(page, "Withdraw approval") {
-		t.Error("the Access page does not show the approval")
+	page = c.get("/admin/app-feeds", nil).Body.String()
+	if !strings.Contains(page, `<div class="rstrip ok" role="status"><i aria-hidden="true"></i><span>The feed of coordinators to Digest has started.</span></div>`) ||
+		strings.Contains(page, `class="notice ok"`) || !strings.Contains(page, "Started by admin@example.com on ") ||
+		!strings.Contains(page, `href="/admin/app-feeds?confirm=withdraw&amp;app=digest&amp;group=coordinators"`) {
+		t.Error("the App feeds page does not show the approval")
+	}
+	if page := c.get("/admin/app-feeds?confirm=withdraw&app=digest&group=coordinators", nil).Body.String(); !strings.Contains(page, "Once the feed stops, Digest no longer receives the people in coordinators.") ||
+		!strings.Contains(page, `action="/admin/member-readers/withdraw"`) {
+		t.Error("the App feeds page does not confirm the withdrawal")
 	}
 	if rec := membersGet(h, "/v1/groups/coordinators/members", digestToken, nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "amy@example.com") {
 		t.Fatalf("after approval = %d %s", rec.Code, rec.Body)
@@ -362,7 +376,7 @@ func TestMembersFileReadsNeedApproval(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("withdraw = %d", rec.Code)
 	}
-	if page := c.get("/admin/access", nil).Body.String(); !strings.Contains(page, "digest can no longer read the members of coordinators.") {
+	if page := c.get("/admin/app-feeds", nil).Body.String(); !strings.Contains(page, "The feed of coordinators to Digest has stopped.") {
 		t.Error("no notice after withdrawing")
 	}
 	if rec := membersGet(h, "/v1/groups/coordinators/members", digestToken, nil); rec.Code != http.StatusForbidden {
@@ -414,7 +428,7 @@ func TestMemberReaderApprovalNeedsAnAdministrator(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "amy@example.com", nil)
 	rec := c.postForm("/admin/member-readers/approve", url.Values{"app": {"digest"}, "group": {"coordinators"}})
-	if rec.Code == http.StatusFound && strings.HasPrefix(rec.Header().Get("Location"), "/admin/access") {
+	if rec.Code == http.StatusFound && strings.HasPrefix(rec.Header().Get("Location"), "/admin/app-feeds") {
 		t.Fatalf("a member of staff reached the handler: %d", rec.Code)
 	}
 	if ok, _ := srv.store.MemberReaderApproved(context.Background(), "digest", "coordinators"); ok {
@@ -509,11 +523,14 @@ func TestReaderApprovalNeedsAnExistingGroup(t *testing.T) {
 	srv.store.CreateGroup(ctx, "leads", "")
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, srv.sender.(*captureSender), "admin@example.com", nil)
-	page := c.get("/admin/access", nil).Body.String()
-	if !strings.Contains(page, "This group does not exist yet.") || strings.Contains(page, "Approving lets digest read the email addresses of everyone in later.") {
-		t.Fatal("the Access page offers to approve a group that does not exist")
+	page := c.get("/admin/app-feeds", nil).Body.String()
+	if !strings.Contains(page, "Group does not exist yet") || strings.Contains(page, "group=later") {
+		t.Fatal("the App feeds page offers to approve a group that does not exist")
 	}
-	csrf := adminCSRF(t, c, "/admin/access")
+	if page := c.get("/admin/app-feeds?confirm=approve&app=digest&group=later", nil).Body.String(); strings.Contains(page, "Starting the feed sends digest") || strings.Contains(page, `action="/admin/member-readers/approve"`) {
+		t.Fatal("the App feeds page confirms a group that does not exist")
+	}
+	csrf := adminCSRF(t, c, "/admin/app-feeds?confirm=approve&app=digest&group=leads")
 	c.postForm("/admin/member-readers/approve", url.Values{"csrf": {csrf}, "app": {"digest"}, "group": {"later"}})
 	if ok, _ := srv.store.MemberReaderApproved(ctx, "digest", "later"); ok {
 		t.Fatal("approved a group that does not exist")

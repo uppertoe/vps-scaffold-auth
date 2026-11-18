@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
@@ -53,13 +52,9 @@ type accessView struct {
 	SignIns              []signInView
 	SignInsCapped        bool
 	SignInsShown         int
-	// Reads of group members by apps over the period (members_api.go).
-	MemberReads []memberReadView
-	// Apps the member-readers file lists without a usable token, whose reads
-	// the gateway refuses (config.UnusableMemberReader).
-	UnusableReaders []unusableReaderView
-	// Pairs from the readers file, waiting for or holding an approval.
-	ReaderApprovals []readerApprovalView
+	// ReadersLink points to the App feeds page (admin_app_feeds.go), which
+	// lists the feeds of group members to apps.
+	ReadersLink *attentionLine
 	// Links that keep the other filters: everything, and refused only.
 	AllLink, ProblemsLink string
 	Filtered              bool
@@ -105,22 +100,6 @@ type accessUseView struct {
 	Guest, Break bool
 	First, Last  string
 	Days, Hours  int
-}
-
-// memberReadView is one app's reads of one group over the period.
-type memberReadView struct {
-	App, Group, Source, Last string
-	Reads                    int
-}
-
-// msgDomainGroupRead is the Access page's problem for a reader listed for a
-// domain group.
-const msgDomainGroupRead = "This is a domain group, which has no member list to read."
-
-// unusableReaderView is a member read the gateway refuses: an app listed
-// without a usable token, or one listed for a domain group.
-type unusableReaderView struct {
-	App, Groups, TokenEnv, Problem string
 }
 
 // accessPersonView is one person's use of every site over the period.
@@ -207,26 +186,8 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 		}
 		v.Uses = nil
 	}
-	reads, err := s.store.SummariseMemberReads(r.Context(), f.Since)
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	for _, m := range reads {
-		v.MemberReads = append(v.MemberReads, memberReadView{App: m.App, Group: m.Group, Source: m.Source, Last: s.stampMin(m.Last), Reads: m.Reads})
-	}
-	for _, u := range s.cfg.UnusableMemberReaders {
-		v.UnusableReaders = append(v.UnusableReaders, unusableReaderView{App: u.App, Groups: strings.Join(u.Groups, ", "), TokenEnv: u.TokenEnv, Problem: u.Problem})
-	}
-	if v.ReaderApprovals, err = s.readerApprovalViews(r.Context()); err != nil {
-		s.adminError(w, r)
-		return
-	}
-	domainReads := s.domainGroupReads(r.Context())
-	for _, m := range s.members.readers {
-		for _, g := range domainReads[m.app] {
-			v.UnusableReaders = append(v.UnusableReaders, unusableReaderView{App: m.app, Groups: g, TokenEnv: config.MemberReaderTokenEnv(m.app), Problem: msgDomainGroupRead})
-		}
+	if s.readersOn() {
+		v.ReadersLink = &attentionLine{Before: msgAccessFeedsBefore, Link: appFeedsPath, Name: msgFeedsMenu, After: msgAccessFeedsAfter}
 	}
 	v.SignIns = s.foldSignIns(events)
 	// Events older than the scan were not read, so the list is incomplete.

@@ -13,8 +13,8 @@ import (
 )
 
 // An app listed in MEMBER_READERS_FILE proposes the groups it reads; an
-// administrator approves each (app, group) pair on the Access page before the
-// gateway serves it. The file can narrow access on its own (a removed row is
+// administrator approves each (app, group) pair on the App feeds page
+// (admin_app_feeds.go) before the gateway serves it. The file can narrow access on its own (a removed row is
 // not served, whatever its approval, and its approval is cleared at the next
 // start), but never widen it. An app in MEMBER_READERS is operator-reviewed
 // configuration and needs no approval.
@@ -22,11 +22,10 @@ import (
 // The strings an approval shows and sends. Change them only with the owner's
 // agreement.
 const (
-	msgReaderWaiting      = "Waiting for an administrator's approval."
-	msgReaderApprovedBy   = "Approved by %s on %s."
-	msgReaderApproved     = "%s can now read the members of %s."
-	msgReaderWithdrawn    = "%s can no longer read the members of %s."
-	msgReaderConfirm      = "Approving lets %s read the email addresses of everyone in %s."
+	msgReaderApprovedBy   = "Started by %s on %s."
+	msgReaderApproved     = "The feed of %s to %s has started."
+	msgReaderWithdrawn    = "The feed of %s to %s has stopped."
+	msgReaderConfirm      = "Starting the feed sends %[1]s the email address of everyone in %[2]s, and keeps %[1]s up to date as the group changes."
 	msgReaderSubject      = "Access to the members of %s has changed."
 	msgReaderApproveLine  = "Approved %s to read the members of %s"
 	msgReaderWithdrawLine = "Withdrew the approval for %s to read the members of %s"
@@ -39,14 +38,16 @@ const (
 	noticeReaderCookieSep = ":"
 )
 
-// readerApprovalView is one pair from the readers file on the Access page.
+// readerApprovalView is one pair from the readers file, for the App
+// feeds page.
 type readerApprovalView struct {
 	App, Group string
 	Approved   bool
 	// Missing: the group does not exist, so it cannot be approved.
 	Missing bool
-	Status  string
-	Confirm string
+	// Kind is the group's kind, when it exists.
+	Kind   string
+	Status string
 }
 
 // filePairs returns the (app, group) pairs the readers file lists, app ->
@@ -123,7 +124,7 @@ func (s *Server) clearStaleReaderApprovals(ctx context.Context) {
 }
 
 // readerApprovalViews lists every pair from the readers file, waiting or
-// approved, for the Access page.
+// approved, for the App feeds page.
 func (s *Server) readerApprovalViews(ctx context.Context) ([]readerApprovalView, error) {
 	approvals, err := s.store.ListMemberReaderApprovals(ctx)
 	if err != nil {
@@ -139,15 +140,17 @@ func (s *Server) readerApprovalViews(ctx context.Context) ([]readerApprovalView,
 			continue
 		}
 		for _, g := range r.groups {
-			v := readerApprovalView{App: r.app, Group: g, Status: msgReaderWaiting, Confirm: fmt.Sprintf(msgReaderConfirm, r.app, g)}
+			v := readerApprovalView{App: r.app, Group: g}
 			if a, ok := byPair[r.app+"\x00"+g]; ok {
 				v.Approved = true
 				v.Status = fmt.Sprintf(msgReaderApprovedBy, a.ApprovedBy, s.longDate(a.ApprovedAt))
 			}
-			if _, exists, err := s.store.GroupKind(ctx, g); err != nil {
+			if kind, exists, err := s.store.GroupKind(ctx, g); err != nil {
 				return nil, err
 			} else if !exists {
 				v.Missing, v.Status = true, msgReaderNoGroup
+			} else {
+				v.Kind = kind
 			}
 			out = append(out, v)
 		}
@@ -179,7 +182,7 @@ func (s *Server) handleAdminApproveReader(w http.ResponseWriter, r *http.Request
 	}
 	app, group, ok := s.readerPair(r)
 	if !ok {
-		http.Redirect(w, r, "/admin/access", http.StatusFound)
+		http.Redirect(w, r, appFeedsPath, http.StatusFound)
 		return
 	}
 	// An approval is for a group that exists, never for a name that a group
@@ -188,7 +191,7 @@ func (s *Server) handleAdminApproveReader(w http.ResponseWriter, r *http.Request
 		s.adminError(w, r)
 		return
 	} else if !exists {
-		http.Redirect(w, r, "/admin/access", http.StatusFound)
+		http.Redirect(w, r, appFeedsPath, http.StatusFound)
 		return
 	}
 	actor := s.adminActor(r)
@@ -201,7 +204,7 @@ func (s *Server) handleAdminApproveReader(w http.ResponseWriter, r *http.Request
 		s.auditAdmin(r, store.AdminActionMemberReaderApprove, app, group)
 		s.emailOtherAdmins(actor, fmt.Sprintf(msgReaderSubject, s.groupLabel(r.Context(), group)), []string{fmt.Sprintf(msgReaderApproveLine, app, group)})
 	}
-	s.redirectDone(w, r, "/admin/access", noticeReaderApproved+noticeReaderCookieSep+app+noticeReaderCookieSep+group, "")
+	s.redirectDone(w, r, appFeedsPath, noticeReaderApproved+noticeReaderCookieSep+app+noticeReaderCookieSep+group, "")
 }
 
 // handleAdminWithdrawReader withdraws the approval of one pair. Reads stop
@@ -212,7 +215,7 @@ func (s *Server) handleAdminWithdrawReader(w http.ResponseWriter, r *http.Reques
 	}
 	app, group, ok := s.readerPair(r)
 	if !ok {
-		http.Redirect(w, r, "/admin/access", http.StatusFound)
+		http.Redirect(w, r, appFeedsPath, http.StatusFound)
 		return
 	}
 	removed, err := s.store.WithdrawMemberReader(r.Context(), app, group)
@@ -224,7 +227,7 @@ func (s *Server) handleAdminWithdrawReader(w http.ResponseWriter, r *http.Reques
 		s.auditAdmin(r, store.AdminActionMemberReaderWithdraw, app, group)
 		s.emailOtherAdmins(s.adminActor(r), fmt.Sprintf(msgReaderSubject, s.groupLabel(r.Context(), group)), []string{fmt.Sprintf(msgReaderWithdrawLine, app, group)})
 	}
-	s.redirectDone(w, r, "/admin/access", noticeReaderWithdrawn+noticeReaderCookieSep+app+noticeReaderCookieSep+group, "")
+	s.redirectDone(w, r, appFeedsPath, noticeReaderWithdrawn+noticeReaderCookieSep+app+noticeReaderCookieSep+group, "")
 }
 
 // adminActor is the address of the administrator making the request.
@@ -248,18 +251,19 @@ func (s *Server) groupLabel(ctx context.Context, group string) string {
 }
 
 // readerNotice turns a reader notice code ("reader-approved:app:group") into
-// its sentence. The names are checked against the group-name grammar, so a
-// notice can only ever show a well-formed app and group.
-func readerNotice(code string) (string, bool) {
+// its sentence, naming the group by label. The names are checked against the
+// group-name grammar, so a notice can only ever show a well-formed app and
+// group.
+func readerNotice(code string, label func(group string) string) (string, bool) {
 	parts := strings.Split(code, noticeReaderCookieSep)
 	if len(parts) != 3 || !authz.ValidGroupName(parts[1]) || !authz.ValidGroupName(parts[2]) {
 		return "", false
 	}
 	switch parts[0] {
 	case noticeReaderApproved:
-		return fmt.Sprintf(msgReaderApproved, parts[1], parts[2]), true
+		return fmt.Sprintf(msgReaderApproved, label(parts[2]), capFirst(parts[1])), true
 	case noticeReaderWithdrawn:
-		return fmt.Sprintf(msgReaderWithdrawn, parts[1], parts[2]), true
+		return fmt.Sprintf(msgReaderWithdrawn, label(parts[2]), capFirst(parts[1])), true
 	}
 	return "", false
 }

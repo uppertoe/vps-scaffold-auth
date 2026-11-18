@@ -178,7 +178,7 @@ func TestBreakGlassSessionCannotActOutsideItsCard(t *testing.T) {
 			t.Errorf("policy %q admitted a break-glass session", policy)
 		}
 	}
-	for _, page := range []string{"/admin/", "/admin/groups", "/admin/groups/ward", "/admin/access", "/admin/break", "/admin/totp", "/admin/settings", "/passkeys", "/passkeys/confirm"} {
+	for _, page := range []string{"/admin/", "/admin/groups", "/admin/groups/ward", "/admin/access", "/admin/app-feeds", "/admin/break", "/admin/totp", "/admin/settings", "/passkeys", "/passkeys/confirm"} {
 		if rec := c.get(page, phone); rec.Code == http.StatusOK {
 			t.Errorf("a break-glass session opened %s", page)
 		}
