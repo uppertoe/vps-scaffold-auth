@@ -72,9 +72,12 @@ import (
 //   - The gateway never asks a computer for a phone's passkey. A computer
 //     that holds one of the gateway's passkeys is known by passkeyHereCookie,
 //     set when the passkey is added or used there; only such a computer is
-//     asked for a passkey at sign-in, and only for those passkeys, as held by
-//     the computer ("internal"), or quietly in the email field (conditional
-//     mediation). Every other computer's sign-in page is as it was. A synced
+//     asked for a passkey at sign-in, only for those passkeys, as held by the
+//     computer ("internal"), and only when the person presses the button. A
+//     computer gets no quiet offer in the email field (conditional
+//     mediation), whose list would include any synced passkey and, in some
+//     browsers, "use another device". Every other computer's sign-in page is
+//     as it was. A synced
 //     passkey that happens to be on the computer may work; nothing fetches
 //     one from a phone.
 //   - The cookie only steers what the browser is asked for and which row the

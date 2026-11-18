@@ -24,7 +24,10 @@ first warns them to do so only on a computer that nobody else signs in to. If
 the browser has no such check, the page says so and offers nothing. The
 gateway refuses a passkey that the browser saved on a phone instead, and it
 never asks a computer to fetch a passkey from a phone. Only a computer that
-already holds one of the person's passkeys is asked for it at sign-in.
+already holds one of the person's passkeys is asked for it at sign-in, and only
+when the person presses "Sign in with a passkey". The email field on a
+computer never offers a passkey, because some browsers would list a passkey
+from another device there.
 
 A computer on the hospital's network cannot add a passkey, because the
 computers there are shared. The gateway knows the network by the address

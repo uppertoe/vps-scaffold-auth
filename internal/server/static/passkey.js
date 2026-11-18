@@ -7,7 +7,9 @@
 // On a computer it asks only for a passkey the computer holds: the
 // "client-device" hint, a platform authenticator, and at sign-in only the
 // passkeys the page lists as held there (data-allow), through the "internal"
-// transport. It never asks a computer for a phone's passkey over Bluetooth
+// transport, and only when the person presses the button: a computer gets no
+// quiet offer in the email field, whose list would include any synced passkey
+// and, in some browsers, "use another device". It never asks a computer for a phone's passkey over Bluetooth
 // or a QR code. A browser that does not know the hint ignores it.
 (function () {
   'use strict';
@@ -64,9 +66,9 @@
   if (login && login.dataset.unknown && window.PublicKeyCredential && PublicKeyCredential.signalUnknownCredential) {
     PublicKeyCredential.signalUnknownCredential({ rpId: login.dataset.rpid, credentialId: login.dataset.unknown }).catch(function () {});
   }
-  // On a phone, any passkey. On a computer, only one the page lists as held
-  // there; any other computer keeps the emailed code, and its browser is not
-  // asked to offer passkeys in the email field either.
+  // On a phone, any passkey, by the button or quietly in the email field. On
+  // a computer, only one the page lists as held there, and only by the
+  // button; any other computer keeps the emailed code.
   var phone = isPhone();
   var allow = login ? (login.dataset.allow || '').split(',').filter(Boolean) : [];
   if (login && supported() && (phone || allow.length)) {
@@ -85,15 +87,12 @@
       };
       if (mediation) opts.mediation = mediation;
       if (!phone) {
-        opts.publicKey.hints = ['client-device'];
         // The button names the computer's own passkeys, so the browser does
-        // not offer a phone instead. The quiet offer in the email field lists
-        // whatever the computer holds.
-        if (!mediation) {
-          opts.publicKey.allowCredentials = allow.map(function (id) {
-            return { type: 'public-key', id: dec(id), transports: ['internal'] };
-          });
-        }
+        // not offer a phone instead.
+        opts.publicKey.hints = ['client-device'];
+        opts.publicKey.allowCredentials = allow.map(function (id) {
+          return { type: 'public-key', id: dec(id), transports: ['internal'] };
+        });
       }
       return navigator.credentials.get(opts).then(function (cred) {
         if (!cred) return;
@@ -109,7 +108,7 @@
       });
     };
     var conditional = function () {
-      if (!PublicKeyCredential.isConditionalMediationAvailable) return;
+      if (!phone || !PublicKeyCredential.isConditionalMediationAvailable) return;
       PublicKeyCredential.isConditionalMediationAvailable().then(function (ok) {
         if (ok) get('conditional').catch(function () {});
       });
