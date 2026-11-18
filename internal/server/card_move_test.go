@@ -175,11 +175,9 @@ func TestMoveGroupCardToApp(t *testing.T) {
 	if rec := early.get("/verify", olderGuard); rec.Code != http.StatusOK {
 		t.Errorf("older guard for a session started before the move = %d", rec.Code)
 	}
-	// A role guard reads the card as it is now, so that session also opens
-	// the app the card names.
-	if rec := early.get("/verify", roleGuard("neverdrugs", "")); rec.Code != http.StatusOK {
-		t.Errorf("role guard for a session started before the move = %d", rec.Code)
-	}
+	// That session keeps only the group: a role guard does not admit it to
+	// the app the card now names.
+	wantDenied(t, "a session started before the move, on the app's role guard", early.get("/verify", roleGuard("neverdrugs", "")))
 
 	// A scan after the move: the app as its user, and nothing else.
 	later := newClient(t, srv.Handler())
@@ -284,4 +282,33 @@ func TestLegacyNoteNamesTheMove(t *testing.T) {
 	if !strings.Contains(body, msgLegacyHeading) || !strings.Contains(body, msgLegacyNote) || !strings.Contains(msgLegacyNote, msgMoveAction) {
 		t.Errorf("cards list:\n%s", body)
 	}
+}
+
+// A scan that read the card before a move and issued its session after it
+// carries the group, and is treated as a session started before the move:
+// the older guard admits it until it ends, and the app's role guard does not.
+func TestMoveLandingDuringAScan(t *testing.T) {
+	srv, _, c, id, _ := moveAdmin(t, testMoveLive)
+	stale := getCard(t, srv, id)
+	if rec := postMove(t, c, id, "neverdrugs", "/"); rec.Code != http.StatusFound {
+		t.Fatalf("move = %d", rec.Code)
+	}
+	// The scan's grant, with the card as it read it before the move.
+	req := httptest.NewRequest(http.MethodPost, "/break", nil)
+	rec := httptest.NewRecorder()
+	srv.grantBreakGlass(rec, req, stale, "10.0.0.1", "test", srv.now())
+	if rec.Code != http.StatusFound {
+		t.Fatalf("grant = %d", rec.Code)
+	}
+	racer := newClient(t, srv.Handler())
+	for _, ck := range rec.Result().Cookies() {
+		racer.cookies[ck.Name] = ck
+	}
+	if id := sessionOf(t, srv, racer); id.Groups != "bg_nd" {
+		t.Fatalf("session = %+v", id)
+	}
+	if rec := racer.get("/verify", olderGuard); rec.Code != http.StatusOK {
+		t.Errorf("older guard = %d, want 200", rec.Code)
+	}
+	wantDenied(t, "the app's role guard", racer.get("/verify", roleGuard("neverdrugs", "")))
 }

@@ -24,8 +24,9 @@ import (
 // app is live keeps the card working under whichever guard its site uses.
 //
 // Sessions already started from the card keep the group in their cookie
-// until they end (at most the break-glass session TTL); only a new scan
-// carries the move.
+// until they end (at most the break-glass session TTL), and a role guard
+// does not read the card's app for them (cardIssuedAsNow): they keep only
+// the group's sites. Only a new scan opens the app.
 
 // Wording of the move, drafted on 18 November 2026 for approval.
 const (
