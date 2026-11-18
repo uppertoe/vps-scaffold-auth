@@ -19,7 +19,7 @@
       <p class="hint">The location is printed on the card, so a person can tell one card from another.</p></section>
     {{if .RolesOn}}
     <section class="fsec"><h2><span>2</span>App the card opens</h2>
-      <p class="hint">The holder of a card is not identified, so a card opens an app as an ordinary user and never as an administrator. The right-hand column shows each app's widest access today.</p>
+      <p class="hint">The person carrying a card is not identified, so a card opens an app as an ordinary user and never as an administrator. The right-hand column shows each app's widest access today.</p>
       {{range .Apps}}<label class="choice"><input type="radio" name="app" value="{{.Name}}" data-label="{{.Label}}"{{if .Checked}} checked{{end}}{{if .Disabled}} disabled{{end}}><span class="r"></span><span class="cl">{{template "token" .Token}}<small>{{.Cards}}</small></span>{{template "reach" .Reach}}</label>
       {{else}}<p class="hint">The app-roles manifest names no app yet.</p>{{end}}
     </section>

@@ -53,7 +53,7 @@ func (s *Server) accessSteps() []accessStep {
 		{4, "Guests", iconGuests, "Anyone with an email address"},
 		{3, "Domain", iconDomain, "Everyone at an email domain"},
 		{2, "People", iconPerson, "People on a list or added"},
-		{1, "Cards", iconCard, "Break-glass card holders"},
+		{1, "Cards", iconCard, "Anyone carrying a break-glass card"},
 	}
 }
 
@@ -358,7 +358,7 @@ type reachView struct {
 // of its own is still reached by the holders of the app's other roles.
 const (
 	msgNobodyHolds    = "Nobody holds this role."
-	msgOnlyOtherRoles = "Only the holders of %s reach these paths."
+	msgOnlyOtherRoles = "Only people with %s reach these paths."
 )
 
 // level is the step a reach cell shows, 0 when closed.
