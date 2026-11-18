@@ -44,12 +44,12 @@
 <div class="rstrip {{.StripTone}}" role="status"><i aria-hidden="true"></i><span>{{.Strip}}</span></div>
 
 <div class="rlist tbl readers" id="readers">
-  <div class="rrow colhead"><div>App</div><div>Group</div><div>Approval</div><div></div></div>
+  <div class="rrow colhead"><div>App</div><div>Group</div><div>{{.Column}}</div><div></div></div>
   {{range .Rows}}
   <div class="rrow{{if .Confirming}} hit{{end}}">
     <div><code class="mono">{{.App}}</code></div>
     <div data-label="Group">{{template "token" .Group}}</div>
-    <div data-label="Approval"><div class="sv">{{template "token" .State}}{{if .Note}}<small title="{{.Note}}">{{.Note}}</small>{{end}}{{if .Setting}}<small class="setting">{{.SettingText}} <code class="mono">{{.Setting}}</code>.</small>{{end}}</div></div>
+    <div data-label="{{$.Readers.Column}}"><div class="sv">{{template "token" .State}}{{if .Note}}<small title="{{.Note}}">{{.Note}}</small>{{end}}{{if .Setting}}<small class="setting">{{.SettingText}} <code class="mono">{{.Setting}}</code>.</small>{{end}}</div></div>
     <div class="act">
       {{- if .Confirming}}
       <form method="post" action="/admin/member-readers/{{.Action}}">
@@ -58,7 +58,7 @@
         <input type="hidden" name="group" value="{{.Group.Value}}">
         <button type="submit"{{if eq .Action "withdraw"}} class="danger"{{end}}>{{.ActionText}}</button>
       </form>
-      <a class="btnlink quiet" href="/admin/readers">{{$.Readers.Cancel}}</a>
+      <a class="btnlink quiet" href="/admin/app-feeds">{{$.Readers.Cancel}}</a>
       {{- else if .Action}}
       <a class="btnlink quiet" href="{{.AskHref}}">{{.ActionText}}</a>
       {{- else}}
@@ -71,7 +71,7 @@
   {{end}}
 </div>
 {{if .Unusable}}
-<p class="muted readershelp">If an app has no usable token, set its token in the gateway's environment to 32 or more random characters that no other app or setting uses, such as the output of openssl rand -hex 32, then recreate the gateway. If an app is listed for a domain group, change the app's listing to name a list group instead. If an app is listed in both MEMBER_READERS and the readers file, add the groups to MEMBER_READERS, or remove the app from MEMBER_READERS so that the readers file decides its groups.</p>
+<p class="muted readershelp">If an app has no usable token, set its token in the gateway's environment to 32 or more random characters that no other app or setting uses, such as the output of openssl rand -hex 32, then recreate the gateway. If an app has asked for a feed of a domain group, change the app's request to name a list group instead. If an app's feeds are set in both MEMBER_READERS and the readers file, add the groups to MEMBER_READERS, or remove the app from MEMBER_READERS so that the readers file decides its feeds.</p>
 {{end}}
 
 {{if .Reads}}

@@ -79,7 +79,7 @@ type adminData struct {
 	// Access log, one person chosen: offer to sign them out everywhere.
 	EndSessionsFor string
 	SessionsEnded  bool
-	// Member readers: the page, whether it is offered (which shows its menu
+	// App feeds: the page, whether it is offered (which shows its menu
 	// item), and the approvals waiting, counted on the menu item.
 	Readers        *readersView
 	ReadersOn      bool
@@ -379,7 +379,7 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_card_new", "admin_designs", "admin_design", "admin_settings", "admin_totp", "admin_access", "admin_audit", "admin_apps", "admin_app", "admin_group_new", "admin_readers"} {
+	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_card_new", "admin_designs", "admin_design", "admin_settings", "admin_totp", "admin_access", "admin_audit", "admin_apps", "admin_app", "admin_group_new", "admin_app_feeds"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err
@@ -414,10 +414,10 @@ func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, status int,
 		data.Notice, data.Warning = s.takeNotice(w, r)
 	}
 	if data.ReadersOn = s.readersOn(); data.ReadersOn {
-		data.ReadersMenu = msgReadersMenu
-		if data.ReadersWaiting = s.waitingReaders(r.Context()); data.ReadersWaiting > 0 {
-			l := readersWaitingLine(data.ReadersWaiting)
-			data.ReadersTitle = l.Name + l.After
+		data.ReadersMenu = msgFeedsMenu
+		if apps := s.waitingReaders(r.Context()); len(apps) > 0 {
+			l := feedsWaitingLine(apps)
+			data.ReadersWaiting, data.ReadersTitle = len(apps), l.Name+l.After
 		}
 	}
 	data.RolesOn = s.rolesOn()

@@ -52,8 +52,8 @@ type accessView struct {
 	SignIns              []signInView
 	SignInsCapped        bool
 	SignInsShown         int
-	// ReadersLink points to the member readers page (admin_readers.go),
-	// which lists the apps that read group members.
+	// ReadersLink points to the App feeds page (admin_app_feeds.go), which
+	// lists the feeds of group members to apps.
 	ReadersLink *attentionLine
 	// Links that keep the other filters: everything, and refused only.
 	AllLink, ProblemsLink string
@@ -187,7 +187,7 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 		v.Uses = nil
 	}
 	if s.readersOn() {
-		v.ReadersLink = &attentionLine{Before: msgAccessReadersBefore, Link: readersPath, Name: msgReadersMenu, After: msgAccessReadersAfter}
+		v.ReadersLink = &attentionLine{Before: msgAccessFeedsBefore, Link: appFeedsPath, Name: msgFeedsMenu, After: msgAccessFeedsAfter}
 	}
 	v.SignIns = s.foldSignIns(events)
 	// Events older than the scan were not read, so the list is incomplete.

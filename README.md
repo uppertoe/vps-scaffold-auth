@@ -579,13 +579,14 @@ MEMBER_READER_TOKEN_TEACHING_CASES=<openssl rand -hex 32>
 ```
 
 The file proposes which groups each app reads, and an administrator approves
-each app and group on the Member readers page before the gateway serves it.
-The page appears in the admin menu whenever `MEMBER_READERS` or
-`MEMBER_READERS_FILE` is set, and the menu item and the Overview show how many
-approvals are waiting. The page lists one row per app and group, waiting
-approvals first, each waiting for approval with an Approve button, approved
-with a Withdraw approval button, or not usable with the reason. Each button
-asks for confirmation in place before it acts. An approval or a withdrawal takes effect at the app's next read. The
+each app and group on the App feeds page before the gateway serves it. The
+page calls each app and group a feed, and an approval starting the feed. It
+appears in the admin menu whenever `MEMBER_READERS` or `MEMBER_READERS_FILE`
+is set, and the menu item and the Overview show the feeds waiting to start.
+The page lists one row per app and group, waiting feeds first: each is
+waiting to start, with a Start the feed button; feeding, with a Stop the feed
+button; or not usable, with the reason. Each button asks for confirmation in
+place before it acts. An approval or a withdrawal takes effect at the app's next read. The
 gateway emails the other administrators about each approval and withdrawal,
 and records both in the admin log. Until a pair is approved, the app's reads
 of that group get the same 403 as a group it may not read, and are not
@@ -608,8 +609,8 @@ lines and lines starting with `#`. The gateway also accepts `MEMBER_READERS`
 the renderer. When both are set, the gateway uses every app from either. For
 an app named in both, `MEMBER_READERS` decides its groups, because the
 operator reviewed that entry, and the gateway ignores the file's rows for that
-app. An app in `MEMBER_READERS` needs no approval, and the page lists its groups as listed in
-`MEMBER_READERS`. A group name in either place is a gateway group name: lower-case letters,
+app. An app in `MEMBER_READERS` needs no approval, and the page lists its feeds as started in the
+gateway's settings. A group name in either place is a gateway group name: lower-case letters,
 digits, `-` and `_` (`^[a-z0-9_-]+$` once lower-cased), with no dots.
 
 Each app has its own token in `MEMBER_READER_TOKEN_<APP>`, with the app name
@@ -622,7 +623,7 @@ never be listed. A domain group admits everyone at its domains and has no
 member list, so the gateway refuses a read of one with a 409 rather than
 answering with nobody. The gateway checks a group's kind at every read,
 because group kinds are kept in the gateway's database rather than its
-settings, and lists an app named for a domain group on the Member readers page.
+settings, and lists an app named for a domain group on the App feeds page.
 
 The gateway refuses to start when `MEMBER_READERS` itself is wrong, as it
 does for any other setting. A problem with the file never stops the gateway,
@@ -637,7 +638,7 @@ it as follows:
 - If an app in the file has no token, a token shorter than 32 characters, or
   a token another app also uses, the gateway logs an error naming the app and
   the variable its token belongs in. The gateway refuses that app's reads as
-  an unknown token, and the Member readers page lists the app as not usable
+  an unknown token, and the App feeds page lists the app as not usable
   until the token is set and the gateway has been recreated.
 - If an app's token, from the file or from `MEMBER_READERS`, has eight or
   fewer different characters or is the same as another of the gateway's
@@ -645,7 +646,7 @@ it as follows:
   the gateway, so an existing deployment with a weak token keeps running.
 - If an app is listed in both places and the file names groups that
   `MEMBER_READERS` does not, the gateway logs an error naming those groups,
-  refuses reads of them, and lists the app on the Member readers page.
+  refuses reads of them, and lists the app on the App feeds page.
 - If the readers come only from the file and `MEMBERS_LISTEN_ADDR` is
   malformed, or its name resolves to none of the gateway's own addresses, the
   gateway logs an error and runs without the members listener. When
@@ -653,7 +654,7 @@ it as follows:
   always have.
 - If an app in the file or in `MEMBER_READERS` is listed for a domain group,
   the gateway logs an error at start-up, refuses each read of that group with
-  a 409, and lists the app and group on the Member readers page.
+  a 409, and lists the app and group on the App feeds page.
 
 The endpoint is served on its own port, `MEMBERS_LISTEN_ADDR` (default
 `auth-members:8081`), which Caddy never proxies. An app reaches it at
@@ -700,7 +701,7 @@ and, through includes, the members of every group it includes, as
 `Remote-Groups` gives them at sign-in. A held feed change is not included
 until it is applied, and an address the allow-list does not admit is left
 out, so a guest member is never reported. Each read is recorded, one row per
-app, group, caller address and hour, and the Member readers page lists the
+app, group, caller address and hour, and the App feeds page lists the
 reads of the last 30 days. A token used from a second container shows there
 as a second address.
 
