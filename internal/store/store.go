@@ -190,9 +190,23 @@ type Passkey struct {
 	SignCount    uint32
 	Label        string
 	AdminGrade   bool
-	CreatedAt    time.Time
-	LastUsedAt   time.Time // zero until first used to sign in
+	// Device is the kind of device the passkey was added on: DevicePhone or
+	// DeviceComputer. Passkeys from before computers could hold one read as
+	// phones, which every one of them was.
+	Device string
+	// Attachment and Transports are what the browser reported at
+	// registration (authenticatorAttachment; getTransports(), comma-separated).
+	Attachment string
+	Transports string
+	CreatedAt  time.Time
+	LastUsedAt time.Time // zero until first used to sign in
 }
+
+// The kinds of device a passkey is added on.
+const (
+	DevicePhone    = "phone"
+	DeviceComputer = "computer"
+)
 
 // AdminEvent records one administrative mutation for attribution: which admin
 // (Actor) did what (Action) to which subject (Target), with optional Detail,

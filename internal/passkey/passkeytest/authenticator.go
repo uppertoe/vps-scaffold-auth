@@ -25,7 +25,16 @@ type Authenticator struct {
 	AAGUID     [16]byte
 	Counter    uint32 // 0 models a synced passkey; set non-zero to model a counting one
 	Flags      byte   // authenticator-data flags; New sets UP|UV|BE|BS
+	// Attachment and Transports are what the browser reports at registration.
+	// New models a phone's own provider ("platform"; "internal" and "hybrid");
+	// set them to model a passkey saved to a phone over Bluetooth or a QR code
+	// ("cross-platform"; "hybrid").
+	Attachment string
+	Transports []string
 }
+
+// WindowsHello is the identifier (AAGUID) Windows Hello reports.
+var WindowsHello = [16]byte{0x08, 0x98, 0x70, 0x58, 0xca, 0xdc, 0x4b, 0x81, 0xb6, 0xe1, 0x30, 0xde, 0x50, 0xdc, 0xbe, 0x96}
 
 // New makes an authenticator with a fresh P-256 key and credential ID.
 func New() *Authenticator {
@@ -35,7 +44,19 @@ func New() *Authenticator {
 	}
 	id := make([]byte, 16)
 	rand.Read(id)
-	return &Authenticator{Key: k, ID: id, Flags: 0x01 | 0x04 | 0x08 | 0x10}
+	return &Authenticator{Key: k, ID: id, Flags: 0x01 | 0x04 | 0x08 | 0x10, Attachment: "platform", Transports: []string{"internal", "hybrid"}}
+}
+
+// NewComputer makes an authenticator that models a computer's own one, as
+// Windows Hello reports itself: held by the computer ("platform";
+// "internal"), not synced, and counting its signatures.
+func NewComputer() *Authenticator {
+	a := New()
+	a.Flags = 0x01 | 0x04
+	a.Transports = []string{"internal"}
+	a.AAGUID = WindowsHello
+	a.Counter = 1
+	return a
 }
 
 // ClientData builds clientDataJSON for a ceremony.
@@ -93,6 +114,8 @@ func (a *Authenticator) Register(rpID, origin string, challenge, userHandle []by
 		AuthenticatorData: ad,
 		PublicKey:         a.SPKI(),
 		PublicKeyAlg:      passkey.AlgES256,
+		Attachment:        a.Attachment,
+		Transports:        append([]string(nil), a.Transports...),
 	}
 }
 
