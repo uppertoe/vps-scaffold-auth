@@ -85,6 +85,7 @@ func (s *Server) fillGroupRoles(r *http.Request, view []groupView) error {
 	if err != nil {
 		return err
 	}
+	readers := s.readerGroups()
 	for i := range view {
 		g := &view[i]
 		g.Kind = kinds[g.Name]
@@ -147,6 +148,14 @@ func (s *Server) fillGroupRoles(r *http.Request, view []groupView) error {
 		if g.RoleCount > 0 {
 			g.UsedBy = capFirst(countWords(g.RoleCount, "role", "roles")) + " in " + countWords(g.AppCount, "app", "apps")
 		}
+		if s.rolesOn() {
+			g.Uses = s.groupUses(g, readers)
+			g.NotUsed = g.Unused && g.RoleCount == 0 && len(g.Uses) == 0
+		}
+		if g.Label == "" {
+			// A group without a label is named by its slug, drawn as a slug.
+			g.Token.Tone = "slug"
+		}
 	}
 	return nil
 }
@@ -168,7 +177,7 @@ func (s *Server) renderGroup(w http.ResponseWriter, r *http.Request, status int,
 				s.confirmDomainRemoval(&view[i], r.URL.Query().Get("remove"))
 			}
 			s.renderAdmin(w, r, status, "admin_group", adminData{
-				Title: groupDisplayName(view[i]), Group: &view[i], NameText: groupNameText, OpenGroup: name, Warning: warning,
+				Title: groupDisplayName(view[i]), Group: &view[i], NameText: groupNameText, OpenGroup: name, Warning: warning, GroupsText: groupsText,
 			})
 			return
 		}

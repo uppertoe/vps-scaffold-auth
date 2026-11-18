@@ -5,8 +5,8 @@
 {{with .Group}}
 {{$group := .Name}}
 <a class="back" href="/admin/groups">&larr; All groups</a>
-<h1>{{.Display}}</h1>
-<p class="sub">{{if eq .Kind "domain"}}Domain group{{else if .Feed}}List, filled from a feed{{else}}List, kept by hand{{end}}{{if .Label}} · <code class="mono">{{.Name}}</code>{{end}}</p>
+<h1{{if not .Label}} class="mono"{{end}}>{{.Display}}</h1>
+<p class="sub">{{if eq .Kind "domain"}}Domain group{{else if .Feed}}List, filled from a feed{{else}}List, kept by hand{{end}} · {{if .Label}}<code class="mono">{{.Name}}</code>{{else}}<a href="#label-{{.Name}}">{{$.GroupsText.NoName}}</a>{{end}}</p>
 
 {{if $.RolesOn}}
 <section class="fsec">
@@ -15,6 +15,12 @@
   {{else}}<p class="muted" style="margin:0">No app gives this group a role yet.</p>{{end}}
   <p class="hint">Roles are given on each app's page. A change to this group affects every role listed here.</p>
 </section>
+{{if .Uses}}
+<section class="fsec">
+  <h2>{{$.GroupsText.OtherUses}}</h2>
+  <div class="roleset">{{range .Uses}}{{if .Href}}<a class="apptok" href="{{.Href}}">{{template "use_icon" .Icon}}<span>{{.Label}}</span></a>{{else}}<span class="apptok">{{template "use_icon" .Icon}}<span>{{.Label}}</span></span>{{end}}{{end}}</div>
+</section>
+{{end}}
 {{end}}
 
 {{if eq .Kind "domain"}}
@@ -53,7 +59,7 @@
 <dl class="facts">
   <div><dt>Members</dt><dd>{{if .NotYetCreated}}<span class="pill tag" title="The feed has not answered yet. The group is created by its first successful sync.">not created yet</span>{{else}}{{len .Members}}{{end}}</dd></div>
   <div><dt>Membership</dt><dd>{{if .Feed}}Filled from a feed{{else}}Managed here{{end}}</dd></div>
-  <div><dt>Used by</dt>{{if $.RolesOn}}{{if .UsedBy}}<dd>{{.UsedBy}}</dd>{{else}}<dd class="none">No roles</dd>{{end}}{{else if .Hosts}}<dd>{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}</dd>{{else if .Unused}}<dd><span class="pill tag" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">Not used by any app</span></dd>{{else}}<dd class="none">No app</dd>{{end}}</div>
+  <div><dt>Used by</dt>{{if $.RolesOn}}{{if or .UsedBy .Uses}}<dd>{{if .UsedBy}}<div>{{.UsedBy}}</div>{{end}}{{range .Uses}}<div>{{if .Href}}<a href="{{.Href}}">{{.Label}}</a>{{else}}{{.Label}}{{end}}</div>{{end}}</dd>{{else if .NotUsed}}<dd><span class="pill tag" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">Not used by any app</span></dd>{{else}}<dd class="none">No roles</dd>{{end}}{{else if .Hosts}}<dd>{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}</dd>{{else if .Unused}}<dd><span class="pill tag" title="No app's sign-in rule names this group, and no break-glass card targets it. It may be left over from an app that has been removed.">Not used by any app</span></dd>{{else}}<dd class="none">No app</dd>{{end}}</div>
   <div><dt>Also admitted by</dt>{{if .IncludedInRefs}}<dd>{{range $i, $g := .IncludedInRefs}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g.Name}}">{{$g.Label}}</a>{{end}}</dd>{{else}}<dd class="none">No other group</dd>{{end}}</div>
 </dl>
 {{end}}
@@ -171,7 +177,7 @@
 {{end}}
 {{end}}
 
-<section class="fsec">
+<section class="fsec" id="name">
   <h2><label for="label-{{.Name}}">{{$.NameText.Heading}}</label></h2>
   <form class="inlineform" method="post" action="/admin/groups/{{.Name}}/label">
     <input type="hidden" name="csrf" value="{{$csrf}}">

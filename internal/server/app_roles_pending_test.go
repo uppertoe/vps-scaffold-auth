@@ -163,3 +163,43 @@ func TestPendingAppPage(t *testing.T) {
 		t.Error("a live app's page changed")
 	}
 }
+
+func TestGroupsShowEveryUse(t *testing.T) {
+	srv, c := pendingAdmin(t)
+	ctx := context.Background()
+	for _, g := range []struct{ name, label string }{{"planka-admins", ""}, {"planka-users", "Planka users"}, {"fellows", "Fellows"}, {"spare", "Spare"}} {
+		if err := srv.store.CreateGroup(ctx, g.name, g.label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := srv.store.AddGroupInclude(ctx, "planka-users", "fellows"); err != nil {
+		t.Fatal(err)
+	}
+	srv.cfg.MemberReadersFilePairs = map[string][]string{"planka": {"fellows"}}
+	page := html.UnescapeString(c.get("/admin/groups", nil).Body.String())
+	for _, want := range []string{
+		`<a href="/admin/apps/planka">` + fmt.Sprintf(msgUseOlder, "Planka") + `</a>`,
+		`<a href="/admin/groups/planka-users">` + fmt.Sprintf(msgUseIncluded, "Planka users") + `</a>`,
+		`<a href="` + appFeedsPath + `">` + fmt.Sprintf(msgUseFeed, "Planka") + `</a>`,
+		`<a class="noname" href="/admin/groups/planka-admins#label-planka-admins">` + msgNoNameSet + `</a>`,
+		`<code class="slug">planka-users</code>`,
+		"No domain groups yet. " + msgDomainGroupsBy,
+		"Not used by any app", // spare
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the Groups page lacks %q", want)
+		}
+	}
+	for _, not := range []string{"Not applicable", "<th>Feed</th>"} {
+		if strings.Contains(page, not) {
+			t.Errorf("the Groups page shows %q", not)
+		}
+	}
+	group := html.UnescapeString(c.get("/admin/groups/fellows", nil).Body.String())
+	if !strings.Contains(group, "<h2>"+msgOtherUsesHead+"</h2>") || !strings.Contains(group, fmt.Sprintf(msgUseFeed, "Planka")) {
+		t.Error("the group page does not list the other uses")
+	}
+	if strings.Contains(group, `<dd class="none">No roles</dd>`) {
+		t.Error("the group page says No roles beside its other uses")
+	}
+}
