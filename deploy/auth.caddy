@@ -50,6 +50,12 @@ auth.{$DOMAIN} {
 #                                                      Use "user" for the app's ordinary role,
 #                                                      which any role in the app also admits.
 #                                                      The app also receives Remote-Roles.
+#   import role_gate "handbook" "user"              -- the role form for a site with no upstream,
+#                                                      such as a static file_server: import it at
+#                                                      the top of the site block, then write the
+#                                                      block's own root and file_server.
+#   import role_redir "numbers" "user" "https://example.org"
+#                                                   -- the role form for a site that only redirects.
 # e.g.  import protected dashboard:3000
 #
 # For a per-route entrance, put the import inside a handle block (the upstream
@@ -310,6 +316,56 @@ auth.{$DOMAIN} {
 		reverse_proxy {args[2]} {
 			import strip_auth_cookie
 		}
+	}
+}
+
+# Gate NON-PROXIED content, such as a static file_server site, by an app role.
+# Args: app, role. Import it at the top of the site block, then write the
+# block's own root and file_server as usual: in Caddy's default directive
+# order file_server runs near-last, after this gate's route. Do NOT pair it
+# with a top-level redir, which orders BEFORE the gate; use role_redir for
+# that.
+#   import role_gate "handbook" "user"
+# The app and role must be declared in the gateway's app roles manifest, as
+# for the role guard, and the gate deletes the same client headers first.
+# Gated responses default to Cache-Control "private, no-cache" (?-prefixed, so
+# a site block can override): the gate decides the fetch, not the copy, and
+# without this a browser on a shared workstation can serve gated pages from
+# its cache after sign-out. no-cache forces revalidation, which re-enters this
+# gate; private keeps shared caches out. Fingerprinted static assets, with a
+# content hash in the file name, are left to the scaffold's immutable-cache
+# rule: they carry no per-user content. The regex matches the renderer's
+# hashed-asset rule, Hugo's processed-image names included.
+(role_gate) {
+	route {
+		import strip_client_identity
+		request_header -Remote-Roles
+		request_header -X-Auth-App
+		request_header -X-Auth-Role
+		request_header -X-Auth-Policy
+		import auth_gate_role "{args[0]}" "{args[1]}"
+		@uncacheable not path_regexp (?:\.[0-9a-f]{8,}|_hu_[0-9a-f]{12,16})\.(?:css|js|mjs|woff2?|ttf|otf|svg|png|jpe?g|webp|avif|gif|ico)$
+		header @uncacheable ?Cache-Control "private, no-cache"
+	}
+}
+
+# Gate a REDIRECT, with no upstream, by an app role: for a vanity name that
+# sends people on to a site with no sign-in of its own. Args: app, role,
+# target URL, which may carry a trailing uri placeholder to keep the path.
+#   import role_redir "numbers" "user" "https://example.org"
+# The route wrapper is load-bearing: in Caddy's default directive order a bare
+# redir runs BEFORE the gate, which would skip it entirely. The redirect is
+# deliberately 302, because browsers cache a 301 and would bypass the gate on
+# every later visit.
+(role_redir) {
+	route {
+		import strip_client_identity
+		request_header -Remote-Roles
+		request_header -X-Auth-App
+		request_header -X-Auth-Role
+		request_header -X-Auth-Policy
+		import auth_gate_role "{args[0]}" "{args[1]}"
+		redir {args[2]}
 	}
 }
 

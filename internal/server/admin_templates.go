@@ -30,6 +30,8 @@ type adminData struct {
 	Groups []groupView
 	// Groups page: the Organisation name cell of a group without one.
 	NoOrgName string
+	// GroupsText is the Groups pages' wording for the move to roles.
+	GroupsText groupsCopy
 	// Group page: the one group shown, and the wording of its name field.
 	Group    *groupView
 	NameText groupNameCopy
@@ -167,6 +169,12 @@ type groupView struct {
 	IncludeRefs, IncludedInRefs, OptionRefs []groupRef
 	// HoldsText says that a group holding roles cannot be deleted.
 	HoldsText string
+	// Uses are the group's uses other than its roles: the older guards that
+	// name it, the groups that include it and the apps it is fed to.
+	// NotUsed is set when the route manifest was read and the group has no
+	// use at all.
+	Uses    []groupUse
+	NotUsed bool
 	// ConfirmDomain is the domain whose removal is being confirmed
 	// (?remove=domain), with the confirmation's wording.
 	ConfirmDomain                           string

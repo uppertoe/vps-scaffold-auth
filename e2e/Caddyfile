@@ -53,6 +53,19 @@ editors.{$DOMAIN} {
 	import role "e2e" "editor" whoami:80
 }
 
+# The role gate for a site with no upstream: a static file_server, gated by
+# the Manager role. The Caddy image ships its own index page to serve.
+static.{$DOMAIN} {
+	import role_gate "e2e" "manager"
+	root * /usr/share/caddy
+	file_server
+}
+
+# The role gate for a site that only redirects, by the Manager role.
+go.{$DOMAIN} {
+	import role_redir "e2e" "manager" "https://example.org{uri}"
+}
+
 # A hand-rolled guard with a misspelt rule: must close, not open.
 broken.{$DOMAIN} {
 	route {

@@ -759,7 +759,7 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{
-		Title: "Groups", Groups: view, NoOrgName: msgNoOrgName,
+		Title: "Groups", Groups: view, NoOrgName: msgNoOrgName, GroupsText: groupsText,
 		MissingGroups: missing, RouteGroupsOn: routeGroupsOn,
 	})
 }
