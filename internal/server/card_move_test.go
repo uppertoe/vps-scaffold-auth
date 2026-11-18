@@ -312,3 +312,37 @@ func TestMoveLandingDuringAScan(t *testing.T) {
 	}
 	wantDenied(t, "the app's role guard", racer.get("/verify", roleGuard("neverdrugs", "")))
 }
+
+// A withdrawn card is not replaced, even by a hand-made post: a replacement
+// would bring it back with a new code.
+func TestRemintRefusesAWithdrawnCard(t *testing.T) {
+	srv, sender, c, id, token := moveAdmin(t, testMoveLive)
+	sid := strconv.FormatInt(id, 10)
+	if rec := c.postForm("/admin/break/"+sid+"/revoke", url.Values{"csrf": {csrfOf(t, c, "/admin/break/"+sid)}}); rec.Code != http.StatusFound {
+		t.Fatalf("withdraw = %d", rec.Code)
+	}
+	before := getCard(t, srv, id)
+	sender.reset()
+	rec := c.postForm("/admin/break/"+sid+"/remint", url.Values{"csrf": {csrfOf(t, c, "/admin/break/new")}})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("re-mint = %d", rec.Code)
+	}
+	after := getCard(t, srv, id)
+	if after.Status != store.BreakGlassRevoked || after.TokenHash != before.TokenHash {
+		t.Fatalf("a withdrawn card was re-minted: %+v", after)
+	}
+	body := html.UnescapeString(c.get("/admin/break/"+sid, nil).Body.String())
+	if !strings.Contains(body, adminWarnings["card-remint-refused"]) {
+		t.Errorf("no refusal shown")
+	}
+	events, _ := srv.store.ListAdminEvents(context.Background(), 10, 0)
+	if len(events) > 0 && events[0].Action == store.AdminActionBreakRemint {
+		t.Errorf("a refused re-mint was audited: %+v", events[0])
+	}
+	if len(mailWithSubject(sender, "The break-glass card for Theatre 3 has been replaced.")) != 0 {
+		t.Error("a refused re-mint was emailed")
+	}
+	if rec := newClient(t, srv.Handler()).scan(token); rec.Code == http.StatusFound {
+		t.Error("the withdrawn card grants again")
+	}
+}

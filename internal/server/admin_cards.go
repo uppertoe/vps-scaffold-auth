@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -960,12 +961,21 @@ func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	// A withdrawn card stays withdrawn; its page offers no replacement.
+	if c.Status != store.BreakGlassActive {
+		s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(c.ID, 10), "card-remint-refused", "")
+		return
+	}
 	tokenEnc, tokenHash, err := s.newToken()
 	if err != nil {
 		s.adminError(w, r)
 		return
 	}
 	if err := s.store.RemintBreakGlassCode(r.Context(), c.ID, tokenEnc, tokenHash); err != nil {
+		if errors.Is(err, store.ErrCardNotActive) {
+			s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(c.ID, 10), "card-remint-refused", "")
+			return
+		}
 		s.adminError(w, r)
 		return
 	}

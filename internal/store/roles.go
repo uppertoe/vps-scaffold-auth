@@ -58,7 +58,10 @@ var (
 	ErrCardRole = errors.New("a break-glass card can hold the user role only")
 	// ErrCardNotGroup refuses moving a card that no longer opens a group:
 	// one already moved or made for an app, or one withdrawn.
-	ErrCardNotGroup = errors.New("the card is not an active card that opens a group")
+	// ErrCardNotActive refuses replacing a card that has been withdrawn (or
+	// does not exist), which would otherwise bring it back.
+	ErrCardNotActive = errors.New("the card has been withdrawn")
+	ErrCardNotGroup  = errors.New("the card is not an active card that opens a group")
 )
 
 // RoleAssignment is one holder of an app role. Until is zero for none and is

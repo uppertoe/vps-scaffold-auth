@@ -578,8 +578,9 @@ type Store interface {
 	LookupBreakGlassByTokenHash(ctx context.Context, tokenHash string) (BreakGlassCode, bool, error)
 	// RevokeBreakGlassCode marks a code revoked.
 	RevokeBreakGlassCode(ctx context.Context, id int64) error
-	// RemintBreakGlassCode replaces a code's token (ciphertext + hash) and marks
-	// it active again.
+	// RemintBreakGlassCode replaces an active code's token (ciphertext +
+	// hash). A withdrawn or unknown code is refused (ErrCardNotActive), so a
+	// replacement never brings a withdrawn card back.
 	RemintBreakGlassCode(ctx context.Context, id int64, newTokenEnc, newTokenHash string) error
 	// RecordBreakGlassEvent appends an audit event. CreatedAt is set by the store.
 	RecordBreakGlassEvent(ctx context.Context, e BreakGlassEvent) error

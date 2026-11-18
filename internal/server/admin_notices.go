@@ -37,6 +37,7 @@ var adminNotices = map[string]string{
 // the error style.
 var adminWarnings = map[string]string{
 	"card-design-refused": "The card's design has not been changed. Choose a design from the list, and note that a withdrawn card keeps its design.",
+	"card-remint-refused": "The card has not been replaced, because the card has been withdrawn. To give the location a working card, create a new card.",
 	"card-move-refused":   "The card has not been moved, because the card no longer opens a group or has been withdrawn.",
 	"member-invalid":      "The member has not been added. Enter a full email address, such as name@example.org.",
 	"members-none":        "No members have been added, because none were ticked.",
