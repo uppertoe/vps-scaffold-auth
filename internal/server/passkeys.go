@@ -117,6 +117,9 @@ type passkeyPage struct {
 	// passkeys page once the person has chosen to add a passkey there.
 	Computer    bool
 	AddComputer bool
+	// HeldHere marks a computer's passkeys page that already lists a passkey
+	// the computer holds, which offers no other.
+	HeldHere bool
 	// Allow lists, comma-separated, the passkeys a computer's sign-in may ask
 	// for: those passkeyHereCookie names. Empty, a computer is asked for none.
 	Allow string
@@ -471,6 +474,9 @@ func (s *Server) renderPasskeys(w http.ResponseWriter, r *http.Request, id *sess
 	}
 	pp.AddComputer = addComputer
 	pp.Rows = s.ownPasskeyRows(r, id, list)
+	for _, row := range pp.Rows {
+		pp.HeldHere = pp.HeldHere || row.Kind == msgPkThisComputer
+	}
 	pp.Removed = r.URL.Query().Get("removed") == "1"
 	pp.Next = s.passkeysURL()
 	s.render(w, http.StatusOK, "passkeys", pageData{Passkey: pp, CSRF: csrf, Identity: id.Email})

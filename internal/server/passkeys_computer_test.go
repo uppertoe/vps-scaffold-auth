@@ -149,6 +149,9 @@ func TestComputerPasskeyRegisterAndSignIn(t *testing.T) {
 	if !strings.Contains(page, msgPkThisComputer) || strings.Contains(page, msgPkAComputer) {
 		t.Fatalf("the passkeys page does not name this computer's passkey:\n%s", page)
 	}
+	if strings.Contains(page, `href="/passkeys?add=computer"`) {
+		t.Fatal("a computer that holds a passkey is offered another")
+	}
 	// Another computer sees the same passkey as a computer's, not its own.
 	o := newClient(t, srv.Handler())
 	computerSignIn(t, o, sender, "user@example.com")

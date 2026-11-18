@@ -166,9 +166,10 @@ type Config struct {
 	TOTPEnabled bool
 	TOTPIssuer  string
 
-	// PasskeysEnabled offers passkey sign-in on phones (PASSKEYS_ENABLED, off
-	// by default). It is the only setting that puts a script on the sign-in
-	// pages, so a deployment turns it on deliberately.
+	// PasskeysEnabled offers passkey sign-in on phones, and on a computer
+	// whose owner asks for one (PASSKEYS_ENABLED, off by default). It is the
+	// only setting that puts a script on the sign-in pages, so a deployment
+	// turns it on deliberately.
 	PasskeysEnabled bool
 
 	// Break-the-glass QR codes.
