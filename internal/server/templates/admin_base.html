@@ -86,6 +86,9 @@
   }
   header.bar nav a:hover { color: var(--text); }
   header.bar nav a[aria-current=page] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  /* A count of what waits for an administrator, on a menu item. */
+  header.bar nav .navcount { position: relative; margin-left: 6px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; background: var(--warn-bg); color: var(--warn-fg); border: 1px solid var(--warn-line); }
+  .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   header.bar .who { font-size: 13px; color: var(--muted); white-space: nowrap; display: flex; gap: 14px; align-items: center; flex: none; }
   main { max-width: 1040px; margin: 0 auto; padding: 32px 28px 72px; }
   @media (max-width: 720px) {
@@ -291,6 +294,7 @@
       {{if .RolesOn}}<a href="/admin/invitations"{{if or (eq .Active "admin_invites") (eq .Active "admin_invite_new")}} aria-current="page"{{end}}>Invitations</a>{{end}}
       <a href="/admin/groups"{{if or (eq .Active "admin_groups") (eq .Active "admin_group") (eq .Active "admin_bulk_add") (eq .Active "admin_group_new")}} aria-current="page"{{end}}>Groups</a>
       <a href="/admin/break"{{if or (eq .Active "admin_codes") (eq .Active "admin_code_detail") (eq .Active "admin_card_new") (eq .Active "admin_designs") (eq .Active "admin_design")}} aria-current="page"{{end}}>Break-glass cards</a>
+      {{if .ReadersOn}}<a href="/admin/readers"{{if eq .Active "admin_readers"}} aria-current="page"{{end}}{{if .ReadersTitle}} title="{{.ReadersTitle}}"{{end}}>{{.ReadersMenu}}{{if .ReadersWaiting}}<span class="navcount"><span class="vh">: </span>{{.ReadersWaiting}}</span>{{end}}</a>{{end}}
       <a href="/admin/access"{{if eq .Active "admin_access"}} aria-current="page"{{end}}>Access log</a>
       <a href="/admin/audit"{{if eq .Active "admin_audit"}} aria-current="page"{{end}}>Admin audit</a>
       {{if .TOTPEnabled}}<a href="/admin/totp"{{if eq .Active "admin_totp"}} aria-current="page"{{end}}>Admin 2FA</a>{{end}}
@@ -299,8 +303,10 @@
     {{if .AdminEmail}}<span class="who">{{.AdminEmail}} <a href="/logout">Sign out</a></span>{{end}}
   </header>
   <main>
+    {{if not .NoticeInPage}}
     {{if .Notice}}<div class="notice ok" role="status">{{.Notice}}</div>{{end}}
     {{if .Warning}}<div class="notice warn" role="alert">{{.Warning}}</div>{{end}}
+    {{end}}
     {{template "content" .}}
   </main>
   {{if .Script}}<script>{{.Script}}</script>{{end}}

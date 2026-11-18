@@ -1,0 +1,97 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}<style>
+  /* One row per app and group: the same four cells on every row, and the
+     same height whatever the action cell shows, so confirming moves
+     nothing. The strip above the list keeps one height for every message. */
+  .rstrip { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 16px; margin: 0 0 16px; border-radius: 8px; border: 1px solid transparent; font-size: 14px; line-height: 20px; }
+  .rstrip i { width: 8px; height: 8px; border-radius: 50%; flex: none; background: currentColor; }
+  .rstrip span { min-width: 0; overflow-wrap: anywhere; }
+  .rstrip.none { color: var(--muted); border: 1px dashed var(--border); }
+  .rstrip.none i { background: var(--faint); }
+  .rstrip.waiting { background: var(--wide-bg); color: var(--wide-fg); border-color: var(--wide-line); }
+  .rstrip.ask { background: var(--accent-soft); color: var(--text); border-color: var(--accent-line); }
+  .rstrip.ask i { background: var(--accent); }
+  .rstrip.ok { background: var(--ok-bg); color: var(--ok-fg); border-color: var(--ok-line); }
+  .rstrip.warn { background: var(--off-bg); color: var(--off-fg); border-color: var(--off-line); }
+  .tbl.readers .rrow { grid-template-columns: minmax(0, .6fr) minmax(0, 1.2fr) minmax(0, 2fr) 236px; height: auto; min-height: 64px; padding-block: 8px; }
+  .tbl.readers .rrow.colhead { height: 36px; min-height: 0; padding-block: 0; }
+  .tbl.readers .rrow.hit { background: var(--accent-soft); }
+  .tbl.readers .tok { max-width: 100%; }
+  .tbl.readers .tok.gone { border-style: dashed; background: transparent; color: var(--muted); cursor: default; }
+  .tbl.readers .sv { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+  .tbl.readers .sv small { display: block; max-width: 100%; font-size: 12px; line-height: 16px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tbl.readers .sv small.setting { white-space: normal; overflow-wrap: anywhere; }
+  .tbl.readers .act { display: flex; justify-content: flex-end; align-items: center; gap: 8px; height: 34px; overflow: visible; }
+  .tbl.readers .act form { display: flex; margin: 0; }
+  .tbl.readers .act .btnlink, .tbl.readers .act button { height: 34px; margin: 0; padding: 0 14px; font-size: 13px; line-height: 1; white-space: nowrap; }
+  .tbl.readers .act .none { color: var(--faint); }
+  p.readershelp { margin: 12px 0 0; }
+  .readspanel { margin-top: 32px; }
+  @media (max-width: 720px) {
+    .rstrip { min-height: 64px; }
+    .tbl.readers .rrow { grid-template-columns: minmax(0, 1fr); height: auto; }
+    .tbl.readers .sv small { white-space: normal; }
+    .tbl.readers .act { justify-content: flex-start; margin-top: 4px; }
+    .tbl.readers .act:has(> .none) { display: none; }
+  }
+</style>{{end}}
+{{define "content"}}
+{{template "role_icons"}}
+{{with .Readers}}
+<h1>{{$.Title}}</h1>
+<p class="sub">{{.Lead}}</p>
+
+<div class="rstrip {{.StripTone}}" role="status"><i aria-hidden="true"></i><span>{{.Strip}}</span></div>
+
+<div class="rlist tbl readers" id="readers">
+  <div class="rrow colhead"><div>App</div><div>Group</div><div>Approval</div><div></div></div>
+  {{range .Rows}}
+  <div class="rrow{{if .Confirming}} hit{{end}}">
+    <div><code class="mono">{{.App}}</code></div>
+    <div data-label="Group">{{template "token" .Group}}</div>
+    <div data-label="Approval"><div class="sv">{{template "token" .State}}{{if .Note}}<small title="{{.Note}}">{{.Note}}</small>{{end}}{{if .Setting}}<small class="setting">{{.SettingText}} <code class="mono">{{.Setting}}</code>.</small>{{end}}</div></div>
+    <div class="act">
+      {{- if .Confirming}}
+      <form method="post" action="/admin/member-readers/{{.Action}}">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="app" value="{{.App}}">
+        <input type="hidden" name="group" value="{{.Group.Value}}">
+        <button type="submit"{{if eq .Action "withdraw"}} class="danger"{{end}}>{{.ActionText}}</button>
+      </form>
+      <a class="btnlink quiet" href="/admin/readers">{{$.Readers.Cancel}}</a>
+      {{- else if .Action}}
+      <a class="btnlink quiet" href="{{.AskHref}}">{{.ActionText}}</a>
+      {{- else}}
+      <span class="none" aria-hidden="true">&mdash;</span>
+      {{- end}}
+    </div>
+  </div>
+  {{else}}
+  <div class="rrow empty"><div class="muted">{{.Empty}}</div></div>
+  {{end}}
+</div>
+{{if .Unusable}}
+<p class="muted readershelp">If an app has no usable token, set its token in the gateway's environment to 32 or more random characters that no other app or setting uses, such as the output of openssl rand -hex 32, then recreate the gateway. If an app is listed for a domain group, change the app's listing to name a list group instead. If an app is listed in both MEMBER_READERS and the readers file, add the groups to MEMBER_READERS, or remove the app from MEMBER_READERS so that the readers file decides its groups.</p>
+{{end}}
+
+{{if .Reads}}
+<div class="panel readspanel">
+  <h2>{{.ReadsHead}}</h2>
+  <div class="tablewrap"><table class="stack">
+    <thead><tr><th>App</th><th>Group</th><th>From</th><th>Last read</th><th class="num">Reads</th></tr></thead>
+    <tbody>
+    {{range .Reads}}
+      <tr>
+        <td><code class="mono">{{.App}}</code></td>
+        <td data-label="Group"><a href="/admin/groups/{{.Group}}"><code class="mono">{{.Group}}</code></a></td>
+        <td data-label="From"><code class="mono">{{.Source}}</code></td>
+        <td class="when" data-label="Last read">{{.Last}}</td>
+        <td class="num" data-label="Reads">{{.Reads}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table></div>
+</div>
+{{end}}
+{{end}}
+{{end}}

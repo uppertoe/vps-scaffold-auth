@@ -54,6 +54,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/groups/{name}/includes/delete", s.handleAdminRemoveInclude)
 	mux.HandleFunc("POST /admin/groups/{name}/members/delete", s.handleAdminRemoveMember)
 	mux.HandleFunc("GET /admin/access", s.handleAdminAccess)
+	mux.HandleFunc("GET /admin/readers", s.handleAdminReaders)
 	mux.HandleFunc("POST /admin/member-readers/approve", s.handleAdminApproveReader)
 	mux.HandleFunc("POST /admin/member-readers/withdraw", s.handleAdminWithdrawReader)
 	mux.HandleFunc("GET /admin/audit", s.handleAdminAudit)
@@ -711,6 +712,9 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 	}
 	sortCards(codes)
 	ov.Lines = append(ov.Lines, cardLines(codes, stats)...)
+	if n := s.waitingReaders(ctx); n > 0 {
+		ov.Lines = append(ov.Lines, readersWaitingLine(n))
+	}
 	ov.CardsTile = msgActiveCardsTile
 	s.renderAdmin(w, r, http.StatusOK, "admin_home", adminData{Title: "Overview", Overview: ov})
 }

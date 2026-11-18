@@ -13,8 +13,8 @@ import (
 )
 
 // An app listed in MEMBER_READERS_FILE proposes the groups it reads; an
-// administrator approves each (app, group) pair on the Access page before the
-// gateway serves it. The file can narrow access on its own (a removed row is
+// administrator approves each (app, group) pair on the member readers page
+// (admin_readers.go) before the gateway serves it. The file can narrow access on its own (a removed row is
 // not served, whatever its approval, and its approval is cleared at the next
 // start), but never widen it. An app in MEMBER_READERS is operator-reviewed
 // configuration and needs no approval.
@@ -39,12 +39,15 @@ const (
 	noticeReaderCookieSep = ":"
 )
 
-// readerApprovalView is one pair from the readers file on the Access page.
+// readerApprovalView is one pair from the readers file, for the member
+// readers page.
 type readerApprovalView struct {
 	App, Group string
 	Approved   bool
 	// Missing: the group does not exist, so it cannot be approved.
 	Missing bool
+	// Kind is the group's kind, when it exists.
+	Kind    string
 	Status  string
 	Confirm string
 }
@@ -123,7 +126,7 @@ func (s *Server) clearStaleReaderApprovals(ctx context.Context) {
 }
 
 // readerApprovalViews lists every pair from the readers file, waiting or
-// approved, for the Access page.
+// approved, for the member readers page.
 func (s *Server) readerApprovalViews(ctx context.Context) ([]readerApprovalView, error) {
 	approvals, err := s.store.ListMemberReaderApprovals(ctx)
 	if err != nil {
@@ -144,10 +147,12 @@ func (s *Server) readerApprovalViews(ctx context.Context) ([]readerApprovalView,
 				v.Approved = true
 				v.Status = fmt.Sprintf(msgReaderApprovedBy, a.ApprovedBy, s.longDate(a.ApprovedAt))
 			}
-			if _, exists, err := s.store.GroupKind(ctx, g); err != nil {
+			if kind, exists, err := s.store.GroupKind(ctx, g); err != nil {
 				return nil, err
 			} else if !exists {
 				v.Missing, v.Status = true, msgReaderNoGroup
+			} else {
+				v.Kind = kind
 			}
 			out = append(out, v)
 		}
@@ -179,7 +184,7 @@ func (s *Server) handleAdminApproveReader(w http.ResponseWriter, r *http.Request
 	}
 	app, group, ok := s.readerPair(r)
 	if !ok {
-		http.Redirect(w, r, "/admin/access", http.StatusFound)
+		http.Redirect(w, r, readersPath, http.StatusFound)
 		return
 	}
 	// An approval is for a group that exists, never for a name that a group
@@ -188,7 +193,7 @@ func (s *Server) handleAdminApproveReader(w http.ResponseWriter, r *http.Request
 		s.adminError(w, r)
 		return
 	} else if !exists {
-		http.Redirect(w, r, "/admin/access", http.StatusFound)
+		http.Redirect(w, r, readersPath, http.StatusFound)
 		return
 	}
 	actor := s.adminActor(r)
@@ -201,7 +206,7 @@ func (s *Server) handleAdminApproveReader(w http.ResponseWriter, r *http.Request
 		s.auditAdmin(r, store.AdminActionMemberReaderApprove, app, group)
 		s.emailOtherAdmins(actor, fmt.Sprintf(msgReaderSubject, s.groupLabel(r.Context(), group)), []string{fmt.Sprintf(msgReaderApproveLine, app, group)})
 	}
-	s.redirectDone(w, r, "/admin/access", noticeReaderApproved+noticeReaderCookieSep+app+noticeReaderCookieSep+group, "")
+	s.redirectDone(w, r, readersPath, noticeReaderApproved+noticeReaderCookieSep+app+noticeReaderCookieSep+group, "")
 }
 
 // handleAdminWithdrawReader withdraws the approval of one pair. Reads stop
@@ -212,7 +217,7 @@ func (s *Server) handleAdminWithdrawReader(w http.ResponseWriter, r *http.Reques
 	}
 	app, group, ok := s.readerPair(r)
 	if !ok {
-		http.Redirect(w, r, "/admin/access", http.StatusFound)
+		http.Redirect(w, r, readersPath, http.StatusFound)
 		return
 	}
 	removed, err := s.store.WithdrawMemberReader(r.Context(), app, group)
@@ -224,7 +229,7 @@ func (s *Server) handleAdminWithdrawReader(w http.ResponseWriter, r *http.Reques
 		s.auditAdmin(r, store.AdminActionMemberReaderWithdraw, app, group)
 		s.emailOtherAdmins(s.adminActor(r), fmt.Sprintf(msgReaderSubject, s.groupLabel(r.Context(), group)), []string{fmt.Sprintf(msgReaderWithdrawLine, app, group)})
 	}
-	s.redirectDone(w, r, "/admin/access", noticeReaderWithdrawn+noticeReaderCookieSep+app+noticeReaderCookieSep+group, "")
+	s.redirectDone(w, r, readersPath, noticeReaderWithdrawn+noticeReaderCookieSep+app+noticeReaderCookieSep+group, "")
 }
 
 // adminActor is the address of the administrator making the request.
