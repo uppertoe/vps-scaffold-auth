@@ -39,6 +39,23 @@ func pkNetworkServer(t *testing.T, adjust func(*config.Config)) (*Server, *captu
 	})
 }
 
+// A network written as an IPv4-mapped range refuses a computer at the IPv4
+// address it names.
+func TestComputerOnAMappedNetworkRange(t *testing.T) {
+	ranges, err := config.ParseNetworkRanges("RCH=::ffff:192.168.0.0/112")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, sender := pkServer(t, func(c *config.Config) {
+		c.NetworkRanges, c.NetworkNames = ranges, config.NetworkNamesAsWritten("RCH=x")
+	})
+	c := newClient(t, srv.Handler())
+	computerSignIn(t, c, sender, "user@example.com")
+	if page := c.get("/passkeys?add=computer", computerOnNet).Body.String(); strings.Contains(page, "data-challenge") || !strings.Contains(page, networkRefusal) {
+		t.Fatal("a computer on a network written as a mapped range was offered a passkey")
+	}
+}
+
 // A computer on a listed network is not offered a passkey, and is told why,
 // on the passkeys page and on the add page; no ceremony is started.
 func TestComputerOnTheNetworkIsNotOfferedAPasskey(t *testing.T) {

@@ -185,6 +185,17 @@ func TestRoleGuardNetworkWithoutSession(t *testing.T) {
 	}
 }
 
+// A network written as an IPv4-mapped range admits the IPv4 addresses it
+// names, which is how the client address is read.
+func TestRoleGuardNetworkWrittenAsMappedRange(t *testing.T) {
+	srv, _ := rolesServer(t, "rch=::ffff:10.0.0.0/104")
+	mustAssign(t, srv, store.RoleAssignment{App: "nd", Role: "user", Kind: store.AssignNetwork, Ref: "rch"})
+	c := newClient(t, srv.Handler())
+	if rec := c.get("/verify", roleGuard("nd", "")); rec.Code != http.StatusOK || rec.Header().Get("Remote-Roles") != "user" {
+		t.Fatalf("inside a network written as a mapped range = %d %q, want 200 user", rec.Code, rec.Header().Get("Remote-Roles"))
+	}
+}
+
 func TestRoleGuardBreakGlassCard(t *testing.T) {
 	srv, _ := rolesServer(t, "")
 	ctx := context.Background()
