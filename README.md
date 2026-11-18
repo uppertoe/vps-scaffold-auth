@@ -369,7 +369,7 @@ registration the browser reports as held elsewhere (`hybrid`, a security key,
 no `internal` transport) is refused. A computer whose client address is in
 `NETWORK_RANGES` cannot add one, checked when the challenge is minted and
 when the registration is posted; phones there are unchanged. Only a computer marked by the
-`vps_auth_pk_here` cookie, set when it adds or uses a passkey, is asked for a
+`__Host-vps_auth_pk_here` cookie (unprefixed only with `COOKIE_INSECURE`), set when it adds or uses a passkey, is asked for a
 passkey at sign-in, and only for those passkeys. Passkeys are bound to the auth host (the relying-party ID is the host of
 `AUTH_PUBLIC_URL`), accept only ES256 with user verification and no
 attestation, and need no new dependency: the verifier is `internal/passkey`.

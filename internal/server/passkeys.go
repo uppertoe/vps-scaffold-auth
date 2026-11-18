@@ -102,7 +102,8 @@ const (
 	// holding the old cookie has it cleared.
 	passkeyOfferedCookie = "vps_auth_pk_offered"
 	// passkeyHereCookie names the passkeys this device holds, as the
-	// credential IDs it added or used here, newest first.
+	// credential IDs it added or used here, newest first. Under TLS it carries
+	// the __Host- prefix (passkeyHereName).
 	passkeyHereCookie = "vps_auth_pk_here"
 	passkeyHereTTL    = 400 * 24 * time.Hour
 	passkeyHereMax    = 8    // credential IDs kept
@@ -1001,11 +1002,26 @@ func (s *Server) passkeyBlockedNetwork(r *http.Request) (string, bool) {
 	return "", false
 }
 
+// passkeyHereName is the name of passkeyHereCookie. Under TLS it carries the
+// __Host- prefix, as the challenge cookies do (session.pkCookie): a browser
+// accepts such a cookie only from this host, Secure, with no Domain and
+// Path=/, so a sibling app on the domain can neither plant a list that makes
+// a department computer ask for a passkey nor shadow this host's own list. A
+// cookie of the bare name, which a sibling could set for the whole domain,
+// is never read. Without TLS (development) the prefix would make the browser
+// refuse the cookie, so it is left off.
+func (s *Server) passkeyHereName() string {
+	if s.cfg.CookieInsecure {
+		return passkeyHereCookie
+	}
+	return "__Host-" + passkeyHereCookie
+}
+
 // passkeysHere reads passkeyHereCookie: the credential IDs this device has
 // added or used, newest first, each a well-formed ID and at most
 // passkeyHereMax of them.
 func (s *Server) passkeysHere(r *http.Request) []string {
-	ck, err := r.Cookie(passkeyHereCookie)
+	ck, err := r.Cookie(s.passkeyHereName())
 	if err != nil {
 		return nil
 	}
@@ -1020,7 +1036,7 @@ func (s *Server) passkeysHere(r *http.Request) []string {
 
 func (s *Server) setPasskeysHere(w http.ResponseWriter, ids []string) {
 	ck := &http.Cookie{
-		Name: passkeyHereCookie, Path: "/", Secure: !s.cfg.CookieInsecure, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Name: s.passkeyHereName(), Path: "/", Secure: !s.cfg.CookieInsecure, HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	}
 	if len(ids) == 0 {
 		ck.MaxAge = -1

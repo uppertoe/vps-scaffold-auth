@@ -400,3 +400,37 @@ func TestPasskeysHereBounds(t *testing.T) {
 		t.Fatalf("a malformed entry was kept: %v", got)
 	}
 }
+
+// Under TLS the list of passkeys a computer holds is a __Host- cookie, which
+// only this host can set. A cookie of the bare name, such as a sibling app
+// could set for the whole domain, is ignored: it neither makes a computer
+// ask for a passkey nor hides the computer's own list.
+func TestPasskeysHereCookieCannotBePlanted(t *testing.T) {
+	srv, sender := pkServer(t, func(c *config.Config) { c.CookieInsecure = false })
+	c := newClient(t, srv.Handler())
+	computerSignIn(t, c, sender, "user@example.com")
+	a := passkeytest.NewComputer()
+	if rec := registerFrom(t, c, a, c.get("/passkeys?add=computer", computer).Body.String(), computer); rec.Code != http.StatusOK {
+		t.Fatalf("register: %d", rec.Code)
+	}
+	own := c.cookies["__Host-"+passkeyHereCookie]
+	if own == nil || !own.Secure || own.Path != "/" || own.Domain != "" || c.cookies[passkeyHereCookie] != nil {
+		t.Fatalf("the computer's list is not a __Host- cookie: %+v", own)
+	}
+	planted := &http.Cookie{Name: passkeyHereCookie, Value: enc([]byte("planted-credential"))}
+
+	// A department computer with only the planted cookie is asked for nothing.
+	d := newClient(t, srv.Handler())
+	d.cookies[passkeyHereCookie] = planted
+	if page := d.get("/login", computer).Body.String(); strings.Contains(page, "data-allow") {
+		t.Fatal("a planted cookie made a computer ask for a passkey")
+	}
+	// Beside the computer's own, the planted one changes nothing.
+	b := newClient(t, srv.Handler())
+	b.cookies[passkeyHereCookie] = planted
+	b.cookies[own.Name] = own
+	page := b.get("/login", computer).Body.String()
+	if !strings.Contains(page, `data-allow="`+enc(a.ID)+`"`) || strings.Contains(page, planted.Value) {
+		t.Fatal("a planted cookie shadowed the computer's own list")
+	}
+}
