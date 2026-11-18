@@ -360,30 +360,47 @@ func TestComputerPasskeyRemoval(t *testing.T) {
 	if verifyAny(b).Code != http.StatusFound {
 		t.Fatal("the removed passkey's session still works")
 	}
-	// The removal ended this session, so the page it leads to is the sign-in
-	// page, which asks the browser to forget the passkey and drops it from
-	// the computer's list.
+	// The removal drops the passkey from this browser's list at once. It
+	// ended this session, so the page it leads to is the sign-in page, which
+	// asks the browser to forget the passkey, once.
+	if b.cookies[passkeyHereCookie] != nil {
+		t.Error("the removed passkey is still listed as held by the computer")
+	}
 	if rec := b.get("/passkeys?removed=1", computer); rec.Code != http.StatusFound {
 		t.Fatalf("the ended session reached the passkeys page: %d", rec.Code)
 	}
 	if after := b.get("/login", computer).Body.String(); !strings.Contains(after, `data-gone="`+enc(a.ID)+`"`) {
 		t.Fatalf("the sign-in page after the removal does not ask the browser to forget the passkey:\n%s", after)
 	}
-	if b.cookies[passkeyHereCookie] != nil {
-		t.Error("the removed passkey is still listed as held by the computer")
+	if b.cookies[passkeyForgetCookie] != nil {
+		t.Error("the removal's note outlived the page that read it")
 	}
-	// Another browser on the computer, which still lists it, is told on its
-	// sign-in page, which asks for it no longer.
+	if after := b.get("/login", computer).Body.String(); strings.Contains(after, "data-gone") {
+		t.Error("the browser was asked twice to forget the passkey")
+	}
+	// Another browser on the computer, which still lists it, drops it
+	// quietly: its page asks for it no longer, and asks the browser to
+	// forget nothing. Its next sign-in with the passkey is refused as
+	// unknown, and that asks the browser to forget it, as before.
 	page = c.get("/login", computer).Body.String()
-	if !strings.Contains(page, `data-gone="`+enc(a.ID)+`"`) || strings.Contains(page, "data-allow") || c.cookies[passkeyHereCookie] != nil {
-		t.Fatalf("the sign-in page on a computer still lists a removed passkey:\n%s", page)
+	if strings.Contains(page, "data-gone") || strings.Contains(page, "data-allow") || c.cookies[passkeyHereCookie] != nil {
+		t.Fatalf("another browser's sign-in page after the removal:\n%s", page)
+	}
+	as := a.SignIn(pkRPID, pkOrigin, attr(t, page, "challenge"))
+	rec := c.postWith("/passkey/login", url.Values{
+		"id": {enc(as.CredentialID)}, "clientDataJSON": {enc(as.ClientDataJSON)}, "authenticatorData": {enc(as.AuthenticatorData)},
+		"signature": {enc(as.Signature)}, "userHandle": {enc(as.UserHandle)},
+	}, computer)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `data-unknown="`+enc(a.ID)+`"`) {
+		t.Fatalf("a refused sign-in with the removed passkey: %d", rec.Code)
 	}
 }
 
-// A passkey an administrator removes is forgotten by the computer that held
-// it at its next sign-in page, while another person's passkey on the same
-// computer, still held, is kept and never signalled.
-func TestRemovedPasskeyIsForgottenByTheComputer(t *testing.T) {
+// A passkey an administrator removes, or one removed on another device, is
+// dropped quietly from the computer's list at its next page: the browser is
+// not asked to forget it until a sign-in with it is refused. Another
+// person's passkey on the same computer, still held, is kept.
+func TestPasskeyRemovedElsewhereIsDroppedQuietly(t *testing.T) {
 	srv, sender := pkServer(t, nil)
 	c := newClient(t, srv.Handler())
 	computerSignIn(t, c, sender, "user@example.com")
@@ -402,25 +419,53 @@ func TestRemovedPasskeyIsForgottenByTheComputer(t *testing.T) {
 	d := newClient(t, srv.Handler())
 	d.cookies[passkeyHereCookie] = here
 	page := d.get("/login", computer).Body.String()
-	if !strings.Contains(page, `data-gone="`+enc(a.ID)+`"`) {
-		t.Fatalf("the sign-in page does not ask the browser to forget the removed passkey:\n%s", page)
-	}
-	if !strings.Contains(page, `data-allow="`+enc(b.ID)+`"`) {
-		t.Fatal("the other person's passkey is no longer asked for")
+	if strings.Contains(page, "data-gone") || !strings.Contains(page, `data-allow="`+enc(b.ID)+`"`) {
+		t.Fatalf("the sign-in page after a removal elsewhere:\n%s", page)
 	}
 	if ck := d.cookies[passkeyHereCookie]; ck == nil || ck.Value != enc(b.ID) {
 		t.Fatalf("the computer's list after the removal: %v", ck)
 	}
-	// The passkeys page does the same, for a person signed in with a code.
 	e := newClient(t, srv.Handler())
 	computerSignIn(t, e, sender, "other@example.com")
 	e.cookies[passkeyHereCookie] = here
-	if page := e.get("/passkeys", computer).Body.String(); !strings.Contains(page, `id="passkey-gone"`) || !strings.Contains(page, `data-gone="`+enc(a.ID)+`"`) {
-		t.Fatal("the passkeys page does not ask the browser to forget a removed passkey")
+	if page := e.get("/passkeys", computer).Body.String(); strings.Contains(page, "passkey-gone") {
+		t.Fatal("the passkeys page asked the browser to forget a passkey removed elsewhere")
 	}
-	// With nothing removed, nothing is signalled.
-	if page := d.get("/login", computer).Body.String(); strings.Contains(page, "data-gone") {
-		t.Fatal("a passkey still held was signalled as gone")
+}
+
+// A gateway that answers from an empty database, such as a restore from the
+// wrong backup, never asks a browser to forget a passkey on a page load: the
+// computer's list is dropped quietly, and its passkeys stay in the browser.
+func TestEmptyDatabaseNeverAsksABrowserToForget(t *testing.T) {
+	srv, sender := pkServer(t, nil)
+	c := newClient(t, srv.Handler())
+	computerSignIn(t, c, sender, "user@example.com")
+	a := passkeytest.NewComputer()
+	registerFrom(t, c, a, c.get("/passkeys?add=computer", computer).Body.String(), computer)
+	here := c.cookies[passkeyHereCookie]
+
+	empty, sender2 := pkServer(t, nil) // a fresh database that has never held it
+	for _, path := range []string{"/login", "/totp"} {
+		v := newClient(t, empty.Handler())
+		v.cookies[passkeyHereCookie] = here
+		if body := v.get(path, computer).Body.String(); strings.Contains(body, "data-gone") || strings.Contains(body, "data-unknown") {
+			t.Fatalf("%s from an empty database asks the browser to forget a passkey", path)
+		}
+	}
+	v := newClient(t, empty.Handler())
+	computerSignIn(t, v, sender2, "user@example.com")
+	v.cookies[passkeyHereCookie] = here
+	if body := v.get("/passkeys", computer).Body.String(); strings.Contains(body, "passkey-gone") || strings.Contains(body, "data-gone") {
+		t.Fatal("the passkeys page from an empty database asks the browser to forget a passkey")
+	}
+	if v.cookies[passkeyHereCookie] != nil {
+		t.Error("the unknown passkey was not dropped from the computer's list")
+	}
+	// A removal note for a passkey the database still holds is ignored.
+	w := newClient(t, srv.Handler())
+	w.cookies[passkeyForgetCookie] = &http.Cookie{Name: passkeyForgetCookie, Value: enc(a.ID)}
+	if body := w.get("/login", computer).Body.String(); strings.Contains(body, "data-gone") {
+		t.Fatal("a note naming a passkey still held asked the browser to forget it")
 	}
 }
 

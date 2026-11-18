@@ -60,8 +60,10 @@
     show(byId('passkey-error'));
   }
 
-  // A passkey the gateway does not hold: ask the browser to stop offering
-  // it. A browser without signalUnknownCredential is left as it is.
+  // Ask the browser to stop offering a passkey. The gateway names one only
+  // after an event on this device: a sign-in with it refused as unknown, or
+  // its owner removing it here. A browser without signalUnknownCredential is
+  // left as it is.
   function forget(rpId, ids) {
     if (!rpId || !window.PublicKeyCredential || !PublicKeyCredential.signalUnknownCredential) return;
     ids.forEach(function (id) {
@@ -74,8 +76,8 @@
 
   // --- Signing in ---
   var login = byId('passkey-login');
-  // One posted in a failed sign-in, and any this device's list named that
-  // the gateway has since removed.
+  // One posted in a sign-in refused as unknown, or one its owner has just
+  // removed on this device.
   if (login) forget(login.dataset.rpid, list(login.dataset.unknown).concat(list(login.dataset.gone)));
   var gone = byId('passkey-gone');
   if (gone) forget(gone.dataset.rpid, list(gone.dataset.gone));
