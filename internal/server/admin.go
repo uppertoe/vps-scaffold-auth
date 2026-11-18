@@ -66,6 +66,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/break/{id}/revoke", s.handleAdminBreakRevoke)
 	mux.HandleFunc("POST /admin/break/{id}/remint", s.handleAdminBreakRemint)
 	mux.HandleFunc("POST /admin/break/{id}/design", s.handleAdminBreakDesign)
+	mux.HandleFunc("POST /admin/break/{id}/move", s.handleAdminBreakMove)
 	// pdf, qr.png and card.svg (see handleAdminBreakFile).
 	mux.HandleFunc("GET /admin/break/{id}/{file}", s.handleAdminBreakFile)
 	mux.HandleFunc("GET /admin/break/designs", s.handleAdminDesigns)

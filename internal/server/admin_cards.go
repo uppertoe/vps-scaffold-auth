@@ -38,7 +38,10 @@ const (
 	msgCardWithdrawSub = "The break-glass card for %s has been withdrawn."
 	msgCardNoPages     = msgCardNoPagesApproved
 	msgLegacyHeading   = "Cards that open a group"
-	msgLegacyNote      = "These cards were made before app roles, and each one opens the sites of its group. They keep working until they are replaced or withdrawn."
+	// Without app roles a group card cannot be moved, so the list keeps the
+	// note it had before.
+	msgLegacyNoteNoRoles = "These cards were made before app roles, and each one opens the sites of its group. They keep working until they are replaced or withdrawn."
+	msgLegacyNote        = "These cards were made before app roles, and each one opens the sites of its group. A group card stops opening an app once the app moves to roles. To keep a card working, open the card's page and choose " + msgMoveAction + ". The card keeps its printed code."
 )
 
 // sampleLocation and sampleApp fill a preview before the form has them.
@@ -126,6 +129,9 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := &cardsView{Empty: len(codes) == 0, LegacyH: msgLegacyHeading, LegacyN: msgLegacyNote}
+	if !s.rolesOn() {
+		v.LegacyN = msgLegacyNoteNoRoles
+	}
 	groups := map[string]*cardAppGroup{}
 	refused := s.refusedTargets()
 	sortCards(codes)
@@ -729,7 +735,8 @@ type cardPageView struct {
 	Note        string
 	UsesLine    string
 	Events      []cardEventView
-	Confirm     string // "replace" or "withdraw" while asking
+	Confirm     string        // "replace", "withdraw" or "move" while asking
+	Move        *cardMoveView // a card that opens a group, with app roles on
 	ConfirmText string
 	ReplaceText string
 	WithdrawTxt string
@@ -794,6 +801,13 @@ func (s *Server) handleAdminBreakDetail(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	s.renderCardPage(w, r, http.StatusOK, c, r.URL.Query().Get("confirm"), "", "", "")
+}
+
+// renderCardPage draws a card's page. confirm is the action being confirmed
+// ("replace", "withdraw" or "move"); app and page are the move's choices so
+// far, and warning says why a move was refused.
+func (s *Server) renderCardPage(w http.ResponseWriter, r *http.Request, status int, c store.BreakGlassCode, confirm, app, page, warning string) {
 	ctx := r.Context()
 	events, err := s.store.ListBreakGlassEvents(ctx, c.ID, 100, 0)
 	if err != nil {
@@ -869,14 +883,20 @@ func (s *Server) handleAdminBreakDetail(w http.ResponseWriter, r *http.Request) 
 		v.UsesLine = capFirst(countWords(uses, "use", "uses")) + " in the last 30 days"
 	}
 	if v.Active {
-		switch r.URL.Query().Get("confirm") {
+		switch confirm {
 		case "replace":
 			v.Confirm = "replace"
 		case "withdraw":
 			v.Confirm = "withdraw"
 		}
 	}
-	s.renderAdmin(w, r, http.StatusOK, "admin_code_detail", adminData{Title: c.Label, CardPage: v})
+	if v.Active && c.App == "" && s.rolesOn() {
+		v.Move = s.cardMoveView(ctx, c, app, page)
+		if confirm == "move" {
+			v.Confirm = "move"
+		}
+	}
+	s.renderAdmin(w, r, status, "admin_code_detail", adminData{Title: c.Label, CardPage: v, Warning: warning})
 }
 
 // handleAdminBreakDesign gives a card another design.

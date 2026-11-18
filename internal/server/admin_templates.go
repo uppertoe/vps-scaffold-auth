@@ -326,6 +326,7 @@ var adminActionLabels = map[string]string{
 	store.AdminActionBreakCreate:          "Card created",
 	store.AdminActionBreakRevoke:          "Card withdrawn",
 	store.AdminActionBreakRemint:          "Card replaced",
+	store.AdminActionBreakMove:            "Card moved to an app",
 	store.AdminActionCodeBranding:         "Card design changed",
 	store.AdminActionCardDesign:           "Card given another design",
 	store.AdminActionDesignCreate:         "Card design created",
