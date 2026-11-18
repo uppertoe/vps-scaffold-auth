@@ -134,6 +134,8 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	if len(cfg.OpenRegistrationHosts) > 0 {
 		log.Printf("authz: guest sign-in open for %s: an OTP-verified address outside the allow-list becomes a guest, admitted only by guards that set guests=allow (protected_open).", strings.Join(cfg.OpenRegistrationHosts, ", "))
 	}
+	s.logDomainGroupReads(context.Background())
+	s.clearStaleReaderApprovals(context.Background())
 	s.handler = s.routes()
 	return s, nil
 }

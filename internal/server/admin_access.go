@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
@@ -54,6 +55,11 @@ type accessView struct {
 	SignInsShown         int
 	// Reads of group members by apps over the period (members_api.go).
 	MemberReads []memberReadView
+	// Apps the member-readers file lists without a usable token, whose reads
+	// the gateway refuses (config.UnusableMemberReader).
+	UnusableReaders []unusableReaderView
+	// Pairs from the readers file, waiting for or holding an approval.
+	ReaderApprovals []readerApprovalView
 	// Links that keep the other filters: everything, and refused only.
 	AllLink, ProblemsLink string
 	Filtered              bool
@@ -105,6 +111,16 @@ type accessUseView struct {
 type memberReadView struct {
 	App, Group, Source, Last string
 	Reads                    int
+}
+
+// msgDomainGroupRead is the Access page's problem for a reader listed for a
+// domain group.
+const msgDomainGroupRead = "This is a domain group, which has no member list to read."
+
+// unusableReaderView is a member read the gateway refuses: an app listed
+// without a usable token, or one listed for a domain group.
+type unusableReaderView struct {
+	App, Groups, TokenEnv, Problem string
 }
 
 // accessPersonView is one person's use of every site over the period.
@@ -198,6 +214,19 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, m := range reads {
 		v.MemberReads = append(v.MemberReads, memberReadView{App: m.App, Group: m.Group, Source: m.Source, Last: s.stampMin(m.Last), Reads: m.Reads})
+	}
+	for _, u := range s.cfg.UnusableMemberReaders {
+		v.UnusableReaders = append(v.UnusableReaders, unusableReaderView{App: u.App, Groups: strings.Join(u.Groups, ", "), TokenEnv: u.TokenEnv, Problem: u.Problem})
+	}
+	if v.ReaderApprovals, err = s.readerApprovalViews(r.Context()); err != nil {
+		s.adminError(w, r)
+		return
+	}
+	domainReads := s.domainGroupReads(r.Context())
+	for _, m := range s.members.readers {
+		for _, g := range domainReads[m.app] {
+			v.UnusableReaders = append(v.UnusableReaders, unusableReaderView{App: m.app, Groups: g, TokenEnv: config.MemberReaderTokenEnv(m.app), Problem: msgDomainGroupRead})
+		}
 	}
 	v.SignIns = s.foldSignIns(events)
 	// Events older than the scan were not read, so the list is incomplete.

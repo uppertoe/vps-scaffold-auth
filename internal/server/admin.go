@@ -54,6 +54,8 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/groups/{name}/includes/delete", s.handleAdminRemoveInclude)
 	mux.HandleFunc("POST /admin/groups/{name}/members/delete", s.handleAdminRemoveMember)
 	mux.HandleFunc("GET /admin/access", s.handleAdminAccess)
+	mux.HandleFunc("POST /admin/member-readers/approve", s.handleAdminApproveReader)
+	mux.HandleFunc("POST /admin/member-readers/withdraw", s.handleAdminWithdrawReader)
 	mux.HandleFunc("GET /admin/audit", s.handleAdminAudit)
 	mux.HandleFunc("GET /admin/break", s.handleAdminBreakList)
 	mux.HandleFunc("POST /admin/break", s.handleAdminBreakCreate)
@@ -944,6 +946,13 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	name := normalizeGroupName(r.PathValue("name"))
+	// The group's approvals for apps to read its members go with it (in
+	// DeleteGroup's transaction); note them first, to audit each.
+	approvals, err := s.store.ListMemberReaderApprovals(r.Context())
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
 	if err := s.store.DeleteGroup(r.Context(), name); errors.Is(err, store.ErrGroupHoldsRoles) {
 		n, err := s.store.GroupRoleCount(r.Context(), name)
 		if err != nil {
@@ -966,6 +975,11 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 	}
 	s.markGroupsChanged(s.now())
 	s.auditAdmin(r, store.AdminActionGroupDelete, name, "")
+	for _, a := range approvals {
+		if a.Group == name {
+			s.auditAdmin(r, store.AdminActionMemberReaderWithdraw, a.App, a.Group)
+		}
+	}
 	s.redirectDone(w, r, "/admin/groups", "group-deleted", "")
 }
 

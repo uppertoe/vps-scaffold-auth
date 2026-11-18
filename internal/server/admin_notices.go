@@ -88,6 +88,9 @@ func (s *Server) takeNotice(w http.ResponseWriter, r *http.Request) (notice, war
 		return "", ""
 	}
 	s.clearNotice(w)
+	if n, ok := readerNotice(ck.Value); ok {
+		return n, ""
+	}
 	return adminNotices[ck.Value], adminWarnings[ck.Value]
 }
 

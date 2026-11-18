@@ -351,6 +351,9 @@ for the annotated list. Key ones:
 | `TOTP_ENABLED` | Optional admin TOTP (off by default) |
 | `PASSKEYS_ENABLED` | Offer passkey sign-in on phones (off by default); see [Passkeys](#passkeys-optional) |
 | `DISPLAY_TIMEZONE` | IANA name for admin-UI timestamps (e.g. `Australia/Melbourne`); empty = UTC |
+| `MEMBER_READERS_FILE` | The scaffold-rendered list of the groups each app may read (`.generated/caddy/member-readers.tsv`, mounted read-only at `/etc/vps-auth/member-readers.tsv`); see [Group members for apps](#group-members-for-apps) |
+| `MEMBER_READERS` | The same list written as `app=group,group` entries, for a deployment without the renderer; used together with the file |
+| `MEMBER_READER_TOKEN_<APP>` | Each reading app's own bearer token, from `openssl rand -hex 32` |
 | `BREAKGLASS_REFUSED_GROUPS` | Groups an app reads as its own role (space or comma separated); never a card's target or a guest's membership. Added to those learned from the route manifests |
 | `DOMAIN` | The server domain (provided by the server `.env`) |
 
@@ -556,14 +559,97 @@ work an app does outside a request, such as a weekly email to a group, the
 gateway can tell the app who is in the group, so membership is kept in the
 gateway and nowhere else.
 
+In a scaffold server repo, an app declares the groups it reads with a
+marker in its Caddy snippet, with the groups separated by spaces or commas
+before ` -- ` and the reason after it. The route renderer writes every app's
+groups to `.generated/caddy/member-readers.tsv`:
+
 ```
-MEMBER_READERS=teaching-cases=teaching_cases_coordinators,rch-consultants
+# scaffold-members: teaching_cases_coordinators, rch-consultants -- weekly digest to the coordinators
+```
+
+Mount that file read-only at `/etc/vps-auth/member-readers.tsv` and set
+`MEMBER_READERS_FILE` to that path, so the group names are written once, in
+the snippet. The only per-app setting left is the app's token, which goes in
+the gateway's environment:
+
+```
+MEMBER_READERS_FILE=/etc/vps-auth/member-readers.tsv
 MEMBER_READER_TOKEN_TEACHING_CASES=<openssl rand -hex 32>
 ```
 
-Each app has its own token (32 or more characters, never shared between
-apps) and may read only the groups listed for it. The base roles (`admin`,
-`user`, `guest`) can never be listed.
+The file proposes which groups each app reads, and an administrator approves
+each app and group on the Access log before the gateway serves it. Under "Apps
+that read group members", each row from the file is listed as waiting for
+approval, with an Approve button, or as approved, with a Withdraw approval
+button. An approval or a withdrawal takes effect at the app's next read. The
+gateway emails the other administrators about each approval and withdrawal,
+and records both in the admin log. Until a pair is approved, the app's reads
+of that group get the same 403 as a group it may not read, and are not
+recorded. An approval is for a group that exists: the Access log shows "This
+group does not exist yet." for a group that has not been created, and deleting
+a group deletes its approvals. When a row leaves the file, the scaffold's
+deploy recreates the gateway, because a mounted file has changed, and the
+gateway stops serving the row from then on. At start-up the gateway clears the
+approval of every row that a fully read file no longer lists, records each in
+the admin log, and emails the other administrators, so a row that is added
+again needs approval again. The gateway also clears the approvals of an app in
+`MEMBER_READERS`, which decides that app's groups. It keeps the approvals when
+the file cannot be read, and while an app the file still lists has an
+unusable token. The file can therefore narrow an app's access on its
+own, but never widen it.
+
+The file holds one `app<TAB>group` row per line, and the gateway skips blank
+lines and lines starting with `#`. The gateway also accepts `MEMBER_READERS`
+(whitespace-separated `app=group,group` entries), for a deployment without
+the renderer. When both are set, the gateway uses every app from either. For
+an app named in both, `MEMBER_READERS` decides its groups, because the
+operator reviewed that entry, and the gateway ignores the file's rows for that
+app. An app in `MEMBER_READERS` needs no approval on the Access log. A group name in either place is a gateway group name: lower-case letters,
+digits, `-` and `_` (`^[a-z0-9_-]+$` once lower-cased), with no dots.
+
+Each app has its own token in `MEMBER_READER_TOKEN_<APP>`, with the app name
+in capitals and `-` written as `_`. The token must be 32 or more characters
+with more than eight different characters, must not be shared with another
+app, and must not be the same as any other secret the gateway holds, so
+generate it with `openssl rand -hex 32`. An app may read only the groups
+listed for it, and the base roles (`admin`, `user`, `guest`, in any case) can
+never be listed. A domain group admits everyone at its domains and has no
+member list, so the gateway refuses a read of one with a 409 rather than
+answering with nobody. The gateway checks a group's kind at every read,
+because group kinds are kept in the gateway's database rather than its
+settings, and lists an app named for a domain group on the Access log.
+
+The gateway refuses to start when `MEMBER_READERS` itself is wrong, as it
+does for any other setting. A problem with the file never stops the gateway,
+because a gateway that will not start takes sign-in away from every app on the
+server. The gateway reads the file once at start-up and treats problems with
+it as follows:
+
+- If the file is missing or cannot be read, the gateway logs an error and
+  serves only the apps in `MEMBER_READERS`.
+- If a row is malformed, names a base role, or uses a name the gateway does
+  not accept, the gateway logs an error and skips that row.
+- If an app in the file has no token, a token shorter than 32 characters, or
+  a token another app also uses, the gateway logs an error naming the app and
+  the variable its token belongs in. The gateway refuses that app's reads as
+  an unknown token, and the Access log lists the app under "Apps that read
+  group members" until the token is set and the gateway has been recreated.
+- If an app's token, from the file or from `MEMBER_READERS`, has eight or
+  fewer different characters or is the same as another of the gateway's
+  secrets, the gateway treats the app in the same way. This check never stops
+  the gateway, so an existing deployment with a weak token keeps running.
+- If an app is listed in both places and the file names groups that
+  `MEMBER_READERS` does not, the gateway logs an error naming those groups,
+  refuses reads of them, and lists the app on the Access log.
+- If the readers come only from the file and `MEMBERS_LISTEN_ADDR` is
+  malformed, or its name resolves to none of the gateway's own addresses, the
+  gateway logs an error and runs without the members listener. When
+  `MEMBER_READERS` lists an app, the same problems stop the gateway, as they
+  always have.
+- If an app in the file or in `MEMBER_READERS` is listed for a domain group,
+  the gateway logs an error at start-up, refuses each read of that group with
+  a 409, and lists the app and group on the Access log.
 
 The endpoint is served on its own port, `MEMBERS_LISTEN_ADDR` (default
 `auth-members:8081`), which Caddy never proxies. An app reaches it at
@@ -576,8 +662,16 @@ carries the alias `auth-members`. At start-up it resolves the host in
 members listener to those alone, and has the public listener (`LISTEN_ADDR`)
 close any connection that arrives on one of them. An app on its members
 network therefore reaches the members endpoint and nothing else of the
-gateway's, and Caddy's network cannot reach the members endpoint at all. The
-gateway refuses to start if the name resolves to none of its own addresses.
+gateway's, and Caddy's network cannot reach the members endpoint at all.
+At every start the gateway resolves that name, whatever its settings, and the
+public listener refuses connections on any of the gateway's own addresses
+under it, so an app on a members network never reaches the public listener,
+even before the readers are configured. If the name resolves to every one of
+the gateway's addresses, it is also the name Caddy uses (a leftover
+`MEMBERS_LISTEN_ADDR=auth:8081`, say), so the gateway logs an error and does
+neither, rather than refuse Caddy; give the gateway a name of its own on the
+members networks, such as `auth-members`. The members listener answers an
+unknown token with 401.
 Never reach the endpoint over `auth_proxy`, which the gateway shares with
 Caddy, and never publish the port (no `ports:` entry in compose). The gateway refuses to start if that port is the one in
 `LISTEN_ADDR`, answers only callers on a loopback or private address (every
@@ -592,6 +686,7 @@ Authorization: Bearer <token>
 401 no token, or a token the gateway does not know
 403 a group this app may not read, or a group that does not exist (the same answer),
     or a caller outside the private network
+409 a domain group, which has no member list: {"error": "domain group has no member list"}
 405 any method but GET
 429 more than 120 reads a minute from one app
 ```

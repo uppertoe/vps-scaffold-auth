@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
+	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
 const (
@@ -184,5 +188,355 @@ func TestMembersReadsAreAudited(t *testing.T) {
 	page := c.get("/admin/access", nil).Body.String()
 	if !strings.Contains(page, "Apps that read group members") || !strings.Contains(page, `<td class="num" data-label="Reads">3</td>`) || !strings.Contains(page, `<code class="mono">172.18.0.5</code>`) {
 		t.Error("the access log does not show the reads")
+	}
+}
+
+// Access configured by the scaffold-rendered file (MEMBER_READERS_FILE): an
+// app listed there with its token reads its groups; an app listed without a
+// token is refused as an unknown token, and the Access page says it has no
+// usable token.
+func TestMembersEndpointFromTheReadersFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "member-readers.tsv")
+	if err := os.WriteFile(path, []byte("# from the scaffold-members markers\ndigest\tcoordinators\ndigest\trch-staff\nnotoken\treviewers\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range map[string]string{
+		"AUTH_PUBLIC_URL": "https://auth.example.com", "DOMAIN": "example.com",
+		"ALLOWED_EMAIL_DOMAINS": "example.com", "ADMIN_EMAILS": "admin@example.com",
+		"SESSION_SECRET": "0123456789abcdef0123456789abcdef", "EMAIL_BACKEND": "log",
+		"COOKIE_INSECURE": "true", "MEMBER_READERS": "",
+		"MEMBER_READERS_FILE": path, "MEMBER_READER_TOKEN_DIGEST": digestToken,
+	} {
+		t.Setenv(k, v)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _ := testServerWith(t, func(c *config.Config) {
+		c.MemberReaders, c.UnusableMemberReaders = loaded.MemberReaders, loaded.UnusableMemberReaders
+	})
+	ctx := context.Background()
+	for _, g := range []string{"coordinators", "reviewers"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := srv.store.CreateGroupOfKind(ctx, "rch-staff", "", store.GroupKindDomain); err != nil {
+		t.Fatal(err)
+	}
+	srv.store.AddGroupMember(ctx, "coordinators", "amy@example.com")
+	srv.store.AddGroupMember(ctx, "reviewers", "cal@example.com")
+	// The file proposes; an administrator approves (see
+	// TestMembersFileReadsNeedApproval for the approval itself).
+	for _, g := range []string{"coordinators", "rch-staff"} {
+		srv.store.ApproveMemberReader(ctx, "digest", g, "admin@example.com", srv.now())
+	}
+	h := srv.MembersHandler()
+	if rec := membersGet(h, "/v1/groups/rch-staff/members", digestToken, nil); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "domain group has no member list") {
+		t.Errorf("digest reading a domain group = %d %s", rec.Code, rec.Body)
+	}
+
+	if rec := membersGet(h, "/v1/groups/coordinators/members", digestToken, nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "amy@example.com") {
+		t.Fatalf("digest reading coordinators = %d %s", rec.Code, rec.Body)
+	}
+	if rec := membersGet(h, "/v1/groups/reviewers/members", digestToken, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("digest reading reviewers = %d", rec.Code)
+	}
+	// Whatever the app without a token sends, the gateway does not know it.
+	if rec := membersGet(h, "/v1/groups/reviewers/members", "", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no token = %d", rec.Code)
+	}
+
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, srv.sender.(*captureSender), "admin@example.com", nil)
+	page := c.get("/admin/access", nil).Body.String()
+	if !strings.Contains(page, "Apps that read group members") || !strings.Contains(page, `<code class="mono">notoken</code>`) ||
+		!strings.Contains(page, "MEMBER_READER_TOKEN_NOTOKEN") || !strings.Contains(page, "The gateway has no token for this app.") ||
+		!strings.Contains(page, `<code class="mono">rch-staff</code>`) || !strings.Contains(page, "This is a domain group, which has no member list to read.") {
+		t.Error("the Access page does not show the app without a token")
+	}
+}
+
+// A domain group has no member list, so a read of one is refused with a
+// clear error rather than answered with nobody. The kind is checked at every
+// read, so a group created as a domain group after start-up is refused too.
+func TestMembersEndpointRefusesDomainGroups(t *testing.T) {
+	srv, h := membersServer(t)
+	ctx := context.Background()
+	// "ghost" is listed for digest but does not exist yet.
+	if rec := membersGet(h, "/v1/groups/ghost/members", digestToken, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("missing group = %d", rec.Code)
+	}
+	if err := srv.store.CreateGroupOfKind(ctx, "ghost", "", store.GroupKindDomain); err != nil {
+		t.Fatal(err)
+	}
+	rec := membersGet(h, "/v1/groups/ghost/members", digestToken, nil)
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusConflict || body["error"] != "domain group has no member list" {
+		t.Fatalf("domain group = %d %s", rec.Code, rec.Body)
+	}
+	// An app not listed for the group learns nothing of its kind.
+	if rec := membersGet(h, "/v1/groups/ghost/members", otherToken, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("other reading the domain group = %d", rec.Code)
+	}
+	// The read is refused, so it is not recorded.
+	if reads, err := srv.store.SummariseMemberReads(ctx, srv.now().Add(-time.Hour)); err != nil || len(reads) != 0 {
+		t.Errorf("reads = %+v, %v", reads, err)
+	}
+}
+
+// fileReadersServer is a test server whose reader "digest" comes from the
+// readers file (coordinators and leads), with two administrators.
+func fileReadersServer(t *testing.T) (*Server, *captureSender) {
+	t.Helper()
+	srv, sender := testServerWith(t, func(c *config.Config) {
+		c.AdminEmails = []string{"admin@example.com", "boss@example.com"}
+		c.MemberReaders = []config.MemberReader{
+			{App: "digest", Token: digestToken, Groups: []string{"coordinators", "leads"}, FromFile: true},
+			{App: "other", Token: otherToken, Groups: []string{"reviewers"}},
+		}
+	})
+	ctx := context.Background()
+	for _, g := range []string{"coordinators", "leads", "reviewers"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.store.AddGroupMember(ctx, "coordinators", "amy@example.com")
+	srv.store.AddGroupMember(ctx, "reviewers", "cal@example.com")
+	return srv, sender
+}
+
+// A pair from the readers file is served only once an administrator has
+// approved it on the Access page, and not once the approval is withdrawn.
+// Before approval the app gets the answer a group it may not read gets, and
+// nothing is recorded. An app in MEMBER_READERS needs no approval.
+func TestMembersFileReadsNeedApproval(t *testing.T) {
+	srv, sender := fileReadersServer(t)
+	ctx := context.Background()
+	h := srv.MembersHandler()
+
+	waiting := membersGet(h, "/v1/groups/coordinators/members", digestToken, nil)
+	notListed := membersGet(h, "/v1/groups/reviewers/members", digestToken, nil)
+	if waiting.Code != http.StatusForbidden || waiting.Body.String() != notListed.Body.String() || strings.Contains(waiting.Body.String(), "amy@") {
+		t.Fatalf("before approval = %d %s", waiting.Code, waiting.Body)
+	}
+	if rec := membersGet(h, "/v1/groups/reviewers/members", otherToken, nil); rec.Code != http.StatusOK {
+		t.Fatalf("the env reader = %d", rec.Code)
+	}
+
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	page := c.get("/admin/access", nil).Body.String()
+	if !strings.Contains(page, "Waiting for an administrator&#39;s approval.") || !strings.Contains(page, `action="/admin/member-readers/approve"`) ||
+		!strings.Contains(page, "Approving lets digest read the email addresses of everyone in coordinators.") {
+		t.Fatal("the Access page does not offer the approval")
+	}
+	csrf := adminCSRF(t, c, "/admin/access")
+	// Only a pair the file lists can be approved.
+	c.postForm("/admin/member-readers/approve", url.Values{"csrf": {csrf}, "app": {"digest"}, "group": {"reviewers"}})
+	c.postForm("/admin/member-readers/approve", url.Values{"csrf": {csrf}, "app": {"other"}, "group": {"reviewers"}})
+	if list, _ := srv.store.ListMemberReaderApprovals(ctx); len(list) != 0 {
+		t.Fatalf("approved a pair the file does not list: %+v", list)
+	}
+
+	rec := c.postForm("/admin/member-readers/approve", url.Values{"csrf": {csrf}, "app": {"digest"}, "group": {"coordinators"}})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("approve = %d", rec.Code)
+	}
+	page = c.get("/admin/access", nil).Body.String()
+	if !strings.Contains(page, "digest can now read the members of coordinators.") || !strings.Contains(page, "Approved by admin@example.com on ") ||
+		!strings.Contains(page, "Withdraw approval") {
+		t.Error("the Access page does not show the approval")
+	}
+	if rec := membersGet(h, "/v1/groups/coordinators/members", digestToken, nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "amy@example.com") {
+		t.Fatalf("after approval = %d %s", rec.Code, rec.Body)
+	}
+	// The approval covers the pair, not the app's other groups.
+	if rec := membersGet(h, "/v1/groups/leads/members", digestToken, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("an unapproved group = %d", rec.Code)
+	}
+
+	rec = c.postForm("/admin/member-readers/withdraw", url.Values{"csrf": {csrf}, "app": {"digest"}, "group": {"coordinators"}})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("withdraw = %d", rec.Code)
+	}
+	if page := c.get("/admin/access", nil).Body.String(); !strings.Contains(page, "digest can no longer read the members of coordinators.") {
+		t.Error("no notice after withdrawing")
+	}
+	if rec := membersGet(h, "/v1/groups/coordinators/members", digestToken, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("after withdrawal = %d", rec.Code)
+	}
+
+	// Only the one approved read was recorded.
+	reads, _ := srv.store.SummariseMemberReads(ctx, srv.now().Add(-time.Hour))
+	got := 0
+	for _, r := range reads {
+		if r.App == "digest" {
+			got += r.Reads
+		}
+	}
+	if got != 1 {
+		t.Errorf("digest reads recorded = %d, want 1", got)
+	}
+
+	// Both changes are in the admin log, with the actor, and emailed to the
+	// other administrator only.
+	events, _ := srv.store.ListAdminEvents(ctx, 10, 0)
+	seen := map[string]bool{}
+	for _, e := range events {
+		if e.Target == "digest" && e.Detail == "coordinators" && e.Actor == "admin@example.com" {
+			seen[e.Action] = true
+		}
+	}
+	if !seen[store.AdminActionMemberReaderApprove] || !seen[store.AdminActionMemberReaderWithdraw] {
+		t.Errorf("admin events = %+v", events)
+	}
+	mails := mailWithSubject(sender, "Access to the members of coordinators has changed.")
+	if len(mails) != 2 {
+		t.Fatalf("emails = %d", len(mails))
+	}
+	for _, m := range mails {
+		if m.To != "boss@example.com" || !strings.Contains(m.Text, "admin@example.com made these changes") {
+			t.Errorf("email to %s: %q", m.To, m.Text)
+		}
+	}
+	if !strings.Contains(mails[0].Text+mails[1].Text, "- Approved digest to read the members of coordinators") ||
+		!strings.Contains(mails[0].Text+mails[1].Text, "- Withdrew the approval for digest to read the members of coordinators") {
+		t.Errorf("email lines: %q / %q", mails[0].Text, mails[1].Text)
+	}
+}
+
+// Someone who is not an administrator cannot approve.
+func TestMemberReaderApprovalNeedsAnAdministrator(t *testing.T) {
+	srv, sender := fileReadersServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "amy@example.com", nil)
+	rec := c.postForm("/admin/member-readers/approve", url.Values{"app": {"digest"}, "group": {"coordinators"}})
+	if rec.Code == http.StatusFound && strings.HasPrefix(rec.Header().Get("Location"), "/admin/access") {
+		t.Fatalf("a member of staff reached the handler: %d", rec.Code)
+	}
+	if ok, _ := srv.store.MemberReaderApproved(context.Background(), "digest", "coordinators"); ok {
+		t.Fatal("a member of staff approved a reader")
+	}
+}
+
+// At start-up the gateway clears an approval only when the readers file was
+// read whole and no longer lists the pair, so a row removed and added again
+// needs approval again. The clearing is in the admin log and emailed once.
+// An unreadable file, an app whose token is unusable for now, and an app
+// moved into MEMBER_READERS keep their approvals.
+func TestStaleReaderApprovalsClearedAtStart(t *testing.T) {
+	srv, sender := fileReadersServer(t)
+	ctx := context.Background()
+	for _, p := range [][2]string{{"digest", "coordinators"}, {"digest", "leads"}, {"weak", "leads"}, {"moved", "leads"}} {
+		srv.store.ApproveMemberReader(ctx, p[0], p[1], "admin@example.com", srv.now())
+	}
+	approved := func() []string {
+		var out []string
+		list, _ := srv.store.ListMemberReaderApprovals(ctx)
+		for _, a := range list {
+			out = append(out, a.App+":"+a.Group)
+		}
+		return out
+	}
+	restart := func(read bool, pairs map[string][]string) *Server {
+		cfg := *srv.cfg
+		cfg.MemberReaders = []config.MemberReader{{App: "digest", Token: digestToken, Groups: pairs["digest"], FromFile: true}}
+		cfg.MemberReadersFileRead, cfg.MemberReadersFilePairs = read, pairs
+		cfg.MemberReadersEnvApps = []string{"moved"}
+		next, err := New(&cfg, srv.store, srv.sender)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return next
+	}
+	all := "digest:coordinators digest:leads moved:leads weak:leads"
+
+	// The file could not be read: nothing is cleared.
+	restart(false, map[string][]string{})
+	if got := strings.Join(approved(), " "); got != all {
+		t.Fatalf("after an unreadable file = %s", got)
+	}
+
+	// The coordinators row leaves the file. "weak" is still listed (its
+	// token is unusable, so it is not a reader) and keeps its approval.
+	// "moved" is now in MEMBER_READERS, which decides its groups, so its
+	// file approval is cleared and cannot be served if it moves back.
+	next := restart(true, map[string][]string{"digest": {"leads"}, "weak": {"leads"}, "moved": {"leads"}})
+	if got := strings.Join(approved(), " "); got != "digest:leads weak:leads" {
+		t.Fatalf("approvals = %s", got)
+	}
+	if rec := membersGet(next.MembersHandler(), "/v1/groups/coordinators/members", digestToken, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("a row no longer in the file = %d", rec.Code)
+	}
+	events, _ := srv.store.ListAdminEvents(ctx, 10, 0)
+	cleared := map[string]bool{}
+	for _, e := range events {
+		if e.Action == store.AdminActionMemberReaderClear && e.Actor == "gateway" {
+			cleared[e.Target+":"+e.Detail] = true
+		}
+	}
+	if len(events) != 2 || !cleared["digest:coordinators"] || !cleared["moved:leads"] {
+		t.Errorf("admin events = %+v", events)
+	}
+	mails := mailWithSubject(sender, "Approvals to read group members have been cleared.")
+	if len(mails) != 2 { // one each to the two administrators
+		t.Fatalf("emails = %d", len(mails))
+	}
+	if !strings.Contains(mails[0].Text, "The gateway made these changes") ||
+		!strings.Contains(mails[0].Text, "- Cleared the approval for digest to read the members of coordinators, which the readers file no longer lists") ||
+		!strings.Contains(mails[0].Text, "- Cleared the approval for moved to read the members of leads, because MEMBER_READERS now decides its groups") {
+		t.Errorf("email = %q", mails[0].Text)
+	}
+
+	// The row comes back: it needs approval again.
+	again := restart(true, map[string][]string{"digest": {"leads", "coordinators"}, "weak": {"leads"}})
+	if rec := membersGet(again.MembersHandler(), "/v1/groups/coordinators/members", digestToken, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("a re-added row = %d", rec.Code)
+	}
+}
+
+// An approval is for a group that exists: a pair whose group does not exist
+// shows that, offers no Approve button, and the handler refuses it. Deleting
+// a group deletes its approvals, and each is audited.
+func TestReaderApprovalNeedsAnExistingGroup(t *testing.T) {
+	srv, _ := testServerWith(t, func(c *config.Config) {
+		c.MemberReaders = []config.MemberReader{{App: "digest", Token: digestToken, Groups: []string{"later", "leads"}, FromFile: true}}
+	})
+	ctx := context.Background()
+	srv.store.CreateGroup(ctx, "leads", "")
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, srv.sender.(*captureSender), "admin@example.com", nil)
+	page := c.get("/admin/access", nil).Body.String()
+	if !strings.Contains(page, "This group does not exist yet.") || strings.Contains(page, "Approving lets digest read the email addresses of everyone in later.") {
+		t.Fatal("the Access page offers to approve a group that does not exist")
+	}
+	csrf := adminCSRF(t, c, "/admin/access")
+	c.postForm("/admin/member-readers/approve", url.Values{"csrf": {csrf}, "app": {"digest"}, "group": {"later"}})
+	if ok, _ := srv.store.MemberReaderApproved(ctx, "digest", "later"); ok {
+		t.Fatal("approved a group that does not exist")
+	}
+
+	c.postForm("/admin/member-readers/approve", url.Values{"csrf": {csrf}, "app": {"digest"}, "group": {"leads"}})
+	if ok, _ := srv.store.MemberReaderApproved(ctx, "digest", "leads"); !ok {
+		t.Fatal("the approval of an existing group was refused")
+	}
+	c.postForm("/admin/groups/leads/delete", url.Values{"csrf": {csrf}})
+	if ok, _ := srv.store.MemberReaderApproved(ctx, "digest", "leads"); ok {
+		t.Fatal("the approval outlived its group")
+	}
+	srv.store.CreateGroup(ctx, "leads", "")
+	if rec := membersGet(srv.MembersHandler(), "/v1/groups/leads/members", digestToken, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("a recreated group = %d", rec.Code)
+	}
+	events, _ := srv.store.ListAdminEvents(ctx, 10, 0)
+	withdrawn := false
+	for _, e := range events {
+		withdrawn = withdrawn || (e.Action == store.AdminActionMemberReaderWithdraw && e.Target == "digest" && e.Detail == "leads" && e.Actor == "admin@example.com")
+	}
+	if !withdrawn {
+		t.Errorf("the deletion of the approval is not audited: %+v", events)
 	}
 }
