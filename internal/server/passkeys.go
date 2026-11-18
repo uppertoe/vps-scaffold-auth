@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -79,6 +80,14 @@ import (
 //   - The cookie only steers what the browser is asked for and which row the
 //     passkeys page calls "This computer". Everything it names is checked as
 //     any other sign-in is, so a planted or stale cookie gains nothing.
+//   - No computer on a network in NETWORK_RANGES (the hospital's) may add a
+//     passkey: such a computer is shared, whatever the person says of it. The
+//     client address is the one the gateway already trusts (clientIP, the
+//     last X-Forwarded-For entry, which Caddy writes), and it is checked both
+//     when the challenge is minted and when the registration is posted, so a
+//     challenge minted off the network cannot be completed on it, nor the
+//     reverse (passkeyBlockedNetwork). Signing in there with a passkey the
+//     computer already holds is unchanged, and so is every phone.
 //   - The other rules hold on a computer as on a phone: the same host, the
 //     same recent sign-in and second factor to add one, the same admin grade,
 //     the same sessions that name their passkey, the same single-use
@@ -120,6 +129,9 @@ type passkeyPage struct {
 	// HeldHere marks a computer's passkeys page that already lists a passkey
 	// the computer holds, which offers no other.
 	HeldHere bool
+	// OnNetwork is the sentence a computer on a listed network is shown in
+	// place of the offer (passkeyBlockedNetwork).
+	OnNetwork string
 	// Allow lists, comma-separated, the passkeys a computer's sign-in may ask
 	// for: those passkeyHereCookie names. Empty, a computer is asked for none.
 	Allow string
@@ -269,6 +281,11 @@ func (s *Server) passkeyRegisterOptions(w http.ResponseWriter, r *http.Request, 
 // passkeyRegisterOptionsFor mints the challenge; confirmed marks one minted
 // just after an administrator's authenticator code.
 func (s *Server) passkeyRegisterOptionsFor(w http.ResponseWriter, r *http.Request, email string, confirmed bool) (*passkeyPage, error) {
+	if !isPhone(r) {
+		if _, blocked := s.passkeyBlockedNetwork(r); blocked {
+			return nil, errPasskeyOnNetwork
+		}
+	}
 	existing, err := s.store.ListPasskeys(r.Context(), email)
 	if err != nil {
 		return nil, err
@@ -451,6 +468,11 @@ func (s *Server) renderPasskeys(w http.ResponseWriter, r *http.Request, id *sess
 	// confirmed follows that choice, through the code confirmation.
 	addComputer := !phone && (confirmed || r.URL.Query().Get("add") == "computer")
 	pp := &passkeyPage{Phone: phone, Computer: !phone, Text: pkText}
+	if !phone {
+		if msg, blocked := s.passkeyBlockedNetwork(r); blocked {
+			pp.OnNetwork, addComputer = msg, false
+		}
+	}
 	if phone || addComputer {
 		switch {
 		case confirmed || s.mayAddPasskeyNow(id, role):
@@ -560,6 +582,20 @@ func (s *Server) handlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
 	if !s.mayAddPasskeyNow(id, role) && !(ch.Confirmed && role == authz.RoleAdmin) {
 		http.Redirect(w, r, s.loginURL(s.passkeysURL()), http.StatusFound)
 		return
+	}
+	// A computer's challenge is refused on a listed network, wherever it was
+	// minted.
+	if ch.Computer {
+		if msg, blocked := s.passkeyBlockedNetwork(r); blocked {
+			log.Printf("passkey registration for %s refused: a computer on a listed network", id.Email)
+			s.recordAuth(r, id.Email, store.AuthEventPasskeyAdd, store.AuthOutcomeDenied)
+			s.render(w, http.StatusForbidden, "message", pageData{
+				Title:    "Your passkey has not been added",
+				Message:  msg,
+				Redirect: s.passkeysURL(),
+			})
+			return
+		}
 	}
 
 	// Admin grade means the administrator passed the second factor to add
@@ -941,6 +977,28 @@ func (s *Server) ownPasskeyRows(r *http.Request, id *session.Identity, list []st
 		}
 	}
 	return rows
+}
+
+// errPasskeyOnNetwork refuses a computer's challenge on a listed network.
+var errPasskeyOnNetwork = errors.New("passkey: a computer on a listed network")
+
+// passkeyBlockedNetwork reports whether the request comes from a network in
+// NETWORK_RANGES, whose computers may not add a passkey, and the sentence
+// that says so. With no ranges set, nothing is blocked.
+func (s *Server) passkeyBlockedNetwork(r *http.Request) (string, bool) {
+	addr := clientAddr(r)
+	if !addr.IsValid() {
+		return "", false
+	}
+	addr = addr.Unmap()
+	for _, name := range s.networkNames() {
+		for _, p := range s.cfg.NetworkRanges[name] {
+			if p.Contains(addr) {
+				return fmt.Sprintf(msgPkComputerOnNetwork, s.networkLabel(name)), true
+			}
+		}
+	}
+	return "", false
 }
 
 // passkeysHere reads passkeyHereCookie: the credential IDs this device has

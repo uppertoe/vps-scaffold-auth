@@ -38,9 +38,12 @@
 <a class="btn" href="{{.ReauthURL}}">Add a passkey on this phone</a>
 <p class="sub" style="margin-top:12px">You will be asked to confirm your email before a passkey is added.</p>
 {{end}}
-{{else if and .Computer (or .AddComputer (not .HeldHere))}}
+{{else if and .Computer (or .OnNetwork .AddComputer (not .HeldHere))}}
 {{/* On a computer, passkey.js shows the offer once it knows the browser can
      keep a passkey on the computer, and otherwise says why it cannot. */}}
+{{if .OnNetwork}}
+<p class="sub">{{.OnNetwork}}</p>
+{{else}}
 <p class="sub" id="passkey-unavailable" hidden>{{.Text.Unavailable}}</p>
 <div id="passkey-computer-offer" hidden>
 {{if .AddComputer}}
@@ -64,6 +67,7 @@
 <a class="btn quiet" href="/passkeys?add=computer">{{.Text.Add}}</a>
 {{end}}
 </div>
+{{end}}
 {{end}}
 {{if .Computer}}<p class="sub" style="margin-top:16px">{{.Text.Lost}}</p>{{else}}<p class="sub" style="margin-top:16px">If you lose a phone, remove its passkey here. You can still sign in with an email code.</p>{{end}}
 {{end}}

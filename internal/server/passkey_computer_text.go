@@ -1,9 +1,8 @@
 package server
 
-// The strings added for passkeys on a person's own computer, 18 November
-// 2026. None of them has been approved yet: each is kept here, once, so that
-// the wording can be changed in one place. "Add a passkey on this computer"
-// is the owner's own wording.
+// The strings added for passkeys on a person's own computer, approved on 18
+// November 2026. Each is kept here, once. msgPkComputerOnNetwork, added
+// later the same day, awaits approval.
 
 // The passkeys page on a computer. The intro and the button are shown first;
 // the warning, the button again, and "Not now" once the person has chosen to
@@ -16,6 +15,12 @@ const (
 	msgPkComputerExists      = "This computer already has a passkey for your account."
 	msgPkComputerLost        = "If you lose a phone or computer, or stop using one, remove its passkey here. You can still sign in with an email code."
 )
+
+// A computer on a network in NETWORK_RANGES may not add a passkey. This is
+// shown in place of the offer and as the refusal; %s is the network as
+// NETWORK_RANGES names it ("RCH network"). The rule is the owner's, 18
+// November 2026; the wording awaits approval.
+const msgPkComputerOnNetwork = "A passkey cannot be added on a computer on the %s. You can add one on your own computer when it is not connected to that network."
 
 // The refusal of a passkey that the browser saved on another device, such as
 // a phone over Bluetooth or a QR code, when it was asked for one held by this
