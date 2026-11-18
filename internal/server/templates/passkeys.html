@@ -2,6 +2,7 @@
 {{define "content"}}
 <h1>Your passkeys</h1>
 {{with .Passkey}}
+{{if .Gone}}<div id="passkey-gone" hidden data-rpid="{{.RPID}}" data-gone="{{.Gone}}"></div>{{end}}
 {{if .Removed}}<div class="ok">The passkey has been removed.</div>{{end}}
 {{if .Rows}}
 <p class="sub">You can sign in with any of these passkeys instead of an email code.</p>

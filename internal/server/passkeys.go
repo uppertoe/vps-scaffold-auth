@@ -80,6 +80,12 @@ import (
 //     as it was. A synced
 //     passkey that happens to be on the computer may work; nothing fetches
 //     one from a phone.
+//   - A passkey the cookie names that no account holds any longer, removed
+//     on this device, on another or by an administrator, is dropped from the
+//     cookie at the next sign-in or passkeys page, and the browser is asked
+//     to forget it (dropPasskeysGone, signalUnknownCredential where the
+//     browser has it). One that another person on the computer still holds
+//     is kept.
 //   - The cookie only steers what the browser is asked for and which row the
 //     passkeys page calls "This computer". Everything it names is checked as
 //     any other sign-in is, so a planted or stale cookie gains nothing.
@@ -156,6 +162,11 @@ type passkeyPage struct {
 	// Unknown is a credential ID the gateway does not hold, posted by the
 	// phone in a failed sign-in; passkey.js asks the phone to forget it.
 	Unknown string
+	// Gone lists, comma-separated, the passkeys passkeyHereCookie names that
+	// the gateway no longer holds (removed here, on another device or by an
+	// administrator); passkey.js asks the browser to forget each of them
+	// (dropPasskeysGone).
+	Gone string
 }
 
 type passkeyRow struct {
@@ -505,6 +516,8 @@ func (s *Server) renderPasskeys(w http.ResponseWriter, r *http.Request, id *sess
 	}
 	pp.Removed = r.URL.Query().Get("removed") == "1"
 	pp.Next = s.passkeysURL()
+	pp.RPID = s.relyingParty().ID
+	pp.Gone = strings.Join(s.dropPasskeysGone(w, r, ""), ",")
 	s.render(w, http.StatusOK, "passkeys", pageData{Passkey: pp, CSRF: csrf, Identity: id.Email})
 }
 
@@ -865,18 +878,15 @@ func (s *Server) handlePasskeyRemove(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	held, _, err := s.store.GetPasskey(r.Context(), pid)
-	if err != nil {
-		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
-		return
-	}
+	// The removed passkey stays in passkeyHereCookie until the page this
+	// redirects to, which finds it gone, asks the browser to forget it and
+	// drops it from the list (dropPasskeysGone).
 	removed, err := s.store.DeletePasskey(r.Context(), id.Email, pid)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}
 	if removed {
-		s.forgetPasskeyHere(w, r, held.CredentialID)
 		// The sessions the passkey started end now, not at their renewal.
 		if err := s.endSessions(r.Context(), passkeyKey(pid), s.now()); err != nil {
 			log.Printf("end sessions of passkey %d: %v", pid, err)
@@ -1085,22 +1095,58 @@ func (s *Server) forgetPasskeyHere(w http.ResponseWriter, r *http.Request, credI
 // the gateway's (passkeyHereCookie), the page may ask for those; on any
 // other computer it asks for none, as before computers could hold one.
 func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, status int, data pageData) {
-	if s.cfg.PasskeysEnabled && !isPhone(r) {
+	if s.cfg.PasskeysEnabled {
 		unknown := ""
 		if data.Passkey != nil {
 			unknown = data.Passkey.Unknown
 		}
-		var allow []string
-		for _, c := range s.passkeysHere(r) {
-			if c != unknown {
-				allow = append(allow, c)
+		gone := s.dropPasskeysGone(w, r, unknown)
+		pp := &passkeyPage{Unknown: unknown, Gone: strings.Join(gone, ",")}
+		if !isPhone(r) {
+			dropped := map[string]bool{unknown: true}
+			for _, c := range gone {
+				dropped[c] = true
 			}
+			var allow []string
+			for _, c := range s.passkeysHere(r) {
+				if !dropped[c] {
+					allow = append(allow, c)
+				}
+			}
+			pp.Allow = strings.Join(allow, ",")
 		}
-		if len(allow) > 0 {
-			data.Passkey = &passkeyPage{Unknown: unknown, Allow: strings.Join(allow, ",")}
-		}
+		data.Passkey = pp
 	}
 	s.render(w, status, "login", data)
+}
+
+// dropPasskeysGone finds the passkeys passkeyHereCookie names that no
+// account holds any longer, drops them from the cookie, and returns them for
+// passkey.js to ask the browser to forget. An ID that another person on the
+// same computer still holds is kept: only a passkey the gateway has removed
+// is ever signalled. except is one already dropped and signalled by the
+// caller. A database error keeps the ID, since the check cannot be made.
+func (s *Server) dropPasskeysGone(w http.ResponseWriter, r *http.Request, except string) []string {
+	here := s.passkeysHere(r)
+	var live, gone []string
+	for _, c := range here {
+		id, _ := unb64(c)
+		_, found, err := s.store.PasskeyByCredentialID(r.Context(), id)
+		switch {
+		case c == except:
+		case err != nil:
+			log.Printf("passkey here check: %v", err)
+			live = append(live, c)
+		case found:
+			live = append(live, c)
+		default:
+			gone = append(gone, c)
+		}
+	}
+	if len(live) != len(here) {
+		s.setPasskeysHere(w, live)
+	}
+	return gone
 }
 
 // adminPasskeysHere lists, comma-separated, the passkeys of email's that this

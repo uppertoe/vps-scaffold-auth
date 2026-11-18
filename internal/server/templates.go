@@ -191,13 +191,13 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 		// Every rendering of the sign-in page carries a fresh passkey challenge,
 		// so the phone can offer a saved passkey as soon as the page opens.
 		if s.cfg.PasskeysEnabled {
-			unknown, allow := "", ""
+			unknown, allow, gone := "", "", ""
 			if data.Passkey != nil {
-				unknown, allow = data.Passkey.Unknown, data.Passkey.Allow
+				unknown, allow, gone = data.Passkey.Unknown, data.Passkey.Allow, data.Passkey.Gone
 			}
 			data.Passkey = s.passkeyLoginOptions(w)
 			if data.Passkey != nil {
-				data.Passkey.Unknown, data.Passkey.Allow = unknown, allow
+				data.Passkey.Unknown, data.Passkey.Allow, data.Passkey.Gone = unknown, allow, gone
 			}
 		}
 	}

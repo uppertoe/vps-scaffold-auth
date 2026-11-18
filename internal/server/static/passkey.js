@@ -60,12 +60,25 @@
     show(byId('passkey-error'));
   }
 
+  // A passkey the gateway does not hold: ask the browser to stop offering
+  // it. A browser without signalUnknownCredential is left as it is.
+  function forget(rpId, ids) {
+    if (!rpId || !window.PublicKeyCredential || !PublicKeyCredential.signalUnknownCredential) return;
+    ids.forEach(function (id) {
+      try {
+        PublicKeyCredential.signalUnknownCredential({ rpId: rpId, credentialId: id }).catch(function () {});
+      } catch (e) { /* nothing to do */ }
+    });
+  }
+  function list(v) { return (v || '').split(',').filter(Boolean); }
+
   // --- Signing in ---
   var login = byId('passkey-login');
-  // A passkey the gateway does not hold: ask the phone to stop offering it.
-  if (login && login.dataset.unknown && window.PublicKeyCredential && PublicKeyCredential.signalUnknownCredential) {
-    PublicKeyCredential.signalUnknownCredential({ rpId: login.dataset.rpid, credentialId: login.dataset.unknown }).catch(function () {});
-  }
+  // One posted in a failed sign-in, and any this device's list named that
+  // the gateway has since removed.
+  if (login) forget(login.dataset.rpid, list(login.dataset.unknown).concat(list(login.dataset.gone)));
+  var gone = byId('passkey-gone');
+  if (gone) forget(gone.dataset.rpid, list(gone.dataset.gone));
   // On a phone, any passkey, by the button or quietly in the email field. On
   // a computer, only one the page lists as held there, and only by the
   // button; any other computer keeps the emailed code.

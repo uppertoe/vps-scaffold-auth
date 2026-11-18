@@ -357,20 +357,70 @@ func TestComputerPasskeyRemoval(t *testing.T) {
 	if rec := b.postWith("/passkeys/"+strconv.FormatInt(pcID, 10)+"/remove", url.Values{"csrf": {csrf}}, computer); rec.Code != http.StatusFound {
 		t.Fatalf("remove: %d", rec.Code)
 	}
-	if b.cookies[passkeyHereCookie] != nil {
-		t.Error("the removed passkey is still listed as held by the computer")
-	}
 	if verifyAny(b).Code != http.StatusFound {
 		t.Fatal("the removed passkey's session still works")
 	}
-	// The other browser on the computer still lists it; its sign-in is
-	// refused, and the list forgets it.
-	_, rec := signInFromComputer(t, c, a)
-	if rec.Code != http.StatusUnauthorized || c.cookies[passkeyHereCookie] != nil {
-		t.Fatalf("a removed passkey on a computer: %d, cookie %v", rec.Code, c.cookies[passkeyHereCookie])
+	// The removal ended this session, so the page it leads to is the sign-in
+	// page, which asks the browser to forget the passkey and drops it from
+	// the computer's list.
+	if rec := b.get("/passkeys?removed=1", computer); rec.Code != http.StatusFound {
+		t.Fatalf("the ended session reached the passkeys page: %d", rec.Code)
 	}
-	if strings.Contains(rec.Body.String(), "data-allow") {
-		t.Fatal("the sign-in page still asks for the removed passkey")
+	if after := b.get("/login", computer).Body.String(); !strings.Contains(after, `data-gone="`+enc(a.ID)+`"`) {
+		t.Fatalf("the sign-in page after the removal does not ask the browser to forget the passkey:\n%s", after)
+	}
+	if b.cookies[passkeyHereCookie] != nil {
+		t.Error("the removed passkey is still listed as held by the computer")
+	}
+	// Another browser on the computer, which still lists it, is told on its
+	// sign-in page, which asks for it no longer.
+	page = c.get("/login", computer).Body.String()
+	if !strings.Contains(page, `data-gone="`+enc(a.ID)+`"`) || strings.Contains(page, "data-allow") || c.cookies[passkeyHereCookie] != nil {
+		t.Fatalf("the sign-in page on a computer still lists a removed passkey:\n%s", page)
+	}
+}
+
+// A passkey an administrator removes is forgotten by the computer that held
+// it at its next sign-in page, while another person's passkey on the same
+// computer, still held, is kept and never signalled.
+func TestRemovedPasskeyIsForgottenByTheComputer(t *testing.T) {
+	srv, sender := pkServer(t, nil)
+	c := newClient(t, srv.Handler())
+	computerSignIn(t, c, sender, "user@example.com")
+	a := passkeytest.NewComputer()
+	registerFrom(t, c, a, c.get("/passkeys?add=computer", computer).Body.String(), computer)
+	o := newClient(t, srv.Handler())
+	computerSignIn(t, o, sender, "other@example.com")
+	o.cookies[passkeyHereCookie] = c.cookies[passkeyHereCookie]
+	b := passkeytest.NewComputer()
+	registerFrom(t, o, b, o.get("/passkeys?add=computer", computer).Body.String(), computer)
+	here := o.cookies[passkeyHereCookie]
+
+	if _, err := srv.store.DeletePasskeys(context.Background(), "user@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	d := newClient(t, srv.Handler())
+	d.cookies[passkeyHereCookie] = here
+	page := d.get("/login", computer).Body.String()
+	if !strings.Contains(page, `data-gone="`+enc(a.ID)+`"`) {
+		t.Fatalf("the sign-in page does not ask the browser to forget the removed passkey:\n%s", page)
+	}
+	if !strings.Contains(page, `data-allow="`+enc(b.ID)+`"`) {
+		t.Fatal("the other person's passkey is no longer asked for")
+	}
+	if ck := d.cookies[passkeyHereCookie]; ck == nil || ck.Value != enc(b.ID) {
+		t.Fatalf("the computer's list after the removal: %v", ck)
+	}
+	// The passkeys page does the same, for a person signed in with a code.
+	e := newClient(t, srv.Handler())
+	computerSignIn(t, e, sender, "other@example.com")
+	e.cookies[passkeyHereCookie] = here
+	if page := e.get("/passkeys", computer).Body.String(); !strings.Contains(page, `id="passkey-gone"`) || !strings.Contains(page, `data-gone="`+enc(a.ID)+`"`) {
+		t.Fatal("the passkeys page does not ask the browser to forget a removed passkey")
+	}
+	// With nothing removed, nothing is signalled.
+	if page := d.get("/login", computer).Body.String(); strings.Contains(page, "data-gone") {
+		t.Fatal("a passkey still held was signalled as gone")
 	}
 }
 
