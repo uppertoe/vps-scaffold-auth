@@ -20,7 +20,7 @@
   {{range .Block.Rows}}<input type="hidden" name="roles" value="{{.Role}}">{{end}}
   {{template "rolelist" .Blocks}}
   <div class="changes {{if .Pending}}some{{else}}none{{end}}">
-    <span data-none{{if .PendingText}} hidden{{end}}>Give a role to a group or setting with the plus token, or take it away with a token's cross. Nothing is saved until you review the changes.</span>
+    <span data-none{{if .PendingText}} hidden{{end}}>{{.ChangesNone}}</span>
     <span data-some{{if not .PendingText}} hidden{{end}}>{{.PendingText}}</span>
     <a class="ghostlink" data-discard href="/admin/apps/{{$app}}"{{if not .Pending}} hidden{{end}}>Discard</a>
     <button type="submit">Review and save</button>

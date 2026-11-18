@@ -716,10 +716,10 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 	}
 	if editable {
 		row.PickID = "pick-" + role
-		row.AddText = "Add"
+		row.AddText = msgAddToken
 		row.AddTitle = msgAddTokenTitle
 		if row.Nobody {
-			row.AddText = "Give this role"
+			row.AddText = msgGiveToken
 		}
 		row.Picker = s.picker(w, a, role, inRow, p)
 	}

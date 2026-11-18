@@ -68,3 +68,21 @@ func TestPickerGroupsLine(t *testing.T) {
 		t.Error("a picker whose only group already holds the role does not say that none can be chosen")
 	}
 }
+
+// The changes bar names the controls by the words on them.
+func TestChangesBarNamesTheControls(t *testing.T) {
+	srv, _, c := appsAdmin(t)
+	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignGuests})
+	page := html.UnescapeString(c.get("/admin/apps/enquiries", nil).Body.String())
+	if !strings.Contains(page, ">"+msgChangesNone+"<") {
+		t.Errorf("the changes bar lacks %q", msgChangesNone)
+	}
+	if strings.Contains(page, "plus token") {
+		t.Error("the page still mentions the plus token")
+	}
+	for _, label := range []string{msgGiveToken, msgAddToken} {
+		if !strings.Contains(msgChangesNone, label) || !strings.Contains(page, `<span class="l">`+label+`</span>`) {
+			t.Errorf("the changes bar and the role rows do not both use %q", label)
+		}
+	}
+}

@@ -33,6 +33,16 @@ const (
 // The strings added by the picker fixes of 18 November 2026, whose wording
 // the owner has seen.
 
+// The labels of a role row's token that opens its picker: one for a role
+// nobody holds, and one for a role that has holders.
+const (
+	msgGiveToken = "Give this role"
+	msgAddToken  = "Add"
+)
+
+// The changes bar while nothing is unsaved. It names the two labels above.
+const msgChangesNone = "Choose Give this role or Add on a role to give it to a group, a list or a person, or the × beside one to take it away. Nothing is saved until you review the changes."
+
 // A picker that has no domain group or list to offer says so, and links to
 // the Groups page's new-group form; %s is the link, whose words are
 // msgPickerGroupsPage. A picker that offers some has a quiet link to the
