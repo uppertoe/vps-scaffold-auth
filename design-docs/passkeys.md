@@ -26,6 +26,15 @@ gateway refuses a passkey that the browser saved on a phone instead, and it
 never asks a computer to fetch a passkey from a phone. Only a computer that
 already holds one of the person's passkeys is asked for it at sign-in.
 
+A computer on the hospital's network cannot add a passkey, because the
+computers there are shared. The gateway knows the network by the address
+ranges the server lists for it, the same ranges that network roles use, and
+it checks the address both when the passkeys page starts the ceremony and
+when the passkey comes back. On that network, the passkeys page says why it
+offers nothing. A person can still sign in there with a passkey that their
+computer already holds, and phones on the hospital's Wi-Fi are offered a
+passkey as before.
+
 Passkeys are built but switched off. Each server turns them on with one
 setting, so the department's server can try them before the data lab's other
 servers do.
