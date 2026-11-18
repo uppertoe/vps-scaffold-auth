@@ -296,19 +296,27 @@ const rolesScript template.JS = `(function () {
     }
   }
   // An open picker hangs under its role's row, and the row stays above the
-  // shade, so each change shows on the row as it is made.
+  // shade, so each change shows on the row as it is made. The picker never
+  // reaches up under the row: a picker taller than the room below the row
+  // scrolls within itself, and one with too little room opens at the top
+  // of the shade, over the row, as it does without the script.
   function lift(pw) {
     document.querySelectorAll(".rrow.lift").forEach(function (r) { r.classList.remove("lift"); });
     if (!pw) return;
     var row = rowOf(pw.id.slice(5)), pop = pw.querySelector(".pop");
     if (!row || !pop) return;
-    var r = row.getBoundingClientRect();
-    if (r.bottom + 8 + pop.offsetHeight > innerHeight && r.top > 64) {
-      scrollBy(0, Math.min(r.top - 64, r.bottom + 8 + pop.offsetHeight - innerHeight));
+    pw.style.paddingTop = pw.style.paddingLeft = pw.style.justifyContent = pop.style.maxHeight = "";
+    var r = row.getBoundingClientRect(), need = r.bottom + 8 + pop.offsetHeight + 16;
+    if (need > innerHeight && r.top > 64) {
+      scrollBy(0, Math.min(r.top - 64, need - innerHeight));
       r = row.getBoundingClientRect();
     }
+    var top = Math.max(16, r.bottom + 8), room = innerHeight - top - 16;
+    if (room < 160) return;
     row.classList.add("lift");
-    pw.style.paddingTop = Math.max(16, r.bottom + 8) + "px";
+    pw.scrollTop = 0;
+    pw.style.paddingTop = top + "px";
+    pop.style.maxHeight = room + "px";
     var who = row.querySelector(".rwho").getBoundingClientRect();
     pw.style.justifyContent = "flex-start";
     pw.style.paddingLeft = Math.max(16, Math.min(who.left, innerWidth - pop.offsetWidth - 16)) + "px";

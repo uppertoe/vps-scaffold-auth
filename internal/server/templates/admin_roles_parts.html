@@ -176,13 +176,18 @@
 
   /* The picker: a list over the page, shown while its id is the URL's
      fragment, so it opens and closes without a script. */
-  .pickwrap { display: none; position: fixed; inset: 0; z-index: 20; background: var(--scrim); align-items: flex-start; justify-content: center; padding: 96px 16px 16px; overflow-y: auto; }
+  .pickwrap { display: none; position: fixed; inset: 0; z-index: 20; background: var(--scrim); align-items: flex-start; justify-content: center; padding: 96px 16px 16px; overflow-y: auto; overscroll-behavior: contain; }
   .pickwrap:target { display: flex; }
   .pickwrap > a.away { position: fixed; inset: 0; }
+  /* The page does not scroll under an open picker. The picker is fixed to
+     the window and its row is not, so a scroll would slide the row, which
+     is stacked above the shade, over the picker. */
+  html:has(.pickwrap:target) { overflow: hidden; }
   /* With the script, an open picker hangs under its row, which is lifted
-     above the shade (see rolesScript). */
+     above the shade, and scrolls within itself rather than under the row
+     (see rolesScript). */
   .rrow.lift { position: relative; z-index: 21; background: var(--surface); border-radius: 8px; box-shadow: 0 0 0 2px var(--accent-line); }
-  .pop { position: relative; width: 400px; max-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .16); padding: 8px; }
+  .pop { position: relative; width: 400px; max-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .16); padding: 8px; overflow-y: auto; overscroll-behavior: contain; }
   .pop .phead { padding: 8px 8px 4px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pop .kind { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); height: 28px; display: flex; align-items: flex-end; padding: 0 8px 4px; }
   .opt { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: center; height: 44px; padding: 0 8px; border-radius: 8px; cursor: pointer; margin: 0; font-weight: 400; font-size: 14px; }
