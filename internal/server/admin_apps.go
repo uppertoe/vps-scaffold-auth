@@ -44,7 +44,11 @@ type appsView struct {
 	Holder    string
 	Focus     string // the sentence about the checked address or token
 	Apps      []appBlockView
-	Key       keyView
+	// Older are the sites still on older guards, after the apps, with
+	// their heading and note.
+	Older                []olderSiteView
+	OlderHead, OlderNote string
+	Key                  keyView
 }
 
 type attentionLine struct {
@@ -97,24 +101,42 @@ func (s *Server) handleAdminApps(w http.ResponseWriter, r *http.Request) {
 	}
 	filter := strings.ToLower(v.Filter)
 	v.Attention = closedAppLines(world)
+	sites := s.readRouteAccess()
+	// Live apps first, then pending ones, each by label.
+	var pending []appBlockView
 	for _, a := range world.m.Sorted() {
 		block := s.appBlock(world, a, false, focus, nil)
+		if a.Pending {
+			s.markPending(world, a, &block, sites)
+		}
 		if filter != "" && !appMatches(world, a, block, filter) {
+			continue
+		}
+		if a.Pending {
+			pending = append(pending, block)
 			continue
 		}
 		v.Apps = append(v.Apps, block)
 	}
+	v.Apps = append(v.Apps, pending...)
+	for _, o := range s.olderSites(world, sites) {
+		if filter == "" || olderMatches(o, filter) {
+			v.Older = append(v.Older, o)
+		}
+	}
+	v.OlderHead, v.OlderNote = msgOlderHead, msgOlderNote
 	v.Attention = append(v.Attention, s.invitationLines(world)...)
 	v.Key = s.key(world)
 	s.renderAdmin(w, r, http.StatusOK, "admin_apps", adminData{Title: "Apps", Apps: v, Script: rolesScript})
 }
 
 // closedAppLines are the attention lines about apps that nothing holds a
-// role in, which the Apps page and the Overview both show.
+// role in, which the Apps page and the Overview both show. A pending app is
+// left out: its site still admits people by its older guard.
 func closedAppLines(w *rolesWorld) []attentionLine {
 	var out []attentionLine
 	for _, a := range w.m.Sorted() {
-		if !anyHolder(w, a) {
+		if !a.Pending && !anyHolder(w, a) {
 			out = append(out, attentionLine{Bad: true, Before: "Nobody holds the User role in ", Link: "/admin/apps/" + a.Name, Name: a.Label, After: ", so nobody can reach it."})
 		}
 	}
@@ -142,7 +164,7 @@ func appMatches(w *rolesWorld, a *roles.App, b appBlockView, f string) bool {
 			return true
 		}
 	}
-	for _, row := range b.Rows {
+	for _, row := range append(append([]roleRowView{}, b.Rows...), b.Older...) {
 		if strings.Contains(strings.ToLower(row.Label), f) {
 			return true
 		}
@@ -318,6 +340,14 @@ type appView struct {
 	ConfirmText, ConfirmButton, ConfirmKeep string
 	// PickerDone closes a picker.
 	PickerDone string
+	// PendingApp marks an app whose site is still on an older guard:
+	// PendingNote says so, StateHead and StateText take the place of the
+	// open paths in the facts, and Older, with OlderHead and OlderNote,
+	// takes the place of the paths.
+	PendingApp                        bool
+	PendingNote, StateHead, StateText string
+	Older                             []olderSiteView
+	OlderHead, OlderNote              string
 }
 
 type roleOption struct{ Role, Label string }
@@ -426,6 +456,9 @@ func (s *Server) appPage(w *rolesWorld, a *roles.App, p *pending) *appView {
 	}
 	v.Block = s.appBlock(w, a, true, nil, p)
 	v.Blocks = []appBlockView{v.Block}
+	if a.Pending {
+		s.pendingPage(w, a, v)
+	}
 
 	used := map[string]map[string]bool{} // holder id -> roles here
 	var order []string
@@ -917,8 +950,14 @@ func (s *Server) reviewWarnings(w *rolesWorld, a *roles.App, changes []roleChang
 	}
 	before, after := count(false), count(true)
 	var out []string
+	// A pending app has no paths yet, so its warnings name the app and say
+	// when each change will matter.
 	for _, role := range a.RoleOrder {
 		if !closed(before, role) && closed(after, role) {
+			if a.Pending {
+				out = append(out, fmt.Sprintf(msgPendingLastHolder, a.Roles[role], a.Label))
+				continue
+			}
 			out = append(out, fmt.Sprintf(msgLastHolder, a.Roles[role], pathsPhrase(a, role)))
 		}
 	}
@@ -926,10 +965,14 @@ func (s *Server) reviewWarnings(w *rolesWorld, a *roles.App, changes []roleChang
 		if !c.Give {
 			continue
 		}
-		switch c.A.Kind {
-		case store.AssignNetwork:
+		switch {
+		case c.A.Kind == store.AssignNetwork && a.Pending:
+			out = append(out, fmt.Sprintf(msgPendingNetworkOpens, s.networkLabel(c.A.Ref), a.Label))
+		case c.A.Kind == store.AssignNetwork:
 			out = append(out, fmt.Sprintf(msgNetworkOpens, s.networkLabel(c.A.Ref), pathsPhrase(a, c.A.Role)))
-		case store.AssignGuests:
+		case c.A.Kind == store.AssignGuests && a.Pending:
+			out = append(out, fmt.Sprintf(msgPendingGuestsOpen, a.Label))
+		case c.A.Kind == store.AssignGuests:
 			out = append(out, fmt.Sprintf(msgGuestsOpen, pathsPhrase(a, c.A.Role)))
 		}
 	}

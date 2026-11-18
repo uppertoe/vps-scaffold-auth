@@ -1,9 +1,14 @@
 package server
 
 import (
+	"context"
+	"fmt"
+	"html"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
@@ -75,5 +80,86 @@ func TestPendingAppAdmitsNobodyUntilAGuardNamesIt(t *testing.T) {
 	}
 	if got := rec.Header().Get("Remote-Roles"); got == "" {
 		t.Error("no Remote-Roles for the role held")
+	}
+}
+
+func pendingAdmin(t *testing.T) (*Server, *client) {
+	t.Helper()
+	srv, sender := pendingServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	return srv, c
+}
+
+func TestAppsOverviewListsPendingAppsAndOlderSites(t *testing.T) {
+	srv, c := pendingAdmin(t)
+	ctx := context.Background()
+	if err := srv.store.CreateGroup(ctx, "planka-admins", "Planka admins"); err != nil {
+		t.Fatal(err)
+	}
+	page := html.UnescapeString(c.get("/admin/apps", nil).Body.String())
+	for _, want := range []string{
+		`<span class="pendtag" title="` + fmt.Sprintf(msgPendingNote, "Planka") + `">` + msgPendingTag + `</span>`,
+		`<b>` + msgOlderRow + `</b>`,
+		`<h2 class="sec" id="older">` + msgOlderHead + `</h2>`,
+		`<b>Caffeine</b><span class="p">caffeine.example.com</span>`,
+		`<span class="l">@example.net</span>`,
+		`<span class="l">RCH network</span>`,
+		`<span class="l">One open by design</span>`,
+		`<b>Dept</b>`,
+		`<span class="l">` + msgOlderAdmins + `</span>`,
+		`href="/admin/groups/planka-admins"`,
+		`title="` + msgReaderNoGroup + `"`, // planka-users does not exist
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the Apps page lacks %q", want)
+		}
+	}
+	// A live app's site and a pending app's site are not listed as older.
+	for _, not := range []string{`<b>Enquiries</b>`, `<b>Planka</b><span class="p">`} {
+		if strings.Contains(page, not) {
+			t.Errorf("the older sites list %q", not)
+		}
+	}
+	// Live apps come before pending ones, and older sites after both.
+	live, pend, older := strings.Index(page, "<b>Fellowship enquiries</b>"), strings.Index(page, "<b>Planka</b>"), strings.Index(page, msgOlderHead)
+	if !(live >= 0 && live < pend && pend < older) {
+		t.Errorf("order: live %d, pending %d, older %d", live, pend, older)
+	}
+	// A pending app with nobody holding a role is not said to be closed.
+	if strings.Contains(page, "Nobody holds the User role in <a href=\"/admin/apps/planka\">") {
+		t.Error("a pending app is reported as closed")
+	}
+	// The filter finds an older site by its rule.
+	page = html.UnescapeString(c.get("/admin/apps?q=example.net", nil).Body.String())
+	if !strings.Contains(page, "<b>Caffeine</b>") || strings.Contains(page, "<b>Dept</b>") {
+		t.Error("the filter does not reach the older sites")
+	}
+}
+
+func TestPendingAppPage(t *testing.T) {
+	_, c := pendingAdmin(t)
+	page := html.UnescapeString(c.get("/admin/apps/planka", nil).Body.String())
+	for _, want := range []string{
+		fmt.Sprintf(msgPendingNote, "Planka"),
+		"<dt>" + msgPendingState + "</dt>",
+		fmt.Sprintf(msgOlderDeclared, "apps/planka/planka.caddy"),
+		`<b>Planka</b><span class="p">planka.example.com</span>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the pending app's page lacks %q", want)
+		}
+	}
+	if strings.Contains(page, "<h2 class=\"sec\">Paths</h2>") {
+		t.Error("a pending app's page lists paths")
+	}
+	// The review names the app and says when a change will matter.
+	review := reviewOf(t, c, "planka", url.Values{"roles": {"user", "owner"}, "r.user": {"network:rch"}})
+	if !strings.Contains(review, fmt.Sprintf(msgPendingNetworkOpens, "RCH network", "Planka")) {
+		t.Errorf("the review lacks the pending network warning:\n%s", review)
+	}
+	// A live app's page is unchanged.
+	if live := c.get("/admin/apps/enquiries", nil).Body.String(); strings.Contains(live, msgPendingState) || !strings.Contains(live, "Open by design") {
+		t.Error("a live app's page changed")
 	}
 }

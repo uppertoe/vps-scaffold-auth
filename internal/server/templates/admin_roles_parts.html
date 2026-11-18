@@ -52,6 +52,11 @@
   .rrow.app .bydesign { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); flex: none; }
   .rrow.app .bydesign:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
   .rrow.app .edit { justify-self: end; font-size: 13px; font-weight: 500; }
+  /* A pending app's tag, and its older guard's row under its roles. */
+  .pendtag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px; border: 1px solid var(--wide-line); background: var(--wide-bg); color: var(--wide-fg); font-size: 12px; flex: none; }
+  .rrow.older .rrole b { font-weight: 400; color: var(--muted); }
+  .tok.gone { border-style: dashed; background: transparent; color: var(--muted); }
+  .pendnote { margin: 0 0 16px; }
   .rrole { display: flex; gap: 8px; align-items: baseline; padding-left: 16px; min-width: 0; white-space: nowrap; }
   .rrole b { font-weight: 500; font-size: 14px; flex: none; }
   .rrole span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
@@ -276,7 +281,7 @@
 {{define "rolelist"}}<div class="rlist" id="roles">
   <div class="rrow colhead"><div>Role</div><div>Who holds it</div><div>Widest access</div></div>
   {{range .}}
-  {{if not .Editable}}<div class="rrow app"><div class="name"><b>{{.Label}}</b><span class="host">{{.Host}}</span>{{if .Open}}<span class="bydesign" title="{{.Open}}: {{.OpenTitle}}" tabindex="0">{{template "ico" "k-lock"}}<span class="bdt">{{.Open}}</span></span>{{end}}</div><a class="edit" href="/admin/apps/{{.Name}}">Edit</a></div>{{end}}
+  {{if not .Editable}}<div class="rrow app"><div class="name"><b>{{.Label}}</b><span class="host">{{.Host}}</span>{{if .Open}}<span class="bydesign" title="{{.Open}}: {{.OpenTitle}}" tabindex="0">{{template "ico" "k-lock"}}<span class="bdt">{{.Open}}</span></span>{{end}}{{if .PendingTag}}<span class="pendtag" title="{{.PendingTitle}}">{{.PendingTag}}</span>{{end}}</div><a class="edit" href="/admin/apps/{{.Name}}">Edit</a></div>{{end}}
   {{range .Rows}}
   <div class="rrow{{if .Mark}} {{.Mark}}{{end}}"{{if .Editable}} data-role="{{.Role}}"{{end}}>
     <div class="rrole" title="{{.Label}}{{if .Paths}}: {{.Paths}}{{end}}"><b>{{.Label}}</b><span{{if .PathsMono}} class="p"{{end}}>{{.Paths}}</span></div>
@@ -284,5 +289,26 @@
     {{template "reach" .Reach}}
   </div>
   {{end}}
+  {{range .Older}}{{template "olderrow" .}}{{end}}
+  {{end}}
+</div>{{end}}
+
+{{/* A row of an older guard's rule: a role row's shape, without controls. */}}
+{{define "olderrow"}}<div class="rrow older">
+    <div class="rrole" title="{{.Label}}{{if .Paths}}: {{.Paths}}{{end}}"><b>{{.Label}}</b><span{{if .PathsMono}} class="p"{{end}}>{{.Paths}}</span></div>
+    <div class="rwho" data-fit>{{range .Tokens}}{{template "token" .}}{{end}}{{if .Tokens}}<button type="button" class="tok more" aria-expanded="false"{{if .More}} title="{{.MoreTitle}}"{{else}} hidden{{end}}>{{.More}}</button>{{end}}</div>
+    {{template "reach" .Reach}}
+  </div>{{end}}
+
+{{/* The sites still on older guards, one row each: the site, its rule and
+     the widest access the rule gives. */}}
+{{define "olderlist"}}<div class="rlist older">
+  <div class="rrow colhead"><div>Site</div><div>Who it admits</div><div>Widest access</div></div>
+  {{range .}}
+  <div class="rrow">
+    <div class="rrole" title="{{.Name}}: {{.Host}}"><b>{{.Name}}</b><span class="p">{{.Host}}</span></div>
+    <div class="rwho" data-fit>{{range .Row.Tokens}}{{template "token" .}}{{end}}{{if .Row.Tokens}}<button type="button" class="tok more" aria-expanded="false"{{if .Row.More}} title="{{.Row.MoreTitle}}"{{else}} hidden{{end}}>{{.Row.More}}</button>{{end}}</div>
+    {{template "reach" .Row.Reach}}
+  </div>
   {{end}}
 </div>{{end}}

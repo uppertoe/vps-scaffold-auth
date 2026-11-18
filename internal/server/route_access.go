@@ -12,6 +12,9 @@ import (
 type siteAccessView struct {
 	Host  string
 	Rules []accessRuleView
+	// Roles is set when a role guard ("roles" in the file) guards some of
+	// the site. The overview's table does not list such a rule.
+	Roles bool
 }
 
 // accessRuleView is one access rule on a site. Kind is one of groups, domains,
@@ -25,9 +28,28 @@ type accessRuleView struct {
 
 var accessKindOrder = map[string]int{"public": 0, "network": 1, "guests": 2, "signed-in": 3, "domains": 4, "groups": 5}
 
-// routeAccess reads ROUTE_ACCESS_FILE. It returns nil when the feature is off
-// or the file cannot be read; the overview then leaves the table out.
+// routeAccess reads ROUTE_ACCESS_FILE for the overview's table, which lists
+// every site with a rule other than a role guard. It returns nil when the
+// feature is off or the file cannot be read; the overview then leaves the
+// table out.
 func (s *Server) routeAccess() []siteAccessView {
+	all := s.readRouteAccess()
+	if all == nil {
+		return nil
+	}
+	out := make([]siteAccessView, 0, len(all))
+	for _, v := range all {
+		if len(v.Rules) > 0 {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// readRouteAccess reads every site in ROUTE_ACCESS_FILE, sorted by host, a
+// site guarded by roles included. It returns nil when the feature is off or
+// the file cannot be read.
+func (s *Server) readRouteAccess() []siteAccessView {
 	path := s.cfg.RouteAccessFile
 	if path == "" {
 		return nil
@@ -51,7 +73,8 @@ func (s *Server) routeAccess() []siteAccessView {
 			continue
 		}
 		kind := strings.TrimSpace(parts[1])
-		if _, ok := accessKindOrder[kind]; !ok {
+		_, known := accessKindOrder[kind]
+		if !known && kind != "roles" {
 			continue
 		}
 		value := ""
@@ -76,6 +99,10 @@ func (s *Server) routeAccess() []siteAccessView {
 			if v == nil {
 				v = &siteAccessView{Host: h}
 				byHost[h] = v
+			}
+			if kind == "roles" {
+				v.Roles = true
+				continue
 			}
 			v.Rules = append(v.Rules, rule)
 		}
