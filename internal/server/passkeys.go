@@ -97,6 +97,12 @@ import (
 //     challenge minted off the network cannot be completed on it, nor the
 //     reverse (passkeyBlockedNetwork). Signing in there with a passkey the
 //     computer already holds is unchanged, and so is every phone.
+//   - The network rule, like the computer check, rests on the user agent
+//     (isPhone) and the browser's unsigned report. It stops an honest choice
+//     on a shared computer, not a determined person: a computer that claims
+//     to be a phone is treated as one. It also covers only the address
+//     families listed, so where the hospital reaches the gateway over IPv6
+//     as well, NETWORK_RANGES must list its IPv6 ranges beside the IPv4.
 //   - The other rules hold on a computer as on a phone: the same host, the
 //     same recent sign-in and second factor to add one, the same admin grade,
 //     the same sessions that name their passkey, the same single-use

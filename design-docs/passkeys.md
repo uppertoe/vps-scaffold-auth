@@ -38,6 +38,14 @@ offers nothing. A person can still sign in there with a passkey that their
 computer already holds, and phones on the hospital's Wi-Fi are offered a
 passkey as before.
 
+The gateway tells a computer from a phone by what the browser says it is, and
+learns where a passkey was saved from what the browser reports. Neither is
+signed. The network rule therefore stops a person who follows the pages, not
+a determined one: a computer that claims to be a phone is treated as a phone.
+The rule also covers only the addresses the server lists, so if the hospital
+reaches the gateway over IPv6 as well as IPv4, the server must list the
+hospital's ranges in both.
+
 Passkeys are built but switched off. Each server turns them on with one
 setting, so the department's server can try them before the data lab's other
 servers do.
