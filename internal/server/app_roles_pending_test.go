@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
@@ -126,10 +127,6 @@ func TestAppsOverviewListsPendingAppsAndOlderSites(t *testing.T) {
 	if !(live >= 0 && live < pend && pend < older) {
 		t.Errorf("order: live %d, pending %d, older %d", live, pend, older)
 	}
-	// A pending app with nobody holding a role is not said to be closed.
-	if strings.Contains(page, "Nobody holds the User role in <a href=\"/admin/apps/planka\">") {
-		t.Error("a pending app is reported as closed")
-	}
 	// The filter finds an older site by its rule.
 	page = html.UnescapeString(c.get("/admin/apps?q=example.net", nil).Body.String())
 	if !strings.Contains(page, "<b>Caffeine</b>") || strings.Contains(page, "<b>Dept</b>") {
@@ -201,5 +198,38 @@ func TestGroupsShowEveryUse(t *testing.T) {
 	}
 	if strings.Contains(group, `<dd class="none">No roles</dd>`) {
 		t.Error("the group page says No roles beside its other uses")
+	}
+}
+
+// A pending app that nobody holds a role in has its own attention line, on
+// the Apps page and the Overview, until someone holds the role. A live app
+// keeps the existing line.
+func TestPendingAppAttentionLine(t *testing.T) {
+	srv, c := pendingAdmin(t)
+	pendingLine := `Nobody holds the User role in <a href="/admin/apps/planka">Planka</a>` + msgPendingNobodyAfter
+	liveLine := `Nobody holds the User role in <a href="/admin/apps/enquiries">Fellowship enquiries</a>, so nobody can reach it.`
+	for _, path := range []string{"/admin/apps", "/admin/"} {
+		page := html.UnescapeString(c.get(path, nil).Body.String())
+		if !strings.Contains(page, pendingLine) {
+			t.Errorf("%s lacks the pending app's line", path)
+		}
+		if !strings.Contains(page, liveLine) {
+			t.Errorf("%s lacks the live app's line", path)
+		}
+		if strings.Contains(page, `<a href="/admin/apps/planka">Planka</a>, so nobody can reach it.`) {
+			t.Errorf("%s reports the pending app as closed now", path)
+		}
+	}
+	// A person whose role has ended holds nothing, and a network holding
+	// the User role is honoured.
+	mustAssign(t, srv, store.RoleAssignment{App: "planka", Role: "user", Kind: store.AssignPerson, Ref: "old@example.com", How: store.AssignedByAdmin, Until: time.Now().Add(-time.Hour)})
+	if page := html.UnescapeString(c.get("/admin/apps", nil).Body.String()); !strings.Contains(page, pendingLine) {
+		t.Error("an ended person counts as a holder")
+	}
+	mustAssign(t, srv, store.RoleAssignment{App: "planka", Role: "user", Kind: store.AssignNetwork, Ref: "rch"})
+	for _, path := range []string{"/admin/apps", "/admin/"} {
+		if page := html.UnescapeString(c.get(path, nil).Body.String()); strings.Contains(page, pendingLine) {
+			t.Errorf("%s still shows the line once a network holds the User role", path)
+		}
 	}
 }

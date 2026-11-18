@@ -37,6 +37,9 @@ const (
 	msgPendingLastHolder   = "Nobody will hold %s once this is saved, so the role will admit nobody when %s moves to roles."
 	msgPendingNetworkOpens = "Anyone on the %s will reach %s without signing in once the site moves to roles."
 	msgPendingGuestsOpen   = "Anyone who confirms an email address will reach %s once the site moves to roles."
+	// msgPendingNobodyAfter ends the attention line "Nobody holds the User
+	// role in <app>" for a pending app.
+	msgPendingNobodyAfter = ", so nobody will reach it once it moves to roles."
 
 	msgUseOlder       = "%s (older guard)"
 	msgUseIncluded    = "Included in %s"

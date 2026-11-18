@@ -131,14 +131,20 @@ func (s *Server) handleAdminApps(w http.ResponseWriter, r *http.Request) {
 }
 
 // closedAppLines are the attention lines about apps that nothing holds a
-// role in, which the Apps page and the Overview both show. A pending app is
-// left out: its site still admits people by its older guard.
+// role in, which the Apps page and the Overview both show. A pending app's
+// site still admits people by its older guard, so its line says what will
+// happen once it moves to roles.
 func closedAppLines(w *rolesWorld) []attentionLine {
 	var out []attentionLine
 	for _, a := range w.m.Sorted() {
-		if !a.Pending && !anyHolder(w, a) {
-			out = append(out, attentionLine{Bad: true, Before: "Nobody holds the User role in ", Link: "/admin/apps/" + a.Name, Name: a.Label, After: ", so nobody can reach it."})
+		if anyHolder(w, a) {
+			continue
 		}
+		after := ", so nobody can reach it."
+		if a.Pending {
+			after = msgPendingNobodyAfter
+		}
+		out = append(out, attentionLine{Bad: true, Before: "Nobody holds the User role in ", Link: "/admin/apps/" + a.Name, Name: a.Label, After: after})
 	}
 	return out
 }
