@@ -344,8 +344,9 @@ type appView struct {
 	// (?withdraw=id), with the confirmation's wording.
 	Confirm                                 int64
 	ConfirmText, ConfirmButton, ConfirmKeep string
-	// PickerDone closes a picker.
-	PickerDone string
+	// PickerDone closes a picker. ChangesNone is the changes bar while
+	// nothing is unsaved.
+	PickerDone, ChangesNone string
 	// PendingApp marks an app whose site is still on an older guard:
 	// PendingNote says so, StateHead and StateText take the place of the
 	// open paths in the facts, and Older, with OlderHead and OlderNote,
@@ -428,6 +429,7 @@ func (s *Server) renderApp(w http.ResponseWriter, r *http.Request, status int, a
 	v := s.appPage(world, a, p)
 	v.Review = review
 	v.PickerDone = msgPickerDone
+	v.ChangesNone = msgChangesNone
 	if r.Method == http.MethodGet {
 		if id, err := strconv.ParseInt(r.URL.Query().Get("withdraw"), 10, 64); err == nil {
 			for _, p := range v.People {

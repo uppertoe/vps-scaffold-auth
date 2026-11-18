@@ -20,7 +20,7 @@
   {{range .Block.Rows}}<input type="hidden" name="roles" value="{{.Role}}">{{end}}
   {{template "rolelist" .Blocks}}
   <div class="changes {{if .Pending}}some{{else}}none{{end}}">
-    <span data-none{{if .PendingText}} hidden{{end}}>Give a role to a group or setting with the plus token, or take it away with a token's cross. Nothing is saved until you review the changes.</span>
+    <span data-none{{if .PendingText}} hidden{{end}}>{{.ChangesNone}}</span>
     <span data-some{{if not .PendingText}} hidden{{end}}>{{.PendingText}}</span>
     <a class="ghostlink" data-discard href="/admin/apps/{{$app}}"{{if not .Pending}} hidden{{end}}>Discard</a>
     <button type="submit">Review and save</button>
@@ -34,6 +34,7 @@
       <div class="kind">{{.Heading}}</div>
       {{range .Options}}<label class="opt"><input type="checkbox" class="tick" name="{{.Field}}" value="{{.Value}}" data-held="0"><span class="box"></span><span class="oline">{{template "token" .Token}}<small>{{.Who}}</small></span></label>{{end}}
       {{end}}
+      {{if .NoGroups}}<p class="pnote">{{.NoGroups}}</p>{{else if .NewGroup}}<div class="newgroup"><a href="{{.NewGroupHref}}">{{.NewGroup}}</a></div>{{end}}
       <div class="kind">People and cards</div>
       <div class="addperson" data-addperson="{{.Role}}" data-msg-pending="{{.MsgPending}}" data-msg-address="{{.MsgNotAddress}}" data-msg-past="{{.MsgPastDate}}" data-msg-date="{{.MsgBadDate}}" data-msg-until="{{.MsgUntil}}">
         <input type="email" name="pa.{{.Role}}" placeholder="name@example.org" aria-label="Address to add" autocomplete="off">

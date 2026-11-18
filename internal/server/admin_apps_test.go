@@ -411,7 +411,7 @@ func TestUserRowCountsOtherRoles(t *testing.T) {
 	mustDomainGroup(t, srv, "staff", "example.com")
 	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignDomainGroup, Ref: "staff"})
 	body := html.UnescapeString(c.get("/admin/apps?q=enquiries", nil).Body.String())
-	if !strings.Contains(body, "Only the holders of Administrator reach these paths.") {
+	if !strings.Contains(body, "Only people with Administrator reach these paths.") {
 		t.Error("the user row does not name the other role")
 	}
 	if strings.Contains(body, "Fellowship enquiries</a>, so nobody can reach it.") {

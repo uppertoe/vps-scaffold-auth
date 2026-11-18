@@ -35,7 +35,7 @@ const msgDesignSaveNote = "Saving the design changes the look of %s. The printed
 const (
 	msgCardNoPagesApproved = "The app's snippet names no page for a scan to open."
 	msgCardChooseAppFirst  = "Choose an app first. Its snippet names the pages a scan can open."
-	msgCardPagesHint       = "The app's snippet names the pages a scan can open. A card holds the User role in %s, so its holder can reach every page that role reaches, but never an administrator's page or another app."
+	msgCardPagesHint       = "The app's snippet names the pages a scan can open. A card holds the User role in %s, so whoever carries it can reach every page that role reaches, but never an administrator's page or another app."
 )
 
 // withArticle is "an rch.org.au" or "a gosh.nhs.uk": the article as the

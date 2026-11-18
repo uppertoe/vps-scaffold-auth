@@ -670,9 +670,9 @@ func (s *Server) createGroupCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if reason, refused := s.targetRefusal(group); refused {
-		msg := "A break-glass code cannot target \"" + group + "\", because an application reads that group as one of its own roles and a card would admit its holder in that role."
+		msg := "A break-glass code cannot target \"" + group + "\", because an application reads that group as one of its own roles and a card would admit whoever carries it in that role."
 		if reason == refusedFeed {
-			msg = "A break-glass code cannot target \"" + group + "\", because its members come from a feed and a card would admit its holder alongside them."
+			msg = "A break-glass code cannot target \"" + group + "\", because its members come from a feed and a card would admit whoever carries it alongside them."
 		}
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title:   "Group " + reason,

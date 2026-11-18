@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"html/template"
 	"net/url"
 	"sort"
 	"strings"
@@ -52,7 +53,7 @@ func (s *Server) accessSteps() []accessStep {
 		{4, "Guests", iconGuests, "Anyone with an email address"},
 		{3, "Domain", iconDomain, "Everyone at an email domain"},
 		{2, "People", iconPerson, "People on a list or added"},
-		{1, "Cards", iconCard, "Break-glass card holders"},
+		{1, "Cards", iconCard, "Anyone carrying a break-glass card"},
 	}
 }
 
@@ -357,7 +358,7 @@ type reachView struct {
 // of its own is still reached by the holders of the app's other roles.
 const (
 	msgNobodyHolds    = "Nobody holds this role."
-	msgOnlyOtherRoles = "Only the holders of %s reach these paths."
+	msgOnlyOtherRoles = "Only people with %s reach these paths."
 )
 
 // level is the step a reach cell shows, 0 when closed.
@@ -461,6 +462,11 @@ type pickerView struct {
 	Today                                  string
 	MsgPending, MsgNotAddress, MsgPastDate string
 	MsgBadDate, MsgUntil, InviteText       string
+	// NoGroups is the line shown when no domain group or list can be
+	// chosen, with its link to the new-group form; otherwise NewGroup is
+	// the quiet link to that form under the group sections.
+	NoGroups               template.HTML
+	NewGroup, NewGroupHref string
 }
 
 type pickerSection struct {
@@ -710,10 +716,10 @@ func (s *Server) roleRow(w *rolesWorld, a *roles.App, role string, editable bool
 	}
 	if editable {
 		row.PickID = "pick-" + role
-		row.AddText = "Add"
+		row.AddText = msgAddToken
 		row.AddTitle = msgAddTokenTitle
 		if row.Nobody {
-			row.AddText = "Give this role"
+			row.AddText = msgGiveToken
 		}
 		row.Picker = s.picker(w, a, role, inRow, p)
 	}
@@ -786,6 +792,12 @@ func (s *Server) picker(w *rolesWorld, a *roles.App, role string, inRow map[stri
 			lists.Options = append(lists.Options, s.pickerOption(w, role, store.AssignList, n, inRow))
 		}
 	}
+	pv.NewGroupHref = newGroupHref
+	if !offers(domains) && !offers(lists) {
+		pv.NoGroups = template.HTML(fmt.Sprintf(msgPickerNoGroups, `<a href="`+newGroupHref+`">`+template.HTMLEscapeString(msgPickerGroupsPage)+`</a>`))
+	} else {
+		pv.NewGroup = msgPickerNewGroup
+	}
 	for _, sec := range []pickerSection{settings, domains, lists} {
 		var keep []pickerOption
 		for _, o := range sec.Options {
@@ -799,6 +811,16 @@ func (s *Server) picker(w *rolesWorld, a *roles.App, role string, inRow map[stri
 		}
 	}
 	return pv
+}
+
+// offers reports whether a picker section has a holder that can be chosen.
+func offers(sec pickerSection) bool {
+	for _, o := range sec.Options {
+		if o.Field != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // pickerOption is one holder in the picker; an option already in the row
