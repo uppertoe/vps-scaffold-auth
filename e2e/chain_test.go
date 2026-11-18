@@ -646,8 +646,10 @@ func TestChain(t *testing.T) {
 		if r.status != http.StatusFound || !strings.HasPrefix(r.location(), authHost+"/login?") || !strings.Contains(r.location(), "rqr=1") {
 			t.Fatalf("role guard without a session: %d to %q, want sign-in for a role guard", r.status, r.location())
 		}
-		if r := alice.get("https://roles."+domain+"/", nil); !strings.HasPrefix(r.location(), authHost+"/denied?") {
-			t.Fatalf("role guard before the role is given: %d to %q", r.status, r.location())
+		for _, host := range []string{"roles", "static", "go"} {
+			if r := alice.get("https://"+host+"."+domain+"/", nil); !strings.HasPrefix(r.location(), authHost+"/denied?") {
+				t.Fatalf("%s: role guard before the role is given: %d to %q", host, r.status, r.location())
+			}
 		}
 
 		page := boss.get(authHost+"/admin/apps/e2e", nil)
@@ -684,6 +686,47 @@ func TestChain(t *testing.T) {
 		// the client does not open the Editor guard.
 		if r := alice.get("https://editors."+domain+"/", map[string]string{"X-Auth-Role": "manager"}); !strings.HasPrefix(r.location(), authHost+"/denied?") {
 			t.Errorf("editor guard for a manager: %d to %q", r.status, r.location())
+		}
+	})
+
+	t.Run("the role gates for a static site and a redirect admit only the role's holders", func(t *testing.T) {
+		forged := map[string]string{
+			"X-Auth-Policy": "any", "X-Auth-App": "other", "X-Auth-Role": "user",
+			"Remote-User": "boss@admins.example", "Remote-Roles": "manager",
+		}
+		// No session, with forged headers: sent to sign in as from a role
+		// guard. Had the client's X-Auth-Policy reached the gateway beside the
+		// gate's X-Auth-App, the gateway would have refused the request as
+		// misconfigured instead.
+		for _, target := range []string{"https://static." + domain + "/", "https://go." + domain + "/somewhere?x=1"} {
+			r := newBrowser(t).get(target, forged)
+			want := authHost + "/login?rd=" + url.QueryEscape(target)
+			if r.status != http.StatusFound || !strings.HasPrefix(r.location(), want) || !strings.Contains(r.location(), "rqr=1") {
+				t.Errorf("%s without a session: %d to %q, want sign-in for a role guard", target, r.status, r.location())
+			}
+		}
+		// Alice holds the Manager role (given above). The static site is
+		// served, and its page is not left in a shared cache; the forged
+		// headers change nothing.
+		r := alice.get("https://static."+domain+"/", forged)
+		if r.status != http.StatusOK || !strings.Contains(r.body, "Caddy") {
+			t.Errorf("static site for a holder: %d: %.200s", r.status, r.body)
+		}
+		if cc := r.header.Get("Cache-Control"); cc != "private, no-cache" {
+			t.Errorf("static site Cache-Control = %q, want private, no-cache", cc)
+		}
+		// The redirect is sent on, with the path kept, as a 302 that no
+		// browser caches past the gate.
+		r = alice.get("https://go."+domain+"/somewhere?x=1", forged)
+		if r.status != http.StatusFound || r.location() != "https://example.org/somewhere?x=1" {
+			t.Errorf("redirect for a holder: %d to %q", r.status, r.location())
+		}
+		// A role the guard does not name, sent by the client, opens nothing:
+		// the administrator, who holds no role in the app, is still refused.
+		for _, host := range []string{"static", "go"} {
+			if r := boss.get("https://"+host+"."+domain+"/", map[string]string{"X-Auth-Role": "user", "X-Auth-Policy": "any"}); !strings.HasPrefix(r.location(), authHost+"/denied?") {
+				t.Errorf("%s for a person without the role: %d to %q", host, r.status, r.location())
+			}
 		}
 	})
 
