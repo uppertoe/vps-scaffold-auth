@@ -19,11 +19,11 @@ func TestReadersPageMenuOverviewAndAccessLink(t *testing.T) {
 	loginAs(t, c, sender, "admin@example.com", nil)
 
 	home := c.get("/admin/", nil).Body.String()
-	menu := `<a href="/admin/app-feeds" title="digest has asked for feeds of two groups.">App feeds<span class="navcount"><span class="vh">: </span>2</span></a>`
+	menu := `<a href="/admin/app-feeds" title="Digest has asked for feeds of two groups.">App feeds<span class="navcount"><span class="vh">: </span>2</span></a>`
 	if !strings.Contains(home, menu) {
 		t.Error("the menu does not count the waiting approvals")
 	}
-	if !strings.Contains(home, `<li><a href="/admin/app-feeds">digest</a> has asked for feeds of two groups.</li>`) {
+	if !strings.Contains(home, `<li><a href="/admin/app-feeds">Digest</a> has asked for feeds of two groups.</li>`) {
 		t.Error("the Overview does not list the waiting approvals")
 	}
 
@@ -95,7 +95,7 @@ func TestReadersPageRows(t *testing.T) {
 	if !strings.Contains(page, `<span class="tok static gone" title="This group does not exist yet.">`) {
 		t.Error("the missing group is not shown as missing")
 	}
-	if !strings.Contains(page, `<div class="rstrip waiting" role="status"><i aria-hidden="true"></i><span>alpha has asked for a feed of one group.</span></div>`) {
+	if !strings.Contains(page, `<div class="rstrip waiting" role="status"><i aria-hidden="true"></i><span>Alpha has asked for a feed of one group.</span></div>`) {
 		t.Error("the strip does not say what is waiting")
 	}
 
@@ -107,7 +107,7 @@ func TestReadersPageRows(t *testing.T) {
 	}
 	// The confirmation swaps the row's action cell, and the strip asks.
 	page = c.get("/admin/app-feeds?"+url.Values{"confirm": {"approve"}, "app": {"alpha"}, "group": {"zeds"}}.Encode(), nil).Body.String()
-	if !strings.Contains(page, `<div class="rrow hit">`) || !strings.Contains(page, `<div class="rstrip ask" role="status"><i aria-hidden="true"></i><span>Starting the feed sends alpha the email address of everyone in Zed team, and keeps alpha up to date as the group changes.</span></div>`) ||
+	if !strings.Contains(page, `<div class="rrow hit">`) || !strings.Contains(page, `<div class="rstrip ask" role="status"><i aria-hidden="true"></i><span>Starting the feed sends Alpha the email address of everyone in Zed team, and keeps Alpha up to date as the group changes.</span></div>`) ||
 		!strings.Contains(page, `<a class="btnlink quiet" href="/admin/app-feeds">Cancel</a>`) {
 		t.Error("the confirmation is not drawn in place")
 	}
@@ -115,7 +115,7 @@ func TestReadersPageRows(t *testing.T) {
 	csrf := adminCSRF(t, c, "/admin/app-feeds?confirm=approve&app=alpha&group=zeds")
 	c.postForm("/admin/member-readers/approve", url.Values{"csrf": {csrf}, "app": {"alpha"}, "group": {"zeds"}})
 	page = c.get("/admin/app-feeds", nil).Body.String()
-	if !strings.Contains(page, `<span>The feed of Zed team to alpha has started.</span>`) || !strings.Contains(page, `<span class="l">Feeding</span>`) {
+	if !strings.Contains(page, `<span>The feed of Zed team to Alpha has started.</span>`) || !strings.Contains(page, `<span class="l">Feeding</span>`) {
 		t.Error("the result does not name the group by its label")
 	}
 }
@@ -127,8 +127,8 @@ func TestFeedsWaitingLine(t *testing.T) {
 		apps []string
 		want string
 	}{
-		{[]string{"wiki"}, "wiki has asked for a feed of one group."},
-		{[]string{"wiki", "wiki", "wiki"}, "wiki has asked for feeds of three groups."},
+		{[]string{"wiki"}, "Wiki has asked for a feed of one group."},
+		{[]string{"wiki", "wiki", "wiki"}, "Wiki has asked for feeds of three groups."},
 		{[]string{"wiki", "rota", "wiki"}, "Three feeds are waiting to start."},
 	} {
 		l := feedsWaitingLine(c.apps)

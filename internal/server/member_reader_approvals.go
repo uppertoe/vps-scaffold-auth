@@ -261,9 +261,9 @@ func readerNotice(code string, label func(group string) string) (string, bool) {
 	}
 	switch parts[0] {
 	case noticeReaderApproved:
-		return fmt.Sprintf(msgReaderApproved, label(parts[2]), parts[1]), true
+		return fmt.Sprintf(msgReaderApproved, label(parts[2]), capFirst(parts[1])), true
 	case noticeReaderWithdrawn:
-		return fmt.Sprintf(msgReaderWithdrawn, label(parts[2]), parts[1]), true
+		return fmt.Sprintf(msgReaderWithdrawn, label(parts[2]), capFirst(parts[1])), true
 	}
 	return "", false
 }

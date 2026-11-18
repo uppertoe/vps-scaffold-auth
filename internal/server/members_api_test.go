@@ -336,7 +336,7 @@ func TestMembersFileReadsNeedApproval(t *testing.T) {
 	}
 	// Asking draws the confirmation in place, and changes nothing.
 	page = c.get("/admin/app-feeds?confirm=approve&app=digest&group=coordinators", nil).Body.String()
-	if !strings.Contains(page, "Starting the feed sends digest the email address of everyone in coordinators, and keeps digest up to date as the group changes.") || strings.Count(page, `action="/admin/member-readers/approve"`) != 1 {
+	if !strings.Contains(page, "Starting the feed sends Digest the email address of everyone in coordinators, and keeps Digest up to date as the group changes.") || strings.Count(page, `action="/admin/member-readers/approve"`) != 1 {
 		t.Fatal("the App feeds page does not confirm the approval")
 	}
 	if list, _ := srv.store.ListMemberReaderApprovals(ctx); len(list) != 0 {
@@ -355,12 +355,12 @@ func TestMembersFileReadsNeedApproval(t *testing.T) {
 		t.Fatalf("approve = %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	page = c.get("/admin/app-feeds", nil).Body.String()
-	if !strings.Contains(page, `<div class="rstrip ok" role="status"><i aria-hidden="true"></i><span>The feed of coordinators to digest has started.</span></div>`) ||
+	if !strings.Contains(page, `<div class="rstrip ok" role="status"><i aria-hidden="true"></i><span>The feed of coordinators to Digest has started.</span></div>`) ||
 		strings.Contains(page, `class="notice ok"`) || !strings.Contains(page, "Started by admin@example.com on ") ||
 		!strings.Contains(page, `href="/admin/app-feeds?confirm=withdraw&amp;app=digest&amp;group=coordinators"`) {
 		t.Error("the App feeds page does not show the approval")
 	}
-	if page := c.get("/admin/app-feeds?confirm=withdraw&app=digest&group=coordinators", nil).Body.String(); !strings.Contains(page, "Once the feed stops, digest no longer receives the people in coordinators.") ||
+	if page := c.get("/admin/app-feeds?confirm=withdraw&app=digest&group=coordinators", nil).Body.String(); !strings.Contains(page, "Once the feed stops, Digest no longer receives the people in coordinators.") ||
 		!strings.Contains(page, `action="/admin/member-readers/withdraw"`) {
 		t.Error("the App feeds page does not confirm the withdrawal")
 	}
@@ -376,7 +376,7 @@ func TestMembersFileReadsNeedApproval(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("withdraw = %d", rec.Code)
 	}
-	if page := c.get("/admin/app-feeds", nil).Body.String(); !strings.Contains(page, "The feed of coordinators to digest has stopped.") {
+	if page := c.get("/admin/app-feeds", nil).Body.String(); !strings.Contains(page, "The feed of coordinators to Digest has stopped.") {
 		t.Error("no notice after withdrawing")
 	}
 	if rec := membersGet(h, "/v1/groups/coordinators/members", digestToken, nil); rec.Code != http.StatusForbidden {

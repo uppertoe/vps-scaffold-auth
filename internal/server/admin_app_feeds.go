@@ -132,9 +132,9 @@ func feedsWaitingLine(apps []string) attentionLine {
 	case len(slices.Compact(slices.Sorted(slices.Values(apps)))) > 1:
 		l.Name, l.After = fmt.Sprintf(msgFeedsWaitingMany, capFirst(numberWord(len(apps)))), msgFeedsWaitingAre
 	case len(apps) == 1:
-		l.Name, l.After = apps[0], msgFeedsAskedOne
+		l.Name, l.After = capFirst(apps[0]), msgFeedsAskedOne
 	default:
-		l.Name, l.After = apps[0], fmt.Sprintf(msgFeedsAskedMany, numberWord(len(apps)))
+		l.Name, l.After = capFirst(apps[0]), fmt.Sprintf(msgFeedsAskedMany, numberWord(len(apps)))
 	}
 	return l
 }
@@ -177,9 +177,9 @@ func (s *Server) handleAdminReaders(w http.ResponseWriter, r *http.Request) {
 					v.StripTone = "ask"
 					// The group is named as its token names it.
 					if kind == "approve" {
-						v.Strip = fmt.Sprintf(msgReaderConfirm, app, row.Group.Label)
+						v.Strip = fmt.Sprintf(msgReaderConfirm, capFirst(app), row.Group.Label)
 					} else {
-						v.Strip = fmt.Sprintf(msgFeedStopAsk, app, row.Group.Label)
+						v.Strip = fmt.Sprintf(msgFeedStopAsk, capFirst(app), row.Group.Label)
 					}
 				}
 			}
