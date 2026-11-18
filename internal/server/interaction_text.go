@@ -11,8 +11,9 @@ const msgPersonPending = "%s will hold this role once you save the changes."
 // The end date of a pending person, in the person's token on the role row.
 const msgPersonUntil = "until %s"
 
-// The plus token on a role row. It replaces "Give this role to a group, a
-// list or a setting", since a person is now added from the same picker.
+// The title of a role row's Add token. It replaces "Give this role to a
+// group, a list or a setting", since a person is now added from the same
+// picker.
 const msgAddTokenTitle = "Give this role to a group, a list, a setting or a person"
 
 // The picker's link to the invitation form, which preselects the role.
@@ -27,4 +28,18 @@ const (
 	msgPersonNotAddress = "The person has not been added. Enter a full email address, such as name@example.org."
 	msgPersonBadDate    = "The person has not been added. Enter the end date as a day, month and year."
 	msgPersonPastDate   = "The person has not been added, because the end date has passed."
+)
+
+// The strings added by the picker fixes of 18 November 2026, whose wording
+// the owner has seen.
+
+// A picker that has no domain group or list to offer says so, and links to
+// the Groups page's new-group form; %s is the link, whose words are
+// msgPickerGroupsPage. A picker that offers some has a quiet link to the
+// same form, msgPickerNewGroup, at the foot of its group sections.
+const (
+	msgPickerNoGroups   = "No group can be chosen yet. You can create a domain group or a list on the %s."
+	msgPickerGroupsPage = "Groups page"
+	msgPickerNewGroup   = "New group"
+	newGroupHref        = "/admin/groups/new"
 )

@@ -34,6 +34,7 @@
       <div class="kind">{{.Heading}}</div>
       {{range .Options}}<label class="opt"><input type="checkbox" class="tick" name="{{.Field}}" value="{{.Value}}" data-held="0"><span class="box"></span><span class="oline">{{template "token" .Token}}<small>{{.Who}}</small></span></label>{{end}}
       {{end}}
+      {{if .NoGroups}}<p class="pnote">{{.NoGroups}}</p>{{else if .NewGroup}}<div class="newgroup"><a href="{{.NewGroupHref}}">{{.NewGroup}}</a></div>{{end}}
       <div class="kind">People and cards</div>
       <div class="addperson" data-addperson="{{.Role}}" data-msg-pending="{{.MsgPending}}" data-msg-address="{{.MsgNotAddress}}" data-msg-past="{{.MsgPastDate}}" data-msg-date="{{.MsgBadDate}}" data-msg-until="{{.MsgUntil}}">
         <input type="email" name="pa.{{.Role}}" placeholder="name@example.org" aria-label="Address to add" autocomplete="off">

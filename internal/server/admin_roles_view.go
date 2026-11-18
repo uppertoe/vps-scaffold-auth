@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"html/template"
 	"net/url"
 	"sort"
 	"strings"
@@ -461,6 +462,11 @@ type pickerView struct {
 	Today                                  string
 	MsgPending, MsgNotAddress, MsgPastDate string
 	MsgBadDate, MsgUntil, InviteText       string
+	// NoGroups is the line shown when no domain group or list can be
+	// chosen, with its link to the new-group form; otherwise NewGroup is
+	// the quiet link to that form under the group sections.
+	NoGroups               template.HTML
+	NewGroup, NewGroupHref string
 }
 
 type pickerSection struct {
@@ -786,6 +792,12 @@ func (s *Server) picker(w *rolesWorld, a *roles.App, role string, inRow map[stri
 			lists.Options = append(lists.Options, s.pickerOption(w, role, store.AssignList, n, inRow))
 		}
 	}
+	pv.NewGroupHref = newGroupHref
+	if !offers(domains) && !offers(lists) {
+		pv.NoGroups = template.HTML(fmt.Sprintf(msgPickerNoGroups, `<a href="`+newGroupHref+`">`+template.HTMLEscapeString(msgPickerGroupsPage)+`</a>`))
+	} else {
+		pv.NewGroup = msgPickerNewGroup
+	}
 	for _, sec := range []pickerSection{settings, domains, lists} {
 		var keep []pickerOption
 		for _, o := range sec.Options {
@@ -799,6 +811,16 @@ func (s *Server) picker(w *rolesWorld, a *roles.App, role string, inRow map[stri
 		}
 	}
 	return pv
+}
+
+// offers reports whether a picker section has a holder that can be chosen.
+func offers(sec pickerSection) bool {
+	for _, o := range sec.Options {
+		if o.Field != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // pickerOption is one holder in the picker; an option already in the row
