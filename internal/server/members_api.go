@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/ratelimit"
+	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
 // The members endpoint lets an app ask who is in a group, for work it does
@@ -22,7 +24,7 @@ import (
 // It is served on its own listener (MEMBERS_LISTEN_ADDR), which Caddy never
 // proxies, so only containers on the server's Docker network can reach it.
 // Each app has its own bearer token and may read only the groups listed for
-// it in MEMBER_READERS. The answer is the members the gateway applies now,
+// it in MEMBER_READERS_FILE or MEMBER_READERS. The answer is the members the gateway applies now,
 // through includes, less any address the allow-list does not admit: a guest
 // member is told about the group when signed in, but is never reported here
 // (the owner's choice, 2026-11-03).
@@ -32,6 +34,9 @@ type memberReader struct {
 	app    string
 	hash   [32]byte
 	groups []string
+	// fromFile: each group needs an administrator's approval (see
+	// member_reader_approvals.go).
+	fromFile bool
 }
 
 type membersAPI struct {
@@ -47,7 +52,7 @@ func newMembersAPI(readers []config.MemberReader) *membersAPI {
 		perIP:  ratelimit.New(30, time.Minute),
 	}
 	for _, r := range readers {
-		api.readers = append(api.readers, memberReader{app: r.App, hash: sha256.Sum256([]byte(r.Token)), groups: r.Groups})
+		api.readers = append(api.readers, memberReader{app: r.App, hash: sha256.Sum256([]byte(r.Token)), groups: r.Groups, fromFile: r.FromFile})
 	}
 	return api
 }
@@ -136,6 +141,41 @@ func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 		membersError(w, http.StatusForbidden, notPermitted)
 		return
 	}
+	// A pair from the readers file is served only once an administrator has
+	// approved it, checked at every read so that an approval or withdrawal
+	// takes effect at once. An unapproved read gets the same answer as a
+	// group the app may not read, and is not recorded.
+	if reader.fromFile {
+		ok, err := s.store.MemberReaderApproved(r.Context(), reader.app, group)
+		if err != nil {
+			log.Printf("members: %s reading %q: %v", reader.app, group, err)
+			membersError(w, http.StatusInternalServerError, "the members could not be read")
+			return
+		}
+		if !ok {
+			log.Printf("members: %s asked for %q, which an administrator has not approved", reader.app, group)
+			membersError(w, http.StatusForbidden, notPermitted)
+			return
+		}
+	}
+	// A domain group admits everyone at its domains and keeps no member
+	// list, so an empty answer would be wrong. The kind is checked at every
+	// read, because a group can be replaced by one of the other kind.
+	kind, exists, err := s.store.GroupKind(r.Context(), group)
+	if err != nil {
+		log.Printf("members: %s reading %q: %v", reader.app, group, err)
+		membersError(w, http.StatusInternalServerError, "the members could not be read")
+		return
+	}
+	if !exists {
+		membersError(w, http.StatusForbidden, notPermitted)
+		return
+	}
+	if kind == store.GroupKindDomain {
+		log.Printf("ERROR members: %s asked for %q, which is a domain group and has no member list", reader.app, group)
+		membersError(w, http.StatusConflict, "domain group has no member list")
+		return
+	}
 	all, exists, err := s.store.GroupMembersResolved(r.Context(), group)
 	if err != nil {
 		log.Printf("members: %s reading %q: %v", reader.app, group, err)
@@ -178,6 +218,37 @@ func privateSource(remote string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+}
+
+// domainGroupReads returns, for each configured reader, the groups it is
+// listed for that are domain groups, which it cannot read. A group that
+// cannot be looked up is left out. Group kinds live in the store, not the
+// settings, so this is checked here rather than when the settings are read,
+// for MEMBER_READERS_FILE and MEMBER_READERS alike.
+func (s *Server) domainGroupReads(ctx context.Context) map[string][]string {
+	out := map[string][]string{}
+	for _, r := range s.members.readers {
+		for _, g := range r.groups {
+			if kind, ok, err := s.store.GroupKind(ctx, g); err == nil && ok && kind == store.GroupKindDomain {
+				out[r.app] = append(out[r.app], g)
+			}
+		}
+	}
+	return out
+}
+
+// logDomainGroupReads logs, once at start-up, every reader listed for a
+// domain group.
+func (s *Server) logDomainGroupReads(ctx context.Context) {
+	found := s.domainGroupReads(ctx)
+	apps := make([]string, 0, len(found))
+	for app := range found {
+		apps = append(apps, app)
+	}
+	slices.Sort(apps)
+	for _, app := range apps {
+		log.Printf("ERROR member readers: %q is listed to read %s; a domain group has no member list, so the gateway refuses reads of it", app, strings.Join(found[app], ", "))
+	}
 }
 
 func membersError(w http.ResponseWriter, status int, msg string) {

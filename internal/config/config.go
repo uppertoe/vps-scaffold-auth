@@ -93,11 +93,36 @@ type Config struct {
 	// sent as a bearer token (an ntfy publish token for a write-only user).
 	GroupFeeds []GroupFeed
 	// MemberReaders are the apps that may ask who is in a group
-	// (MEMBER_READERS, tokens in MEMBER_READER_TOKEN_<APP>), served on
-	// MembersListenAddr, a port Caddy never proxies. Empty: no endpoint.
-	MemberReaders     []MemberReader
-	MembersListenAddr string
-	FeedInterval      time.Duration
+	// (MEMBER_READERS_FILE and MEMBER_READERS together, tokens in
+	// MEMBER_READER_TOKEN_<APP>), served on MembersListenAddr, a port Caddy
+	// never proxies. UnusableMemberReaders are apps the file lists without a
+	// usable token, whose reads are refused. MembersListenAddr is empty, and
+	// there is no endpoint, when neither setting is set or when the address
+	// is unusable and the readers come only from the file.
+	MemberReadersFile     string
+	MemberReaders         []MemberReader
+	UnusableMemberReaders []UnusableMemberReader
+	MembersListenAddr     string
+	// MembersAlias is the host name the gateway has on its members networks
+	// (the host in MEMBERS_LISTEN_ADDR). It is set whenever MEMBER_READERS
+	// or MEMBER_READERS_FILE is, and the public listener refuses connections
+	// on its addresses even when MembersListenAddr is empty. MembersRequired
+	// is true when MEMBER_READERS lists an app: a members listener that cannot
+	// start then stops the gateway; otherwise it is logged.
+	MembersAlias    string
+	MembersRequired bool
+	// MembersReadersSet is true when MEMBER_READERS or MEMBER_READERS_FILE
+	// is set; a members alias that does not resolve is then logged.
+	MembersReadersSet bool
+	// MemberReadersFileRead is true when MEMBER_READERS_FILE was read whole;
+	// MemberReadersFilePairs are every app's groups in it, usable or not;
+	// MemberReadersEnvApps are the apps in MEMBER_READERS. The gateway clears
+	// an approval at start-up only when the file was read and its pair is
+	// not in the file, and never for an app in MEMBER_READERS.
+	MemberReadersFileRead  bool
+	MemberReadersFilePairs map[string][]string
+	MemberReadersEnvApps   []string
+	FeedInterval           time.Duration
 	// FeedAutoApplyAfter, when set (GROUP_FEED_AUTO_APPLY_AFTER), applies a
 	// held change on its own once the same change has been held this long,
 	// unless an administrator chose to keep the current members. Zero keeps
@@ -368,23 +393,9 @@ func Load() (*Config, error) {
 	if c.GroupFeeds, err = parseGroupFeeds(getenv("GROUP_FEEDS", ""), c.CookieInsecure); err != nil {
 		return nil, err
 	}
-	if c.MemberReaders, err = parseMemberReaders(getenv("MEMBER_READERS", "")); err != nil {
+	envReaders, err := parseMemberReaders(getenv("MEMBER_READERS", ""))
+	if err != nil {
 		return nil, err
-	}
-	if len(c.MemberReaders) > 0 {
-		c.MembersListenAddr = strings.TrimSpace(getenv("MEMBERS_LISTEN_ADDR", DefaultMembersListenAddr))
-		if listenPort(c.MembersListenAddr) == 0 {
-			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR %q needs a port, such as auth-members:8081", c.MembersListenAddr)
-		}
-		if sameListener(c.MembersListenAddr, c.ListenAddr) {
-			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR must use a different port from LISTEN_ADDR, which Caddy proxies")
-		}
-		// The host names the gateway's members networks (see
-		// internal/netsplit): without one the members listener would answer
-		// on every network, and the public listener on the members networks.
-		if h, _, err := net.SplitHostPort(c.MembersListenAddr); err != nil || strings.TrimSpace(h) == "" {
-			return nil, fmt.Errorf("MEMBERS_LISTEN_ADDR %q needs the name the gateway has on its members networks, such as auth-members:8081", c.MembersListenAddr)
-		}
 	}
 	for _, g := range strings.FieldsFunc(getenv("GROUP_FEED_ROTATING", ""), func(r rune) bool { return r == ',' || r == ' ' }) {
 		found := false
@@ -425,10 +436,91 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("GROUP_FEED_ALERT_TOKEN must not contain whitespace")
 	}
 
+	// The member readers come after every other secret is known, so that no
+	// reader's token can be one of them.
+	c.MemberReadersFile = strings.TrimSpace(getenv("MEMBER_READERS_FILE", ""))
+	fileGroups, fileOrder, fileRead := readMemberReadersFile(c.MemberReadersFile, logPrintf)
+	c.MemberReadersFileRead, c.MemberReadersFilePairs = fileRead, fileGroups
+	for _, r := range envReaders {
+		c.MemberReadersEnvApps = append(c.MemberReadersEnvApps, r.App)
+	}
+	c.MemberReaders, c.UnusableMemberReaders = mergeMemberReaders(envReaders, fileGroups, fileOrder, c.secrets(), logPrintf)
+	if err := c.membersListen(len(envReaders) > 0, logPrintf); err != nil {
+		return nil, err
+	}
+
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// secrets lists every secret the gateway holds other than the member
+// readers' tokens, as written in the environment.
+func (c *Config) secrets() []string {
+	out := []string{string(c.SessionSecret), c.SMTPPassword, c.ResendAPIKey, c.FeedAlertToken,
+		strings.TrimSpace(getenv("DATA_ENCRYPTION_KEY", ""))}
+	if len(c.DataEncryptionKey) > 0 {
+		out = append(out, hex.EncodeToString(c.DataEncryptionKey), string(c.DataEncryptionKey))
+	}
+	for _, f := range c.GroupFeeds {
+		out = append(out, f.Token)
+	}
+	return out
+}
+
+// membersListen sets the members listener's address and the alias whose
+// addresses the public listener refuses. The alias is always set, so an app
+// on a members network never reaches the public listener, whatever the
+// settings; the listener's address is set whenever MEMBER_READERS or
+// MEMBER_READERS_FILE is, even with no usable reader.
+//
+// With readers in MEMBER_READERS (required), a bad MEMBERS_LISTEN_ADDR stops
+// the gateway, as it always has. With readers only from the file, it is
+// logged instead: the gateway runs without the members listener and still
+// refuses public connections on the alias's addresses.
+func (c *Config) membersListen(required bool, logf func(string, ...any)) error {
+	addr := strings.TrimSpace(getenv("MEMBERS_LISTEN_ADDR", DefaultMembersListenAddr))
+	host, _, splitErr := net.SplitHostPort(addr)
+	host = strings.TrimSpace(host)
+	if !required && c.MemberReadersFile == "" {
+		// No readers, so no members listener; but the gateway may still be on
+		// a members network (the scaffold joins it whenever an app has a
+		// marker), so the public listener refuses on the alias all the same.
+		if host == "" {
+			host, _, _ = net.SplitHostPort(DefaultMembersListenAddr)
+		}
+		c.MembersAlias = host
+		return nil
+	}
+	c.MembersRequired, c.MembersReadersSet = required, true
+	var problem error
+	switch {
+	case listenPort(addr) == 0:
+		problem = fmt.Errorf("MEMBERS_LISTEN_ADDR %q needs a port, such as auth-members:8081", addr)
+	case sameListener(addr, c.ListenAddr):
+		problem = fmt.Errorf("MEMBERS_LISTEN_ADDR must use a different port from LISTEN_ADDR, which Caddy proxies")
+	// The host names the gateway's members networks (see internal/netsplit):
+	// without one the members listener would answer on every network, and
+	// the public listener on the members networks.
+	case splitErr != nil || host == "":
+		problem = fmt.Errorf("MEMBERS_LISTEN_ADDR %q needs the name the gateway has on its members networks, such as auth-members:8081", addr)
+	}
+	if problem == nil {
+		c.MembersListenAddr, c.MembersAlias = addr, host
+		return nil
+	}
+	if required {
+		return problem
+	}
+	// The renderer gives the gateway the default alias on every members
+	// network, so refuse on it when the setting names no host of its own.
+	if host == "" {
+		host, _, _ = net.SplitHostPort(DefaultMembersListenAddr)
+	}
+	c.MembersAlias = host
+	logf("ERROR members endpoint: %v; the gateway runs without the members listener, and the public listener still refuses connections on the addresses of %q", problem, host)
+	return nil
 }
 
 func (c *Config) validate() error {

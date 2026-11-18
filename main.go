@@ -127,32 +127,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", cfg.ListenAddr, err)
 	}
-	var membersLns []net.Listener
+	resolve := func(ctx context.Context, h string) ([]netip.Addr, error) {
+		return net.DefaultResolver.LookupNetIP(ctx, "ip", h)
+	}
+	publicLn, membersLns, err := splitMembers(ctx, cfg, publicLn, resolve, net.InterfaceAddrs, net.Listen)
+	if err != nil {
+		publicLn.Close()
+		return err
+	}
 	var membersServer *http.Server
-	if len(cfg.MemberReaders) > 0 {
-		host, port, _ := net.SplitHostPort(cfg.MembersListenAddr)
-		lookupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		resolve := func(ctx context.Context, h string) ([]netip.Addr, error) {
-			return net.DefaultResolver.LookupNetIP(ctx, "ip", h)
-		}
-		own, err := netsplit.OwnAddrs(lookupCtx, host, resolve, net.InterfaceAddrs)
-		cancel()
-		if err != nil {
-			publicLn.Close()
-			return fmt.Errorf("members endpoint: MEMBERS_LISTEN_ADDR: %w; give the gateway that name on each members network", err)
-		}
-		publicLn = netsplit.Refusing(publicLn, netsplit.NewSet(own))
-		for _, a := range own {
-			ln, err := net.Listen("tcp", net.JoinHostPort(a.String(), port))
-			if err != nil {
-				publicLn.Close()
-				for _, l := range membersLns {
-					l.Close()
-				}
-				return fmt.Errorf("members endpoint: %w", err)
-			}
-			membersLns = append(membersLns, ln)
-		}
+	if len(membersLns) > 0 {
 		membersServer = &http.Server{
 			Addr:              cfg.MembersListenAddr,
 			Handler:           srv.MembersHandler(),
@@ -303,4 +287,103 @@ func runHealthcheck() int {
 		return 1
 	}
 	return 0
+}
+
+// splitMembers keeps the members networks apart from the public listener (see
+// internal/netsplit). It always resolves the members alias and wraps the
+// public listener so that it refuses every connection arriving on the
+// gateway's own addresses under that name, whatever the settings and whether
+// or not any reader is usable. It then binds the members
+// listener to those addresses, which answers an unknown token with 401.
+//
+// When MEMBER_READERS lists an app, a failure stops the gateway, as before.
+// When the readers come only from the file, a failure is logged and the
+// gateway runs without the members listener, refusing on whatever own
+// addresses the alias did name: a gateway that will not start takes sign-in
+// away from every app on the server.
+func splitMembers(ctx context.Context, cfg *config.Config, publicLn net.Listener, resolve netsplit.Resolver, local netsplit.LocalAddrs,
+	listen func(network, addr string) (net.Listener, error)) (net.Listener, []net.Listener, error) {
+	if cfg.MembersAlias == "" {
+		return publicLn, nil, nil
+	}
+	// With neither setting, the lookup is a precaution and usually finds
+	// nothing, so it is not allowed to hold up start-up for long.
+	wait := 10 * time.Second
+	if !cfg.MembersReadersSet {
+		wait = 2 * time.Second
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, wait)
+	own, err := netsplit.OwnAddrs(lookupCtx, cfg.MembersAlias, resolve, local)
+	cancel()
+	// An alias that names every one of the gateway's addresses names the one
+	// Caddy reaches too (a leftover MEMBERS_LISTEN_ADDR=auth:8081, say).
+	// Refusing there would refuse Caddy and take sign-in away from every
+	// app, which is worse than a missing members endpoint, so this is never
+	// fatal: the gateway logs it and runs without the split.
+	if err == nil && namesEveryAddress(own, local) {
+		log.Printf("ERROR members endpoint: %q names every one of the gateway's addresses, including the one Caddy reaches, so the gateway neither refuses public connections on it nor starts the members listener. Give the gateway a name of its own on each members network, such as auth-members, that Caddy's network does not use, and set MEMBERS_LISTEN_ADDR to it.", cfg.MembersAlias)
+		return publicLn, nil, nil
+	}
+	if len(own) > 0 {
+		publicLn = netsplit.Refusing(publicLn, netsplit.NewSet(own))
+	}
+	if err != nil {
+		if cfg.MembersRequired {
+			return publicLn, nil, fmt.Errorf("members endpoint: MEMBERS_LISTEN_ADDR: %w; give the gateway that name on each members network", err)
+		}
+		if !cfg.MembersReadersSet {
+			// Neither setting is set: a gateway on no members network is
+			// the normal case, and needs no log line.
+			return publicLn, nil, nil
+		}
+		log.Printf("ERROR members endpoint: %v; the gateway runs without the members listener. Give the gateway the name %q on each members network, then recreate it.", err, cfg.MembersAlias)
+		return publicLn, nil, nil
+	}
+	if cfg.MembersListenAddr == "" {
+		return publicLn, nil, nil
+	}
+	_, port, _ := net.SplitHostPort(cfg.MembersListenAddr)
+	var lns []net.Listener
+	for _, a := range own {
+		ln, err := listen("tcp", net.JoinHostPort(a.String(), port))
+		if err != nil {
+			for _, l := range lns {
+				l.Close()
+			}
+			if cfg.MembersRequired {
+				return publicLn, nil, fmt.Errorf("members endpoint: %w", err)
+			}
+			log.Printf("ERROR members endpoint: %v; the gateway runs without the members listener", err)
+			return publicLn, nil, nil
+		}
+		lns = append(lns, ln)
+	}
+	return publicLn, lns, nil
+}
+
+// namesEveryAddress reports whether own holds every non-loopback address of
+// this host's interfaces.
+func namesEveryAddress(own []netip.Addr, local netsplit.LocalAddrs) bool {
+	ifaces, err := local()
+	if err != nil || len(own) == 0 {
+		return false
+	}
+	mine := netsplit.NewSet(own)
+	for _, a := range ifaces {
+		var ip netip.Addr
+		if p, err := netip.ParsePrefix(a.String()); err == nil {
+			ip = p.Addr().Unmap()
+		} else if x, err := netip.ParseAddr(a.String()); err == nil {
+			ip = x.Unmap()
+		} else {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		if !mine[ip] {
+			return false
+		}
+	}
+	return true
 }

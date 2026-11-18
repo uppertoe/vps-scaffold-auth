@@ -128,6 +128,14 @@ const (
 	AdminActionDesignSave   = "card_design_save"
 	AdminActionDesignDelete = "card_design_delete"
 	AdminActionCardDesign   = "card_design_change"
+	// Member readers: an app from the member-readers file approved to read a
+	// group's members, or that approval withdrawn (target the app, detail
+	// the group).
+	AdminActionMemberReaderApprove  = "member_reader_approve"
+	AdminActionMemberReaderWithdraw = "member_reader_withdraw"
+	// The gateway cleared an approval at start-up, because the readers file
+	// no longer lists the pair.
+	AdminActionMemberReaderClear = "member_reader_clear"
 )
 
 // GroupSyncState is the outcome of the last sync of a feed-filled group.
@@ -305,6 +313,14 @@ type MemberReadSummary struct {
 	Reads       int
 }
 
+// MemberReaderApproval is an administrator's approval of one app reading one
+// group's members, for a pair listed in the member-readers file.
+type MemberReaderApproval struct {
+	App, Group string
+	ApprovedBy string
+	ApprovedAt time.Time
+}
+
 // AccessSummary is one person's use of one site over a period.
 type AccessSummary struct {
 	Email, Host, Kind string
@@ -456,6 +472,8 @@ type Store interface {
 	SetGroupOrg(ctx context.Context, name, org string) (bool, error)
 	// DeleteGroup removes a group and (via cascade) its memberships. A group
 	// a role assignment names is refused with ErrGroupHoldsRoles.
+	// DeleteGroup also deletes, in the same transaction, every approval for
+	// an app to read the group's members (see MemberReaderApproval).
 	DeleteGroup(ctx context.Context, name string) error
 	// AddGroupMember adds an email to a group (idempotent).
 	AddGroupMember(ctx context.Context, group, email string) error
@@ -624,11 +642,27 @@ type Store interface {
 	EndSessionsBefore(ctx context.Context, key string, at time.Time) error
 	// ListSessionCutoffs returns every cutoff, Unix seconds by key.
 	ListSessionCutoffs(ctx context.Context) (map[string]int64, error)
+	// GroupKind returns a group's kind (GroupKindList or GroupKindDomain);
+	// exists is false for a group that does not exist.
+	GroupKind(ctx context.Context, group string) (kind string, exists bool, err error)
 	// GroupMembersResolved returns the addresses group admits, through its
 	// includes too; exists is false for a group that does not exist.
 	GroupMembersResolved(ctx context.Context, group string) (members []string, exists bool, err error)
 	// RecordMemberRead notes that an app read a group's members.
 	RecordMemberRead(ctx context.Context, app, group, source string, at time.Time) error
+	// ListMemberReaderApprovals returns every approved (app, group) pair from
+	// the member-readers file, ordered by app and group.
+	ListMemberReaderApprovals(ctx context.Context) ([]MemberReaderApproval, error)
+	// MemberReaderApproved reports whether an administrator has approved app
+	// reading group's members.
+	MemberReaderApproved(ctx context.Context, app, group string) (bool, error)
+	// ApproveMemberReader records an administrator's approval of app reading
+	// group's members. It reports false, and changes nothing, when the pair
+	// is already approved or the group does not exist.
+	ApproveMemberReader(ctx context.Context, app, group, by string, at time.Time) (bool, error)
+	// WithdrawMemberReader removes an approval; it reports false when there
+	// was none.
+	WithdrawMemberReader(ctx context.Context, app, group string) (bool, error)
 	// SummariseMemberReads returns which apps read which groups since since.
 	SummariseMemberReads(ctx context.Context, since time.Time) ([]MemberReadSummary, error)
 	// AppAccessHosts lists the sites with an app-access row since since.

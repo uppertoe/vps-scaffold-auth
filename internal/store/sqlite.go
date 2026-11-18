@@ -246,6 +246,13 @@ CREATE TABLE IF NOT EXISTS member_reads (
 	UNIQUE (app, group_name, source, bucket)
 );
 CREATE INDEX IF NOT EXISTS idx_member_reads_last ON member_reads(last_at);
+CREATE TABLE IF NOT EXISTS member_reader_approvals (
+	app         TEXT NOT NULL,
+	group_name  TEXT NOT NULL,
+	approved_by TEXT NOT NULL,
+	approved_at INTEGER NOT NULL,
+	PRIMARY KEY (app, group_name)
+);
 CREATE TABLE IF NOT EXISTS admin_events (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	actor      TEXT NOT NULL,
@@ -1038,6 +1045,11 @@ func (s *SQLite) DeleteGroup(ctx context.Context, name string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM groups WHERE name = ?`, name); err != nil {
 		return err
 	}
+	// An approval to read a group's members is for this group, never for a
+	// group created later under the same name.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM member_reader_approvals WHERE group_name = ?`, name); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -1636,6 +1648,64 @@ func (s *SQLite) RecordMemberRead(ctx context.Context, app, group, source string
 		 ON CONFLICT(app, group_name, source, bucket) DO UPDATE SET reads = reads + 1, last_at = excluded.last_at`,
 		app, group, source, at.Unix()/3600, at.Unix(), at.Unix())
 	return err
+}
+
+// ListMemberReaderApprovals returns every approval, ordered by app and group.
+func (s *SQLite) ListMemberReaderApprovals(ctx context.Context) ([]MemberReaderApproval, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT app, group_name, approved_by, approved_at FROM member_reader_approvals ORDER BY app, group_name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MemberReaderApproval
+	for rows.Next() {
+		var a MemberReaderApproval
+		var at int64
+		if err := rows.Scan(&a.App, &a.Group, &a.ApprovedBy, &at); err != nil {
+			return nil, err
+		}
+		a.ApprovedAt = time.Unix(at, 0)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// MemberReaderApproved reports whether app may read group's members.
+func (s *SQLite) MemberReaderApproved(ctx context.Context, app, group string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM member_reader_approvals WHERE app = ? AND group_name = ?`, app, group).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// ApproveMemberReader records an approval; an existing one is kept as it was,
+// and nothing is recorded for a group that does not exist, so an approval can
+// never outlive a group deleted at the same moment.
+func (s *SQLite) ApproveMemberReader(ctx context.Context, app, group, by string, at time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO member_reader_approvals (app, group_name, approved_by, approved_at)
+		 SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM groups WHERE name = ?)
+		 ON CONFLICT(app, group_name) DO NOTHING`, app, group, by, at.Unix(), group)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// WithdrawMemberReader removes an approval.
+func (s *SQLite) WithdrawMemberReader(ctx context.Context, app, group string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM member_reader_approvals WHERE app = ? AND group_name = ?`, app, group)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // SummariseMemberReads returns one row per app and group read since since,

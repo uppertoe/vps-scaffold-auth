@@ -121,6 +121,11 @@ func (s *SQLite) groupKind(ctx context.Context, name string) (string, bool, erro
 	return groupKindIn(ctx, s.db, name)
 }
 
+// GroupKind returns a group's kind; exists is false when the group is missing.
+func (s *SQLite) GroupKind(ctx context.Context, name string) (string, bool, error) {
+	return s.groupKind(ctx, name)
+}
+
 func groupKindIn(ctx context.Context, q querier, name string) (string, bool, error) {
 	var kind string
 	err := q.QueryRowContext(ctx, `SELECT kind FROM groups WHERE name = ?`, name).Scan(&kind)

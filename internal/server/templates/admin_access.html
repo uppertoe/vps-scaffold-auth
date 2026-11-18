@@ -133,9 +133,64 @@
 </div>
 {{end}}
 
-{{if .MemberReads}}
+{{if or .MemberReads .UnusableReaders .ReaderApprovals}}
 <div class="panel">
   <h2>Apps that read group members</h2>
+  {{if .ReaderApprovals}}
+  <div class="tablewrap"><table class="stack">
+    <thead><tr><th>App</th><th>Group</th><th>Approval</th><th></th></tr></thead>
+    <tbody>
+    {{range .ReaderApprovals}}
+      <tr>
+        <td><code class="mono">{{.App}}</code></td>
+        <td data-label="Group"><a href="/admin/groups/{{.Group}}"><code class="mono">{{.Group}}</code></a></td>
+        <td data-label="Approval">{{.Status}}</td>
+        <td>
+        {{if .Approved}}
+          <form class="inline" method="post" action="/admin/member-readers/withdraw">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="app" value="{{.App}}">
+            <input type="hidden" name="group" value="{{.Group}}">
+            <button type="submit" class="ghost">Withdraw approval</button>
+          </form>
+        {{else if not .Missing}}
+          <details class="confirm">
+            <summary>Approve</summary>
+            <div class="confirmbody">
+              <p>{{.Confirm}}</p>
+              <form class="inline" method="post" action="/admin/member-readers/approve">
+                <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                <input type="hidden" name="app" value="{{.App}}">
+                <input type="hidden" name="group" value="{{.Group}}">
+                <button type="submit">Approve</button>
+              </form>
+            </div>
+          </details>
+        {{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table></div>
+  {{end}}
+  {{if .UnusableReaders}}
+  <p>The gateway refuses the reads listed below.</p>
+  <div class="tablewrap"><table class="stack">
+    <thead><tr><th>App</th><th>Groups</th><th>Token setting</th><th>Problem</th></tr></thead>
+    <tbody>
+    {{range .UnusableReaders}}
+      <tr>
+        <td><code class="mono">{{.App}}</code></td>
+        <td data-label="Groups"><code class="mono">{{.Groups}}</code></td>
+        <td data-label="Token setting"><code class="mono">{{.TokenEnv}}</code></td>
+        <td data-label="Problem">{{.Problem}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table></div>
+  <p class="muted">If an app has no usable token, set its token in the gateway's environment to 32 or more random characters that no other app or setting uses, such as the output of openssl rand -hex 32, then recreate the gateway. If an app is listed for a domain group, change the app's listing to name a list group instead. If an app is listed in both MEMBER_READERS and the readers file, add the groups to MEMBER_READERS, or remove the app from MEMBER_READERS so that the readers file decides its groups.</p>
+  {{end}}
+  {{if .MemberReads}}
   <div class="tablewrap"><table class="stack">
     <thead><tr><th>App</th><th>Group</th><th>From</th><th>Last read</th><th class="num">Reads</th></tr></thead>
     <tbody>
@@ -150,6 +205,7 @@
     {{end}}
     </tbody>
   </table></div>
+  {{end}}
 </div>
 {{end}}
 
