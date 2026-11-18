@@ -528,11 +528,22 @@ func (s *Server) handlePasskeyConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, role, ok := s.passkeySession(r)
-	if !ok || role != authz.RoleAdmin || !s.cfg.TOTPEnabled {
+	if !ok || role != authz.RoleAdmin || !s.cfg.TOTPEnabled || s.computerOnNetwork(r) {
 		http.Redirect(w, r, s.passkeysURL(), http.StatusFound)
 		return
 	}
 	s.renderPasskeyConfirm(w, r, http.StatusOK, "")
+}
+
+// computerOnNetwork reports whether a computer on a listed network makes the
+// request. The code confirmation sends it to the passkeys page, which says
+// why it cannot add a passkey, before a code is asked for or spent.
+func (s *Server) computerOnNetwork(r *http.Request) bool {
+	if isPhone(r) {
+		return false
+	}
+	_, blocked := s.passkeyBlockedNetwork(r)
+	return blocked
 }
 
 // The confirmation page takes the authenticator code on its own, before the
@@ -554,7 +565,7 @@ func (s *Server) handlePasskeyConfirmCode(w http.ResponseWriter, r *http.Request
 		return
 	}
 	id, role, ok := s.passkeySession(r)
-	if !ok || role != authz.RoleAdmin || !s.cfg.TOTPEnabled {
+	if !ok || role != authz.RoleAdmin || !s.cfg.TOTPEnabled || s.computerOnNetwork(r) {
 		http.Redirect(w, r, s.passkeysURL(), http.StatusFound)
 		return
 	}

@@ -9,6 +9,9 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	pqtotp "github.com/pquerna/otp/totp"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/passkey/passkeytest"
@@ -174,4 +177,33 @@ func phoneSignInWith(t *testing.T, c *client, sender *captureSender, email strin
 	sender.reset()
 	c.postWith("/request", url.Values{"email": {email}}, hdr)
 	return c.postWith("/verify-code", url.Values{"code": {sender.code()}}, hdr).Body.String()
+}
+
+// An administrator's computer on a listed network is sent from the code
+// confirmation to the passkeys page, which says why, before any code is
+// asked for or spent. A phone there is unchanged.
+func TestAdminComputerOnTheNetworkSpendsNoCode(t *testing.T) {
+	srv, sender := pkNetworkServer(t, func(c *config.Config) { c.TOTPEnabled = true })
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	c := newClient(t, srv.Handler())
+	computerSignIn(t, c, sender, "admin@example.com")
+	confirm := c.get("/passkeys/confirm", computer).Body.String()
+	csrf := extractCSRF(t, confirm)
+	if rec := c.get("/passkeys/confirm", computerOnNet); rec.Code != http.StatusFound || rec.Header().Get("Location") != srv.passkeysURL() {
+		t.Fatalf("the confirmation on the network = %d to %q, want the passkeys page", rec.Code, rec.Header().Get("Location"))
+	}
+	code, _ := pqtotp.GenerateCode(secret, time.Now())
+	if rec := c.postWith("/passkeys/confirm", url.Values{"csrf": {csrf}, "code": {code}}, computerOnNet); rec.Code != http.StatusFound || rec.Header().Get("Location") != srv.passkeysURL() {
+		t.Fatalf("a code posted on the network = %d, want the passkeys page", rec.Code)
+	}
+	// The code was not spent: it still works off the network.
+	if rec := c.postWith("/passkeys/confirm", url.Values{"csrf": {csrf}, "code": {code}}, computer); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "data-challenge") {
+		t.Fatalf("the code was spent on the network: %d", rec.Code)
+	}
+	// A phone on the network still reaches the confirmation.
+	p := newClient(t, srv.Handler())
+	phoneSignInWith(t, p, sender, "admin@example.com", phoneOnNet)
+	if rec := p.get("/passkeys/confirm", phoneOnNet); rec.Code != http.StatusOK {
+		t.Fatalf("a phone on the network was turned away from the confirmation: %d", rec.Code)
+	}
 }
