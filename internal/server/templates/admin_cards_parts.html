@@ -59,6 +59,16 @@
   .pill.tag { background: var(--tag-bg); color: var(--tag-fg); border-color: var(--tag-line); }
   .pill.test { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
 
+  .movepanel { margin-top: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; }
+  .movepanel h2 { margin: 0 0 12px; }
+  .movepanel > p { font-size: 14px; color: var(--muted); max-width: 70ch; }
+  .movepanel form { display: grid; gap: 12px; }
+  .movepanel form > p { margin: 0; max-width: 70ch; }
+  .movepanel .fsec { margin: 0; }
+  .movepanel .fsec h3 { margin: 0 0 4px; font-size: 14px; }
+  /* Why an app cannot be chosen is read in full, so it wraps. */
+  .movepanel .choice .cl { flex-wrap: wrap; row-gap: 2px; padding: 4px 0; }
+  .movepanel .choice .cl small { white-space: normal; }
   .dangerpanel { margin-top: 32px; background: var(--surface); border: 1px solid var(--off-line); border-radius: 12px; padding: 20px 24px; }
   .dangerpanel h2 { margin: 0 0 12px; }
   .twocol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
@@ -165,6 +175,8 @@
     .clist .rrow.app .host { display: none; }
     .tbl.events .rrow { grid-template-columns: minmax(0, 1fr); }
     .twocol { grid-template-columns: 1fr; }
+    .movepanel, .dangerpanel { padding: 16px; }
+    .movepanel .fsec { padding: 12px; }
     .twocol p { min-height: 0; }
     .cfacts > div { grid-template-columns: 1fr; gap: 2px; padding: 8px 16px; }
     .cfacts dd { flex-wrap: wrap; white-space: normal; row-gap: 2px; }

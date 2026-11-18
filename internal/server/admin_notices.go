@@ -22,6 +22,7 @@ var adminNotices = map[string]string{
 	"card-revoked":    "The card has been withdrawn. Every later scan is refused, and the sessions its scans started have ended.",
 	"card-reminted":   "The card has been replaced. The printed card no longer works, and a new PDF is ready to print.",
 	"card-design":     "The card's design has been changed. Download the PDF again to print the new look.",
+	"card-moved":      "The card has been moved to the app. The printed card keeps its code, and the next scan opens the app as a user.",
 	"design-saved":    "The design has been saved.",
 	"design-created":  "The design has been added to the list.",
 	"design-deleted":  "The design has been deleted.",
@@ -36,6 +37,8 @@ var adminNotices = map[string]string{
 // the error style.
 var adminWarnings = map[string]string{
 	"card-design-refused": "The card's design has not been changed. Choose a design from the list, and note that a withdrawn card keeps its design.",
+	"card-remint-refused": "The card has not been replaced, because the card has been withdrawn. To give the location a working card, create a new card.",
+	"card-move-refused":   "The card has not been moved, because the card no longer opens a group or has been withdrawn.",
 	"member-invalid":      "The member has not been added. Enter a full email address, such as name@example.org.",
 	"members-none":        "No members have been added, because none were ticked.",
 	"members-refused":     "No members have been added. The allow-list does not admit those addresses, and the gateway does not add such an address to a group an application reads as one of its own roles.",

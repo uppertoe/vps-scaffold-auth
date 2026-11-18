@@ -1235,14 +1235,25 @@ func (s *SQLite) RemintBreakGlassCode(ctx context.Context, id int64, newTokenEnc
 	}
 	defer tx.Rollback()
 	now := time.Now().Unix()
+	// A withdrawn card stays withdrawn: replacing it would bring it back.
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM break_glass_codes WHERE id = ?`, id).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrCardNotActive
+		}
+		return err
+	}
+	if status != BreakGlassActive {
+		return ErrCardNotActive
+	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT OR REPLACE INTO break_glass_retired (token_hash, code_id, retired_at)
 		 SELECT token_hash, id, ? FROM break_glass_codes WHERE id = ?`, now, id); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE break_glass_codes SET token_enc = ?, token_hash = ?, status = ?, updated_at = ?, pdf_at = 0, tested_at = 0 WHERE id = ?`,
-		newTokenEnc, newTokenHash, BreakGlassActive, now, id); err != nil {
+		`UPDATE break_glass_codes SET token_enc = ?, token_hash = ?, updated_at = ?, pdf_at = 0, tested_at = 0 WHERE id = ? AND status = ?`,
+		newTokenEnc, newTokenHash, now, id, BreakGlassActive); err != nil {
 		return err
 	}
 	return tx.Commit()

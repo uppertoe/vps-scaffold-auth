@@ -109,7 +109,7 @@ func (s *Server) roleData(ctx context.Context) roleState {
 	}
 	cards := make(map[int64]store.BreakGlassCode, len(codes))
 	for _, c := range codes {
-		cards[c.ID] = store.BreakGlassCode{ID: c.ID, App: c.App, Role: c.Role, Status: c.Status}
+		cards[c.ID] = store.BreakGlassCode{ID: c.ID, App: c.App, Role: c.Role, Status: c.Status, TargetGroup: c.TargetGroup}
 	}
 	invites, err := s.store.ListInvitations(ctx)
 	if err != nil {
@@ -205,11 +205,21 @@ func (s *Server) heldRoles(r *http.Request, id *session.Identity, app string) []
 		Addr:       clientAddr(r),
 	}
 	if sub.BreakGlass {
-		if c, ok := st.cards[id.Card]; ok && c.Status == store.BreakGlassActive {
+		if c, ok := st.cards[id.Card]; ok && c.Status == store.BreakGlassActive && cardIssuedAsNow(id, c) {
 			sub.CardApp, sub.CardRole = c.App, c.Role
 		}
 	}
 	return roles.Held(app, sub, st.assignments, s.roleEnv(st))
+}
+
+// cardIssuedAsNow reports whether a break-glass session carries the groups
+// its card grants today. A session started before its card was moved from a
+// group onto an app carries the group, and keeps only the group's sites
+// until it ends: the card's app is read for it only once a new scan has
+// issued a session without the group. The same holds when a scan read the
+// card just before a move and issued the session just after it.
+func cardIssuedAsNow(id *session.Identity, c store.BreakGlassCode) bool {
+	return id.Groups == authz.BuildGroups(c.TargetGroup, nil)
 }
 
 // sessionLists are the lists a session's person belongs to: its groups
@@ -267,31 +277,12 @@ func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *sessio
 			return
 		}
 	}
-	if s.roleWantsAdminStep(id) {
-		// A gateway administrator without a recent second step holds no
-		// role above user, as the older guards gave them no admin tier
-		// (tierRole): a route that needs such a role sends them to the
-		// admin door, and elsewhere the app sees only the user role.
-		if role != roles.UserRole {
-			s.redirectToStepUp(w, r)
-			return
-		}
-		held = []string{roles.UserRole}
-	}
 	s.access.record(r.Context(), id.Email, r.Header.Get("X-Forwarded-Host"), id.Kind, now)
 	w.Header().Set("Remote-User", id.Email)
 	w.Header().Set("Remote-Email", id.Email)
 	w.Header().Set("Remote-Groups", id.Groups)
 	w.Header().Set(headerRoles, strings.Join(held, ","))
 	w.WriteHeader(http.StatusOK)
-}
-
-// roleWantsAdminStep reports whether a session is a gateway administrator's
-// whose second step is not recent. Such a session holds no app role above
-// user until the step is taken, so an app's admin pages keep the protection
-// the older groups=admin guard gave them.
-func (s *Server) roleWantsAdminStep(id *session.Identity) bool {
-	return id.Kind == "" && s.renewalRole(id) == authz.RoleAdmin && !s.adminStepFresh(id)
 }
 
 // verifyByNetwork admits a request with no session when its guard names an

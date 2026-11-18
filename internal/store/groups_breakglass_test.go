@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -79,15 +80,7 @@ func TestBreakGlassLifecycle(t *testing.T) {
 		t.Errorf("target group = %q", c.TargetGroup)
 	}
 
-	// Revoke: still found, but now marked revoked (for audit of stale-card scans).
-	if err := s.RevokeBreakGlassCode(ctx, id); err != nil {
-		t.Fatal(err)
-	}
-	if c, ok, _ := s.LookupBreakGlassByTokenHash(ctx, "hash-old"); !ok || c.Status != BreakGlassRevoked {
-		t.Errorf("after revoke: ok=%v status=%q, want revoked", ok, c.Status)
-	}
-
-	// Re-mint: old hash stays dead, new hash works, status active again.
+	// Re-mint: old hash stays dead, new hash works.
 	if err := s.RemintBreakGlassCode(ctx, id, "v1:newcipher", "hash-new"); err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +90,24 @@ func TestBreakGlassLifecycle(t *testing.T) {
 	c, ok, err = s.LookupBreakGlassByTokenHash(ctx, "hash-new")
 	if err != nil || !ok || c.TokenEnc != "v1:newcipher" || c.Status != BreakGlassActive {
 		t.Fatalf("re-mint lookup = %+v, ok=%v, err=%v", c, ok, err)
+	}
+
+	// Revoke: still found, but now marked revoked (for audit of stale-card scans).
+	if err := s.RevokeBreakGlassCode(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if c, ok, _ := s.LookupBreakGlassByTokenHash(ctx, "hash-new"); !ok || c.Status != BreakGlassRevoked {
+		t.Errorf("after revoke: ok=%v status=%q, want revoked", ok, c.Status)
+	}
+	// A withdrawn card is not re-minted, which would bring it back.
+	if err := s.RemintBreakGlassCode(ctx, id, "v1:third", "hash-third"); !errors.Is(err, ErrCardNotActive) {
+		t.Errorf("re-mint of a withdrawn card = %v, want ErrCardNotActive", err)
+	}
+	if c, _, _ := s.GetBreakGlassCode(ctx, id); c.Status != BreakGlassRevoked || c.TokenHash != "hash-new" {
+		t.Errorf("withdrawn card after a refused re-mint = %+v", c)
+	}
+	if err := s.RemintBreakGlassCode(ctx, 9999, "x", "y"); !errors.Is(err, ErrCardNotActive) {
+		t.Errorf("re-mint of an unknown card = %v", err)
 	}
 
 	// Duplicate label is rejected by the UNIQUE constraint.
