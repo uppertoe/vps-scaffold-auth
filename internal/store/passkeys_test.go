@@ -65,3 +65,37 @@ func TestPasskeyIDsAreNeverReused(t *testing.T) {
 		t.Fatalf("passkey ID %d was reused after deletion", first)
 	}
 }
+
+// A passkey records the kind of device it was added on and what the browser
+// reported about it; one stored without a kind reads as a phone, as every
+// passkey from before computers could hold one does.
+func TestPasskeyDeviceIsRecorded(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_700_000_000, 0)
+	pc, err := s.CreatePasskey(ctx, Passkey{Email: "a@example.com", CredentialID: []byte("pc"), PublicKey: []byte("k"), UserHandle: []byte("h"),
+		Device: DeviceComputer, Attachment: "platform", Transports: "internal", CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := s.CreatePasskey(ctx, Passkey{Email: "a@example.com", CredentialID: []byte("old"), PublicKey: []byte("k"), UserHandle: []byte("h"), CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := s.GetPasskey(ctx, pc); p.Device != DeviceComputer || p.Attachment != "platform" || p.Transports != "internal" {
+		t.Fatalf("computer passkey: %+v", p)
+	}
+	if p, _, _ := s.GetPasskey(ctx, old); p.Device != DevicePhone {
+		t.Fatalf("a passkey with no kind reads as %q", p.Device)
+	}
+	// A database from before the columns existed gains them, its rows as phones.
+	if _, err := s.db.Exec(`ALTER TABLE passkeys DROP COLUMN device`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := s.GetPasskey(ctx, pc); p.Device != DevicePhone {
+		t.Fatalf("an existing row after the migration reads as %q", p.Device)
+	}
+}

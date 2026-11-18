@@ -383,7 +383,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	applyAccessHint(&data, r.URL.Query().Get("rqd"), r.URL.Query().Get("dlabel"))
 	applyRoleHint(&data, r.URL.Query().Get("rqr"), r.URL.Query().Get("rhd"))
 	s.applyAltLogin(&data, r.URL.Query().Get("alt"), r.URL.Query().Get("altlabel"))
-	s.render(w, http.StatusOK, "login", data)
+	s.renderLogin(w, r, http.StatusOK, data)
 }
 
 // applyAccessHint records the app's required domain(s) and optional display
@@ -641,7 +641,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		applyAccessHint(&data, rqd, dlabel)
 		applyRoleHint(&data, rqr, rhd)
 		s.applyAltLogin(&data, alt, altLabel)
-		s.render(w, http.StatusBadRequest, "login", data)
+		s.renderLogin(w, r, http.StatusBadRequest, data)
 		return
 	}
 
@@ -660,7 +660,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		applyAccessHint(&data, rqd, dlabel)
 		s.applyAltLogin(&data, alt, altLabel)
-		s.render(w, http.StatusForbidden, "login", data)
+		s.renderLogin(w, r, http.StatusForbidden, data)
 		return
 	}
 
@@ -1001,7 +1001,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		if role == authz.RoleDeny {
 			s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeDenied)
 			s.sessions.ClearState(w)
-			s.render(w, http.StatusForbidden, "login", pageData{Error: "This account is not permitted.", Redirect: rd})
+			s.renderLogin(w, r, http.StatusForbidden, pageData{Error: "This account is not permitted.", Redirect: rd})
 			return
 		}
 		// An emailed code is the first factor only, so the session records
@@ -1028,7 +1028,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusUnauthorized, st, rd, msgInviteCodeTooMany, true) {
 			return
 		}
-		s.render(w, http.StatusUnauthorized, "login", pageData{
+		s.renderLogin(w, r, http.StatusUnauthorized, pageData{
 			Error: msgLoginTooMany, Redirect: rd,
 		})
 	default: // ConsumeExpired, ConsumeNoCode
@@ -1037,7 +1037,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		if st.Invite != 0 && s.renderInviteCodeError(w, r, http.StatusUnauthorized, st, rd, "Your code has expired. Please request a new one.", true) {
 			return
 		}
-		s.render(w, http.StatusUnauthorized, "login", pageData{
+		s.renderLogin(w, r, http.StatusUnauthorized, pageData{
 			Error: "Your code has expired. Please request a new one.", Redirect: rd,
 		})
 	}
@@ -1122,6 +1122,14 @@ func (s *Server) renderStepUp(w http.ResponseWriter, r *http.Request, id *sessio
 	data := pageData{Redirect: rd, CSRF: csrf, Error: msg, Identity: id.Email}
 	if s.cfg.PasskeysEnabled && isPhone(r) && s.hasAdminPasskey(r, id.Email) {
 		data.Passkey = s.passkeyLoginOptions(w)
+	}
+	// A computer is asked only for the admin passkeys it holds.
+	if s.cfg.PasskeysEnabled && !isPhone(r) {
+		if allow := s.adminPasskeysHere(r, id.Email); allow != "" {
+			if data.Passkey = s.passkeyLoginOptions(w); data.Passkey != nil {
+				data.Passkey.Allow = allow
+			}
+		}
 	}
 	s.render(w, status, "totp", data)
 }

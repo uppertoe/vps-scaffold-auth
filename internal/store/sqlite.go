@@ -326,6 +326,15 @@ CREATE INDEX IF NOT EXISTS idx_passkeys_email ON passkeys(email);`
 	}); err != nil {
 		return err
 	}
+	// Every passkey added before computers could hold one was added on a
+	// phone, so existing rows take "phone".
+	if err := s.ensureColumns("passkeys", []column{
+		{"device", "TEXT NOT NULL DEFAULT 'phone'"},
+		{"attachment", "TEXT NOT NULL DEFAULT ''"},
+		{"transports", "TEXT NOT NULL DEFAULT ''"},
+	}); err != nil {
+		return err
+	}
 	return s.migrateCardDesigns()
 }
 
@@ -553,13 +562,13 @@ func (s *SQLite) DeleteTOTPSecret(ctx context.Context, email string) error {
 // that started it, and renewal ends the session once that ID is gone. A
 // reused ID would let a new passkey keep an old, removed one's sessions alive.
 
-const passkeyCols = `id, email, credential_id, public_key, user_handle, sign_count, label, admin_grade, created_at, last_used_at`
+const passkeyCols = `id, email, credential_id, public_key, user_handle, sign_count, label, admin_grade, device, attachment, transports, created_at, last_used_at`
 
 func scanPasskey(sc interface{ Scan(...any) error }) (Passkey, error) {
 	var p Passkey
 	var grade int
 	var created, used int64
-	if err := sc.Scan(&p.ID, &p.Email, &p.CredentialID, &p.PublicKey, &p.UserHandle, &p.SignCount, &p.Label, &grade, &created, &used); err != nil {
+	if err := sc.Scan(&p.ID, &p.Email, &p.CredentialID, &p.PublicKey, &p.UserHandle, &p.SignCount, &p.Label, &grade, &p.Device, &p.Attachment, &p.Transports, &created, &used); err != nil {
 		return Passkey{}, err
 	}
 	p.AdminGrade = grade != 0
@@ -576,9 +585,13 @@ func (s *SQLite) CreatePasskey(ctx context.Context, p Passkey) (int64, error) {
 	if p.AdminGrade {
 		grade = 1
 	}
+	device := p.Device
+	if device == "" {
+		device = DevicePhone
+	}
 	res, err := s.db.ExecContext(ctx, `
-INSERT INTO passkeys (email, credential_id, public_key, user_handle, sign_count, label, admin_grade, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, p.Email, p.CredentialID, p.PublicKey, p.UserHandle, p.SignCount, p.Label, grade, p.CreatedAt.Unix())
+INSERT INTO passkeys (email, credential_id, public_key, user_handle, sign_count, label, admin_grade, device, attachment, transports, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, p.Email, p.CredentialID, p.PublicKey, p.UserHandle, p.SignCount, p.Label, grade, device, p.Attachment, p.Transports, p.CreatedAt.Unix())
 	if err != nil {
 		return 0, err
 	}

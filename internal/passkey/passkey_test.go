@@ -223,3 +223,30 @@ func FuzzVerifyNeverAcceptsWithoutTheKey(f *testing.F) {
 		rp.VerifyRegistration(passkey.Registration{CredentialID: sig, ClientDataJSON: cd, AuthenticatorData: ad, PublicKey: sig, PublicKeyAlg: -7}, ch)
 	})
 }
+
+// Where the browser says a passkey was made: on this device, or on a phone
+// reached over Bluetooth or a QR code, or on a security key.
+func TestHeldByThisDevice(t *testing.T) {
+	for _, tc := range []struct {
+		attachment string
+		transports []string
+		want       bool
+	}{
+		{"platform", []string{"internal"}, true},           // Windows Hello
+		{"platform", []string{"hybrid", "internal"}, true}, // iCloud Keychain on a Mac
+		{"", []string{"internal"}, true},                   // a browser that does not report the attachment
+		{"cross-platform", []string{"hybrid"}, false},      // a phone over Bluetooth or a QR code
+		{"cross-platform", []string{"hybrid", "internal"}, false},
+		{"platform", []string{"hybrid"}, false},
+		{"cross-platform", []string{"usb"}, false}, // a security key
+		{"platform", nil, false},                   // no transports reported
+	} {
+		r := passkey.Registration{Attachment: tc.attachment, Transports: tc.transports}
+		if got := r.HeldByThisDevice(); got != tc.want {
+			t.Errorf("%q %v: HeldByThisDevice = %v, want %v", tc.attachment, tc.transports, got, tc.want)
+		}
+	}
+	if !passkeytest.NewComputer().Register(rp.ID, rp.Origin, challenge(), []byte("h")).HeldByThisDevice() {
+		t.Error("the computer authenticator does not model a passkey held by the computer")
+	}
+}

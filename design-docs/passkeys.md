@@ -1,8 +1,8 @@
 ---
 title: Passkeys
-summary: How a person signs in on their phone with a passkey instead of an emailed code, and the rules that keep a passkey as safe as the sign-in it replaces.
+summary: How a person signs in on their phone, or on their own computer, with a passkey instead of an emailed code, and the rules that keep a passkey as safe as the sign-in it replaces.
 weight: 4
-lastmod: 2026-11-04
+lastmod: 2026-11-18
 ---
 
 ## What a passkey changes
@@ -13,9 +13,38 @@ checking the person's face, fingerprint or PIN. The gateway keeps only the
 matching public key. A passkey cannot be guessed, phished or replayed, and the
 face, fingerprint and PIN never leave the phone.
 
-The department's computers cannot hold passkeys, so the gateway offers them
-only on phones. A computer continues to use the emailed code, and the sign-in
-page shows nothing new there.
+The department's computers cannot hold passkeys, so the gateway never offers
+one on a computer unasked. A computer continues to use the emailed code, and
+the sign-in page shows nothing new there.
+
+A person may add a passkey on their own computer, held by the computer itself
+and unlocked with Touch ID, Windows Hello or the computer's PIN. The passkeys
+page offers one on a computer only when the person chooses to add it, and
+first warns them to do so only on a computer that nobody else signs in to. If
+the browser has no such check, the page says so and offers nothing. The
+gateway refuses a passkey that the browser saved on a phone instead, and it
+never asks a computer to fetch a passkey from a phone. Only a computer that
+already holds one of the person's passkeys is asked for it at sign-in, and only
+when the person presses "Sign in with a passkey". The email field on a
+computer never offers a passkey, because some browsers would list a passkey
+from another device there.
+
+A computer on the hospital's network cannot add a passkey, because the
+computers there are shared. The gateway knows the network by the address
+ranges the server lists for it, the same ranges that network roles use, and
+it checks the address both when the passkeys page starts the ceremony and
+when the passkey comes back. On that network, the passkeys page says why it
+offers nothing. A person can still sign in there with a passkey that their
+computer already holds, and phones on the hospital's Wi-Fi are offered a
+passkey as before.
+
+The gateway tells a computer from a phone by what the browser says it is, and
+learns where a passkey was saved from what the browser reports. Neither is
+signed. The network rule therefore stops a person who follows the pages, not
+a determined one: a computer that claims to be a phone is treated as a phone.
+The rule also covers only the addresses the server lists, so if the hospital
+reaches the gateway over IPv6 as well as IPv4, the server must list the
+hospital's ranges in both.
 
 Passkeys are built but switched off. Each server turns them on with one
 setting, so the department's server can try them before the data lab's other
@@ -26,8 +55,9 @@ servers do.
 A person signs in on their phone with an emailed code as before. The gateway
 then offers to add a passkey, and the person can decline. The offer comes
 after every sign-in with an emailed code on a phone, so a person who
-declined can add one the next time. Their passkeys page lists each passkey with the date it
-was added and when it was last used, and a passkey can be removed there. If a
+declined can add one the next time. Their passkeys page lists each passkey
+with the kind of device it was added on, the date it was added and when it was
+last used, and a passkey can be removed there. If a
 person loses a phone, they remove its passkey and sign in with an emailed code
 until they add a new one. Whenever a passkey is added, the gateway emails the
 person to say so, with the date, the time and the kind of phone, and a link to
@@ -87,7 +117,11 @@ administrator, can sign them out on every device, as
 - **Each sign-in answers a fresh challenge.** The challenge expires after ten
   minutes and can be used once.
 - **The phone must check the person.** A passkey that was used without the
-  face, fingerprint or PIN check is refused.
+  face, fingerprint or PIN check is refused. The same holds on a computer.
+- **A computer's passkey is held by the computer.** The gateway asks the
+  browser for a passkey kept on the computer, and refuses one that the browser
+  reports was saved on a phone over Bluetooth or a QR code, or on a security
+  key.
 - **The rules are checked again at every passkey sign-in.** A passkey does not
   let in an address the allow-list no longer permits, and it never makes a
   guest.
@@ -114,6 +148,15 @@ fifteen minutes of their sign-in could therefore register a key of its own,
 which would then work until it is removed. The gateway emails the person
 whenever a passkey is added, so they would be told, and their passkeys page
 and the access page would list it.
+
+The browser's report of where it saved a passkey is not signed, so the
+refusal of a passkey saved on a phone guards against a mistaken choice in the
+browser, not against a program that has stolen a session cookie. That program
+could already register a key of its own, as the paragraph above describes.
+
+A passkey on a computer is only as safe as the computer. Anyone who can unlock
+the computer can sign in as its owner, which is why the gateway adds one only
+when the person asks, after warning them.
 
 A passkey is only as safe as the phone and the account it syncs to. Anyone who
 can unlock the person's phone, or who controls the Apple or Google account

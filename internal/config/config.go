@@ -166,9 +166,10 @@ type Config struct {
 	TOTPEnabled bool
 	TOTPIssuer  string
 
-	// PasskeysEnabled offers passkey sign-in on phones (PASSKEYS_ENABLED, off
-	// by default). It is the only setting that puts a script on the sign-in
-	// pages, so a deployment turns it on deliberately.
+	// PasskeysEnabled offers passkey sign-in on phones, and on a computer
+	// whose owner asks for one (PASSKEYS_ENABLED, off by default). It is the
+	// only setting that puts a script on the sign-in pages, so a deployment
+	// turns it on deliberately.
 	PasskeysEnabled bool
 
 	// Break-the-glass QR codes.
@@ -806,6 +807,16 @@ func ParseNetworkRanges(v string) (map[string][]netip.Prefix, error) {
 					return nil, fmt.Errorf("NETWORK_RANGES: %q in network %q is not an address or prefix", raw, name)
 				}
 				pfx = netip.PrefixFrom(addr, addr.BitLen())
+			}
+			// The client address is matched in its IPv4 form, so an
+			// IPv4-mapped range (::ffff:a.b.c.d/n) is read as the IPv4 range
+			// it names, or it would never match. One shorter than /96 reaches
+			// beyond the mapped addresses, and is refused.
+			if pfx.Addr().Is4In6() {
+				if pfx.Bits() < 96 {
+					return nil, fmt.Errorf("NETWORK_RANGES: %q in network %q mixes IPv4-mapped and other IPv6 addresses; write the IPv4 range instead", raw, name)
+				}
+				pfx = netip.PrefixFrom(pfx.Addr().Unmap(), pfx.Bits()-96)
 			}
 			if pfx.Bits() == 0 {
 				return nil, fmt.Errorf("NETWORK_RANGES: %q in network %q would admit every address", raw, name)

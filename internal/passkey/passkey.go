@@ -1,7 +1,7 @@
 // Package passkey verifies WebAuthn passkey registrations and sign-ins for the
 // one shape this gateway accepts: a discoverable ES256 (P-256) credential held
-// by the phone's own passkey provider, with user verification, and no
-// attestation. Nothing else is supported, on purpose. The general WebAuthn
+// by the device's own passkey provider (a phone's, or a computer's Touch ID or
+// Windows Hello), with user verification, and no attestation. Nothing else is supported, on purpose. The general WebAuthn
 // libraries carry attestation formats, TPM and certificate-chain parsing and a
 // metadata service client; none of that is used when attestation is "none",
 // and all of it would be code on the sign-in path. What remains is small
@@ -86,6 +86,32 @@ type Registration struct {
 	AuthenticatorData []byte // response.getAuthenticatorData()
 	PublicKey         []byte // response.getPublicKey(): SubjectPublicKeyInfo DER
 	PublicKeyAlg      int    // response.getPublicKeyAlgorithm()
+	// Attachment and Transports are what the browser reports about where the
+	// passkey was made: credential.authenticatorAttachment ("platform" or
+	// "cross-platform") and response.getTransports() ("internal", "hybrid",
+	// "usb" and so on). Nothing signs them, so they describe the choice the
+	// person's own browser made; they steer an honest mistake, such as saving
+	// to a phone over Bluetooth, and are no defence against a hostile script.
+	Attachment string
+	Transports []string
+}
+
+// HeldByThisDevice reports whether the browser says the passkey is held by
+// the device the ceremony ran on: a platform authenticator, reached through
+// the "internal" transport. A passkey made on a phone over Bluetooth or a QR
+// code reports "cross-platform" and "hybrid", and a security key reports
+// "cross-platform" and "usb", "nfc" or "ble"; neither is held by this device.
+// A browser that reports no transports is not taken at its word.
+func (r Registration) HeldByThisDevice() bool {
+	if r.Attachment != "" && r.Attachment != "platform" {
+		return false
+	}
+	for _, t := range r.Transports {
+		if t == "internal" {
+			return true
+		}
+	}
+	return false
 }
 
 // Credential is a verified registration, ready to store.

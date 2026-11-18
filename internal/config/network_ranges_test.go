@@ -22,6 +22,15 @@ func TestParseNetworkRanges(t *testing.T) {
 	if want := map[string]string{"rch": "rch", "mch": "MCH"}; !reflect.DeepEqual(names, want) {
 		t.Errorf("names: got %v, want %v", names, want)
 	}
+	// An IPv4-mapped range or address is read as the IPv4 one it names, as
+	// the client address is.
+	mapped, err := ParseNetworkRanges("rch=::ffff:192.168.0.0/112,::ffff:10.1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16"), netip.MustParsePrefix("10.1.2.3/32")}; !reflect.DeepEqual(mapped["rch"], want) {
+		t.Errorf("mapped: got %v, want %v", mapped["rch"], want)
+	}
 	if got, err := ParseNetworkRanges(""); err != nil || len(got) != 0 {
 		t.Errorf("empty: %v, %v", got, err)
 	}
@@ -32,6 +41,8 @@ func TestParseNetworkRanges(t *testing.T) {
 		"r ch=10.0.0.0/8",                // a bad name
 		"rch=not-an-address",             // a bad prefix
 		"rch=0.0.0.0/0",                  // everyone
+		"rch=::ffff:0.0.0.0/96",          // every IPv4 address
+		"rch=::ffff:0:0/80",              // mapped and other IPv6 addresses
 	} {
 		if _, err := ParseNetworkRanges(bad); err == nil {
 			t.Errorf("ParseNetworkRanges(%q) accepted", bad)
