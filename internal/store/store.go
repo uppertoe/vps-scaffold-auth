@@ -93,9 +93,12 @@ const (
 // group changes, another admin's 2FA removal, and settings edits leave a
 // reviewable trail (previously only break-glass *scans* were audited).
 const (
-	AdminActionBreakCreate        = "break_glass_create"
-	AdminActionBreakRevoke        = "break_glass_revoke"
-	AdminActionBreakRemint        = "break_glass_remint"
+	AdminActionBreakCreate = "break_glass_create"
+	AdminActionBreakRevoke = "break_glass_revoke"
+	AdminActionBreakRemint = "break_glass_remint"
+	// A card that opened a group moved onto an app's user role (target the
+	// card's label, detail its former group, the app and the page).
+	AdminActionBreakMove          = "break_glass_move"
 	AdminActionGroupCreate        = "group_create"
 	AdminActionGroupDelete        = "group_delete"
 	AdminActionGroupAddMember     = "group_add_member"
@@ -527,6 +530,11 @@ type Store interface {
 	// SetBreakGlassRole points a card at an app role. Only the user role may
 	// be given to a card (ErrCardRole), because its holder is not identified.
 	SetBreakGlassRole(ctx context.Context, id int64, app, role string) error
+	// MoveBreakGlassCard moves an active card that opens a group onto an
+	// app's user role and landing page, keeping its token, label, note,
+	// design and events, and clearing its group. Any other card is refused
+	// (ErrCardNotGroup).
+	MoveBreakGlassCard(ctx context.Context, id int64, app, redirect string) error
 
 	// --- Invitations (see invitations.go) ---
 

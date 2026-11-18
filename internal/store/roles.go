@@ -56,6 +56,9 @@ var (
 	ErrGroupHoldsRoles = errors.New("the group holds app roles")
 	// ErrCardRole refuses giving a card any role but RoleUser.
 	ErrCardRole = errors.New("a break-glass card can hold the user role only")
+	// ErrCardNotGroup refuses moving a card that no longer opens a group:
+	// one already moved or made for an app, or one withdrawn.
+	ErrCardNotGroup = errors.New("the card is not an active card that opens a group")
 )
 
 // RoleAssignment is one holder of an app role. Until is zero for none and is
@@ -394,6 +397,30 @@ func (s *SQLite) ListRoleAssignments(ctx context.Context, app string) ([]RoleAss
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// MoveBreakGlassCard moves an active card that opens a group onto app's
+// user role and landing page (redirect), as if it had been made for the
+// app: its group is cleared, so a later scan carries no group. Its token,
+// label, note, design and events are kept. A card that is withdrawn or
+// already names an app is refused with ErrCardNotGroup.
+func (s *SQLite) MoveBreakGlassCard(ctx context.Context, id int64, app, redirect string) error {
+	if strings.TrimSpace(app) == "" {
+		return ErrCardRole
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE break_glass_codes SET app = ?, role = ?, target_group = '', redirect = ?, updated_at = ?
+		 WHERE id = ? AND COALESCE(app, '') = '' AND status = ?`,
+		app, RoleUser, redirect, time.Now().Unix(), id, BreakGlassActive)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrCardNotGroup
+	}
+	return nil
 }
 
 // SetBreakGlassRole points a card at an app's user role.
