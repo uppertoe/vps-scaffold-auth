@@ -295,11 +295,11 @@ func TestRemoteRolesAreCommaSeparated(t *testing.T) {
 	}
 }
 
-// A gateway administrator without a recent second step holds no app role
-// above user: an admin route sends them to the admin door, and a user route
-// shows the app the user role only, as the older groups=admin guard did. A
-// person who holds the role but is not a gateway administrator is unaffected.
-func TestAppAdminRoleNeedsTheAdminStep(t *testing.T) {
+// An app role is held as assigned, whether or not a gateway administrator
+// has taken the second step: the step guards the gateway's own pages, and an
+// app sees the same roles for a gateway administrator as for anyone else
+// (owner's choice, 2026-11-19; Planka re-applies roles on every request).
+func TestAppRolesIgnoreTheAdminStep(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app-roles.tsv")
 	if err := os.WriteFile(path, []byte(testAppRoles), 0o600); err != nil {
 		t.Fatal(err)
@@ -314,12 +314,14 @@ func TestAppAdminRoleNeedsTheAdminStep(t *testing.T) {
 	}
 	admin := newClient(t, srv.Handler())
 	loginAs(t, admin, sender, "admin@example.com", nil)
-	if rec := admin.get("/verify", roleGuard("enquiries", "admin")); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
-		t.Errorf("admin without the step on the admin role = %d %q, want the admin door", rec.Code, rec.Header().Get("Location"))
+	for _, role := range []string{"admin", ""} {
+		rec := admin.get("/verify", roleGuard("enquiries", role))
+		if rec.Code != http.StatusOK || rec.Header().Get("Remote-Roles") != "admin" {
+			t.Errorf("admin without the step, guard role %q = %d %q, roles %q; want 200, admin", role, rec.Code, rec.Header().Get("Location"), rec.Header().Get("Remote-Roles"))
+		}
 	}
-	rec := admin.get("/verify", roleGuard("enquiries", ""))
-	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Roles") != "user" {
-		t.Errorf("admin without the step on a user route = %d, roles %q; want 200, user", rec.Code, rec.Header().Get("Remote-Roles"))
+	if rec := admin.get("/admin", nil); rec.Code == http.StatusOK {
+		t.Errorf("admin without the step reached the gateway's admin pages")
 	}
 	other := newClient(t, srv.Handler())
 	loginAs(t, other, sender, "user@example.com", nil)
