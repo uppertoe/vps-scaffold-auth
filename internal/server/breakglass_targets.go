@@ -167,9 +167,10 @@ func (s *Server) guestGroupsNow(ctx context.Context, id *session.Identity) strin
 // staff domain, until its person signs in again. A stranger is refused as a
 // direct member of such a group, but could still reach one through an
 // include, or keep one after the group became a role; filtering when the
-// groups are worked out closes every such path at once. A group filled from
-// a feed is kept: the feed lists only staff, and nothing can be included
-// into a feed group.
+// groups are worked out closes every such path at once. A list filled from a
+// feed is filtered the same way: a feed takes in only staff, but a person
+// stays on it until its next sync after their domain has gone, so a refused
+// feed list is kept only for staff on a tier other than the guest tier.
 func (s *Server) withoutAppRolesForOutsider(ctx context.Context, email, tier string, groups []string) []string {
 	if len(groups) == 0 || (tier != authz.RoleGuest && s.known(ctx, email)) {
 		return groups
@@ -177,22 +178,21 @@ func (s *Server) withoutAppRolesForOutsider(ctx context.Context, email, tier str
 	roles := s.appRoleGroups()
 	complete := s.routeFilesReadable()
 	if !complete {
-		log.Printf("route files unreadable: keeping only feed groups for %s", email)
+		log.Printf("route files unreadable: keeping none of the lists of %s", email)
 	}
 	out := groups[:0:0]
 	for _, g := range groups {
 		n := normalizeGroupName(g)
 		// A role this gateway cannot see while the route files are
-		// unreadable must not slip through, so then every hand-managed group
-		// is dropped for the outsider until the files can be read again.
+		// unreadable must not slip through, so then every list, a feed's
+		// included, is dropped for the outsider until the files can be read
+		// again.
 		if authz.IsReservedGroup(n) {
 			out = append(out, g) // the base role (a guest's leading "guest") stays
 			continue
 		}
 		if roles[n] || !complete {
-			if _, feed := s.feedFor(n); !feed {
-				continue
-			}
+			continue
 		}
 		out = append(out, g)
 	}

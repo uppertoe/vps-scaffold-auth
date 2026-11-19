@@ -190,6 +190,12 @@ func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 	// group's domains): they are the ones the gateway signs in as staff. A
 	// membership kept for an address that is no longer known is not
 	// reported.
+	// While the gateway cannot tell who is staff, it says so rather than
+	// answer with an empty list, which an app would take as everyone gone.
+	if s.rolesUnavailable(r.Context()) {
+		membersError(w, http.StatusServiceUnavailable, "the members cannot be read just now")
+		return
+	}
 	members := make([]string, 0, len(all))
 	for _, e := range all {
 		if s.known(r.Context(), e) {

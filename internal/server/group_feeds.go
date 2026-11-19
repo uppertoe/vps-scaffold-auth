@@ -627,6 +627,11 @@ func (s *Server) fetchFeed(ctx context.Context, feed config.GroupFeed) ([]string
 	if len(list) > feedMaxAddresses {
 		return nil, nil, 0, fmt.Errorf("the feed lists more than %d addresses", feedMaxAddresses)
 	}
+	// While the gateway cannot tell who is staff, the fetch fails, so the
+	// group keeps its members rather than lose every one.
+	if s.rolesUnavailable(ctx) {
+		return nil, nil, 0, errors.New("the gateway could not read its domain groups")
+	}
 	seen := map[string]bool{}
 	var out []string
 	skipped := 0

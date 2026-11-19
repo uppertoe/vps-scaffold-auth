@@ -35,6 +35,12 @@ func (s *Server) renewSession(w http.ResponseWriter, r *http.Request, id *sessio
 // read (the refusal path), so a renewal there costs one query, not two. A nil
 // groups reads them here.
 func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *session.Identity, now time.Time, groups *string) bool {
+	// Without the allow-list, the domain groups decide who is staff; while
+	// they have never been read, the session is left as it is.
+	if s.rolesUnavailable(r.Context()) {
+		s.renderUnavailable(w, s.reconstructOriginalURL(r))
+		return false
+	}
 	role := s.renewalRole(id)
 	if role == authz.RoleDeny {
 		s.sessions.ClearSession(w)
@@ -116,6 +122,14 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		if !knownSessionKind(id.Kind) {
 			s.sessions.ClearSession(w)
 			s.redirectToLogin(w, r)
+			return
+		}
+		// Without the allow-list and before the domain groups have ever been
+		// read, the gateway cannot tell staff from strangers: it answers 503
+		// and keeps the session, rather than end it or treat staff as
+		// outsiders (see rolesUnavailable).
+		if s.rolesUnavailable(r.Context()) {
+			s.renderUnavailable(w, s.reconstructOriginalURL(r))
 			return
 		}
 		renewed := false
@@ -694,6 +708,12 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// code's was reset (or that never spent a send token) would answer the
 	// next wrong guess differently, and that difference is allow-list
 	// membership.
+	// While the gateway cannot tell who is staff, nobody is sent a code or a
+	// decoy: a member of staff would otherwise be refused, or made a guest.
+	if s.rolesUnavailable(r.Context()) {
+		s.renderUnavailable(w, rd)
+		return
+	}
 	permitted := s.loginRole(r.Context(), emailAddr, s.isOpenHost(rd)) != authz.RoleDeny
 	s.issueCode(r, emailAddr, permitted, now)
 
@@ -967,6 +987,12 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 	rd := postedRD
 	if rd == "" {
 		rd = st.Redirect
+	}
+	// While the gateway cannot tell who is staff, the code is left unspent,
+	// so the person can enter it again once it can.
+	if s.rolesUnavailable(r.Context()) {
+		s.renderUnavailable(w, rd)
+		return
 	}
 	// Every attempt is charged up front, so simultaneous guesses cannot all
 	// pass the check; a correct code is refunded below, so people signing in

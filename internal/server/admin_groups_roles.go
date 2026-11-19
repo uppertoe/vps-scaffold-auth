@@ -18,16 +18,19 @@ import (
 
 // The groups pages' strings that carry a value. Each is kept here, once.
 const (
-	msgWebmail        = "%s is a public email service, so anyone could sign in with it. A domain group cannot include it."
-	msgBadDomain      = "Enter a domain such as example.org.au, without the @ or anything before it."
-	msgDomainTwice    = "The group already includes @%s."
-	msgGroupHolds     = "%s holds %s. Remove the group from those roles on each app's page, then delete it."
-	msgGroupExists    = "A group called %s already exists. Choose another name."
-	msgGroupNameNew   = "A group cannot be called \"new\", because the page for a new group has that address."
-	msgDomainSubject  = "Access through %s has changed."
-	msgDomainAdded    = "Added the domain @%s"
-	msgDomainRemoved  = "Removed the domain @%s"
-	msgDomainsNeedOne = "Enter at least one domain, such as example.org.au."
+	msgWebmail       = "%s is a public email service, so anyone could sign in with it. A domain group cannot include it."
+	msgBadDomain     = "Enter a domain such as example.org.au, without the @ or anything before it."
+	msgDomainTwice   = "The group already includes @%s."
+	msgGroupHolds    = "%s holds %s. Remove the group from those roles on each app's page, then delete it."
+	msgGroupExists   = "A group called %s already exists. Choose another name."
+	msgGroupNameNew  = "A group cannot be called \"new\", because the page for a new group has that address."
+	msgDomainSubject = "Access through %s has changed."
+	msgDomainAdded   = "Added the domain @%s"
+	msgDomainRemoved = "Removed the domain @%s"
+	// msgDomainGroupGone is the line emailed when a domain group is deleted;
+	// %s is its domains, such as "@rch.org.au and @mcri.edu.au".
+	msgDomainGroupGone = "Deleted the group, which included %s"
+	msgDomainsNeedOne  = "Enter at least one domain, such as example.org.au."
 )
 
 // appRoleRef is one app role a group holds, for "Roles this group holds".
@@ -301,12 +304,18 @@ func (s *Server) createGroupFromNewPage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.auditAdmin(r, store.AdminActionGroupCreate, name, v.Kind)
+	var lines []string
 	for _, d := range domains {
 		if err := s.store.AddGroupDomain(r.Context(), name, d); err != nil {
+			s.forgetRoles()
 			s.adminError(w, r)
 			return
 		}
 		s.auditAdmin(r, store.AdminActionGroupDomainAdd, name, d)
+		lines = append(lines, fmt.Sprintf(msgDomainAdded, d))
+	}
+	if len(lines) > 0 {
+		s.domainsChanged(r, name, lines)
 	}
 	if v.Kind == store.GroupKindDomain && v.Org != "" {
 		if _, err := s.store.SetGroupOrg(r.Context(), name, v.Org); err != nil {
@@ -392,11 +401,16 @@ func (s *Server) handleAdminRemoveDomain(w http.ResponseWriter, r *http.Request)
 // other administrators.
 func (s *Server) domainChanged(r *http.Request, group, domain, action, line string) {
 	s.auditAdmin(r, action, group, domain)
+	s.domainsChanged(r, group, []string{line})
+}
+
+// domainsChanged drops the role cache, so the change applies at the next
+// decision, and emails the other administrators the lines describing it.
+// Adding or removing a domain, and creating or deleting a domain group, all
+// come through here; the caller records each change in the audit.
+func (s *Server) domainsChanged(r *http.Request, group string, lines []string) {
 	s.forgetRoles()
-	actor := ""
-	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
-		actor = id.Email
-	}
+	actor := s.actorOf(r)
 	label := group
 	if gs, err := s.store.ListGroups(r.Context()); err == nil {
 		for _, g := range gs {
@@ -405,7 +419,16 @@ func (s *Server) domainChanged(r *http.Request, group, domain, action, line stri
 			}
 		}
 	}
-	s.emailOtherAdmins(actor, fmt.Sprintf(msgDomainSubject, label), []string{line})
+	s.emailOtherAdmins(actor, fmt.Sprintf(msgDomainSubject, label), lines)
+}
+
+// actorOf is the address of the administrator making a request, for the
+// emails to the other administrators.
+func (s *Server) actorOf(r *http.Request) string {
+	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
+		return id.Email
+	}
+	return ""
 }
 
 // clampOrg trims an organisation name, drops control characters and caps it

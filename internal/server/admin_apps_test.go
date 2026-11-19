@@ -364,6 +364,7 @@ func TestDomainGroupPages(t *testing.T) {
 	mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignDomainGroup, Ref: "monash-staff"})
 	srv.roleData(ctx)
 	sender.reset()
+	clearNotices(sender, 1) // the email about creating the group
 	rec = c.postForm("/admin/groups/monash-staff/domains", url.Values{"csrf": {tok}, "domain": {"monash.edu"}})
 	if rec.Code != http.StatusFound {
 		t.Fatalf("add domain = %d", rec.Code)
@@ -460,6 +461,7 @@ func TestDomainGroupOrganisationName(t *testing.T) {
 	}
 
 	sender.reset()
+	clearNotices(sender, 1) // the email about creating the group
 	rec = c.postForm("/admin/groups/monash-staff/org", url.Values{"csrf": {tok}, "org": {"MHS"}})
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/groups/monash-staff" {
 		t.Fatalf("save = %d to %q", rec.Code, rec.Header().Get("Location"))
