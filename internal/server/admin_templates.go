@@ -261,7 +261,8 @@ type missingGroupView struct {
 }
 
 // memberView is one row of a group's member list. Permitted reports whether the
-// allow-list (ALLOWED_EMAIL_DOMAINS / ADMIN_EMAILS) still admits the address.
+// address is known (knownRole: ADMIN_EMAILS, ALLOWED_EMAIL_DOMAINS, or without
+// that setting a domain group's domains).
 // A membership for an address it does not admit used to be inert, because that
 // address could never sign in; once any host is listed in
 // OPEN_REGISTRATION_HOSTS the same address can sign in as a guest and the
@@ -270,10 +271,10 @@ type missingGroupView struct {
 type memberView struct {
 	Email     string
 	Permitted bool
-	// Guest marks an address that can sign in only as a guest: the
-	// allow-list does not admit it, and it holds no app role (an address
+	// Guest marks an address that can sign in only as a guest: it is not
+	// known, and it holds no app role (an address
 	// that holds one signs in as a member; see session.KindMember). Only
-	// such an address carries the "not on the allow-list" pill.
+	// such an address carries the "not staff" pill.
 	Guest bool
 	// AddedFrom is the address a feed made this one from, if it did.
 	AddedFrom string

@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/uppertoe/vps-scaffold-auth/internal/session"
+	"context"
 	"log"
 	"os"
 	"sort"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
+	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 )
 
 // Some groups are not doors into an app but roles inside it: an app reads
@@ -65,12 +66,15 @@ func (s *Server) appRoleGroups() map[string]bool {
 			out[g] = true
 		}
 	}
-	if m, ok := s.readRouteManifest(); ok {
+	m, ok := s.readRouteManifest()
+	if ok {
 		for g := range m.Declared {
 			out[g] = true
 		}
 	}
-	for _, site := range s.routeAccess() {
+	sites := s.routeAccess()
+	s.noteOlderGuards(olderGuardSites(m, sites))
+	for _, site := range sites {
 		for _, rule := range site.Rules {
 			if rule.Kind != "groups" || !containsFold(rule.Values, authz.RoleAdmin) {
 				continue
@@ -145,12 +149,12 @@ func (s *Server) routeFilesReadable() bool {
 	return true
 }
 
-// guestGroupsNow returns a guest session's groups without any group that has
-// become an application role since the session's groups were worked out, so
-// a routes change reaches a guest at their next request.
-func (s *Server) guestGroupsNow(id *session.Identity) string {
+// guestGroupsNow returns a guest or member session's groups without any
+// group that has become an application role since the session's groups were
+// worked out, so a routes change reaches the session at its next request.
+func (s *Server) guestGroupsNow(ctx context.Context, id *session.Identity) string {
 	groups := strings.Split(id.Groups, ",")
-	kept := s.withoutAppRolesForOutsider(id.Email, groups)
+	kept := s.withoutAppRolesForOutsider(ctx, id.Email, authz.RoleGuest, groups)
 	if len(kept) == len(groups) {
 		return id.Groups
 	}
@@ -158,35 +162,40 @@ func (s *Server) guestGroupsNow(id *session.Identity) string {
 }
 
 // withoutAppRolesForOutsider removes from an address's groups every
-// application role, when the allow-list does not admit the address. A
-// stranger is refused as a direct member of such a group, but could still
-// reach one through an include, or keep one after the group became a role;
-// filtering when the groups are worked out closes every such path at once.
-// A group filled from a feed is kept: the feed lists the address directly,
-// and nothing can be included into a feed group.
-func (s *Server) withoutAppRolesForOutsider(email string, groups []string) []string {
-	if len(groups) == 0 || s.policy.Allowed(email) {
+// application role, when the session is built on the guest tier (a guest's or
+// a member's) or the address is not staff (see knownRole: the allow-list, or
+// without one a domain group, does not admit it). Being on a list, holding a
+// role or signing in on an open host never makes an address staff, and a
+// guest session stays a stranger's even if its domain has since become a
+// staff domain, until its person signs in again. A stranger is refused as a
+// direct member of such a group, but could still reach one through an
+// include, or keep one after the group became a role; filtering when the
+// groups are worked out closes every such path at once. A list filled from a
+// feed is filtered the same way: a feed takes in only staff, but a person
+// stays on it until its next sync after their domain has gone, so a refused
+// feed list is kept only for staff on a tier other than the guest tier.
+func (s *Server) withoutAppRolesForOutsider(ctx context.Context, email, tier string, groups []string) []string {
+	if len(groups) == 0 || (tier != authz.RoleGuest && s.known(ctx, email)) {
 		return groups
 	}
 	roles := s.appRoleGroups()
 	complete := s.routeFilesReadable()
 	if !complete {
-		log.Printf("route files unreadable: keeping only feed groups for %s", email)
+		log.Printf("route files unreadable: keeping none of the lists of %s", email)
 	}
 	out := groups[:0:0]
 	for _, g := range groups {
 		n := normalizeGroupName(g)
 		// A role this gateway cannot see while the route files are
-		// unreadable must not slip through, so then every hand-managed group
-		// is dropped for the outsider until the files can be read again.
+		// unreadable must not slip through, so then every list, a feed's
+		// included, is dropped for the outsider until the files can be read
+		// again.
 		if authz.IsReservedGroup(n) {
 			out = append(out, g) // the base role (a guest's leading "guest") stays
 			continue
 		}
 		if roles[n] || !complete {
-			if _, feed := s.feedFor(n); !feed {
-				continue
-			}
+			continue
 		}
 		out = append(out, g)
 	}

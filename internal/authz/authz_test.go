@@ -298,3 +298,19 @@ func TestBuildGroupsDropsReservedStoredGroups(t *testing.T) {
 		t.Errorf("BuildGroups = %q, want user,team", got)
 	}
 }
+
+func TestHasAllowList(t *testing.T) {
+	for _, c := range []struct {
+		domains []string
+		want    bool
+	}{
+		{nil, false},
+		{[]string{"", "  "}, false},
+		{[]string{"example.com"}, true},
+		{[]string{"*"}, true},
+	} {
+		if got := NewPolicy(c.domains, []string{"admin@example.com"}).HasAllowList(); got != c.want {
+			t.Errorf("HasAllowList(%q) = %v, want %v", c.domains, got, c.want)
+		}
+	}
+}

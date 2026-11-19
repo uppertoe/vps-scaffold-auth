@@ -824,7 +824,7 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 		}
 		mv := make([]memberView, 0, len(members))
 		for _, m := range members {
-			ok := s.policy.Allowed(m)
+			ok := s.known(r.Context(), m)
 			mv = append(mv, memberView{Email: m, Permitted: ok, Guest: !ok, AddedFrom: addedFrom[m]})
 		}
 		hosts := routeGroups[g.Name]
@@ -996,6 +996,21 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 		s.adminError(w, r)
 		return
 	}
+	// A domain group's domains are noted too, for the email to the other
+	// administrators, and its label, which goes with it.
+	domains, err := s.store.ListGroupDomains(r.Context())
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
+	label := name
+	if gs, err := s.store.ListGroups(r.Context()); err == nil {
+		for _, g := range gs {
+			if g.Name == name && g.Label != "" {
+				label = g.Label
+			}
+		}
+	}
 	if err := s.store.DeleteGroup(r.Context(), name); errors.Is(err, store.ErrGroupHoldsRoles) {
 		n, err := s.store.GroupRoleCount(r.Context(), name)
 		if err != nil {
@@ -1018,6 +1033,14 @@ func (s *Server) handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) 
 	}
 	s.markGroupsChanged(s.now())
 	s.auditAdmin(r, store.AdminActionGroupDelete, name, "")
+	s.forgetRoles()
+	if ds := domains[name]; len(ds) > 0 {
+		at := make([]string, len(ds))
+		for i, d := range ds {
+			at[i] = "@" + d
+		}
+		s.emailOtherAdmins(s.actorOf(r), fmt.Sprintf(msgDomainSubject, label), []string{fmt.Sprintf(msgDomainGroupGone, joinAnd(at))})
+	}
 	for _, a := range approvals {
 		if a.Group == name {
 			s.auditAdmin(r, store.AdminActionMemberReaderWithdraw, a.App, a.Group)

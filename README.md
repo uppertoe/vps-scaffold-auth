@@ -115,8 +115,8 @@ them.
 `import protected` lets in **any** signed-in user. To restrict an app to
 particular people, the access rule lives in **that app's own `.caddy` snippet**
 (the scaffold's per-app folder), and the gateway enforces it. Authentication
-stays global (`ALLOWED_EMAIL_DOMAINS` is the superset of who can sign in *at
-all*); each app then narrows to its own subset (the upstream is the last arg):
+stays global (`ALLOWED_EMAIL_DOMAINS`, or without it the domain groups that
+hold a role, is the superset of who can sign in *at all*); each app then narrows to its own subset (the upstream is the last arg):
 
 > **Opening one app to the public.** An app that strangers must be able to sign
 > in to (an application form, say) does not need the allow-list widened. List its
@@ -245,11 +245,11 @@ app with `protected_open`:
 apply.{$DOMAIN} { import protected_open apply:3000 }
 ```
 
-When someone signs in on the way to a listed host and their address is not on
-the allow-list, the gateway sends them a code as usual and, once they enter it,
+When someone signs in on the way to a listed host and their address is not
+staff, the gateway sends them a code as usual and, once they enter it,
 signs them in as a **guest**. Their `Remote-Groups` begins with `guest`, followed
 by any groups an admin has placed them in, so the app can tell a stranger from a
-member of staff. Someone whose address is on the allow-list, or who is an admin,
+member of staff. A member of staff, or an admin,
 signs in with their usual role on the open host as anywhere else.
 
 A guest is admitted only where a route opts in. `protected_open` (policy
@@ -274,13 +274,14 @@ mail can obtain a guest session once any host is listed. What keeps guests
 contained is that only routes which opt in will admit them.
 
 Listing a host also gives effect to group memberships that were previously
-inert. A membership for an address the allow-list does not permit used to do
+inert. A membership for an address that is not staff used to do
 nothing, because that address could never sign in. Once any host is open, the
 same address can sign in as a guest, and the membership admits it to every app
 guarded by that group. Before listing a host, review the admin groups page,
-which marks each member the allow-list no longer admits, and remove any
+which marks each member who is not staff, and remove any
 membership that should have ended with the person's access. Removing a domain
-from `ALLOWED_EMAIL_DOMAINS` does not remove group memberships.
+from `ALLOWED_EMAIL_DOMAINS`, or from a domain group, does not remove group
+memberships.
 
 `OPEN_REGISTRATION_HOSTS` takes a comma-separated list of bare hostnames, each
 either `DOMAIN` or a subdomain of it. The gateway refuses to start if an entry is
@@ -342,7 +343,7 @@ for the annotated list. Key ones:
 | Variable | Purpose |
 |---|---|
 | `AUTH_PUBLIC_URL` | Base URL of the `auth.<domain>` site |
-| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose users may sign in; `*` = open registration on every host (discouraged on a shared server) |
+| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose addresses sign in as staff; `*` = open registration on every host (discouraged on a shared server). Optional on a server with app roles (`APP_ROLES_FILE`): without it, the domains of the domain groups that hold an app role decide who is staff; see [Without the allow-list](#without-the-allow-list) |
 | `OPEN_REGISTRATION_HOSTS` | CSV of hosts (`DOMAIN` or a subdomain) where other addresses may sign in as guests; see [Open registration for one app](#open-registration-for-one-app) |
 | `ADMIN_EMAILS` | CSV of explicit admin addresses |
 | `SESSION_SECRET` | 32+ random bytes (`openssl rand -hex 32`) |
@@ -356,6 +357,36 @@ for the annotated list. Key ones:
 | `MEMBER_READER_TOKEN_<APP>` | Each reading app's own bearer token, from `openssl rand -hex 32` |
 | `BREAKGLASS_REFUSED_GROUPS` | Groups an app reads as its own role (space or comma separated); never a card's target or a guest's membership. Added to those learned from the route manifests |
 | `DOMAIN` | The server domain (provided by the server `.env`) |
+
+The gateway refuses to start when neither `ALLOWED_EMAIL_DOMAINS` nor `ADMIN_EMAILS` is set.
+
+#### Without the allow-list
+
+A server that uses app roles (`APP_ROLES_FILE`) can leave `ALLOWED_EMAIL_DOMAINS`
+empty. The gateway then counts as staff the administrators in `ADMIN_EMAILS` and
+every address at a domain of a domain group that holds at least one app role the
+manifest declares. A domain group that holds no role admits nobody, and the
+sign-in page does not name its domains. Staff sign in as before, feeds and the members endpoint keep them,
+and the lists closed to outsiders are kept in their sessions. Anyone else signs in
+as a member when they hold a role through a list, by name or by an invitation, or
+as a guest on an open host. While `ALLOWED_EMAIL_DOMAINS` is set, it alone decides
+who is staff, and a domain group adds no one. Without it, giving a domain group
+its first role admits everyone at its domains to every plain `import protected`
+app, as adding the domains to the allow-list did. Taking the group's last role
+away, or removing a domain, signs those people out at their next request, or makes
+them members if they still hold a role. If the gateway has not been able to read
+its domain groups since it started, it answers sign-in and session checks with a
+503 and ends no session until it can.
+
+Remove the allow-list only once no site uses an older guard (`protected`,
+`protected_domains`, `protected_groups` or `protected_open`). An older guard admits
+staff by `any` or by domain, so while one remains, a domain group that holds a
+role in any app opens that site to everyone at its domains. The gateway logs a
+warning naming such sites at start, and again whenever they change. Once every
+site uses a role guard, everyone at a domain group's domains can sign in to the
+apps where the group holds a role, and to no other.
+At start, a gateway without the allow-list logs who can sign in.
+
 
 ### Passkeys (optional)
 
@@ -468,7 +499,7 @@ The login page has a **"Keep me signed in"** checkbox. Unchecked, a session
 lasts `SESSION_TTL` (default 2h); checked, it lasts `SESSION_REMEMBER_TTL`
 (default 24h). Both slide on activity (renewing every `SESSION_RENEW_AFTER`,
 default 1h), up to `SESSION_MAX_AGE` from sign-in. Removing a domain from the
-allow-list, a person from the admin listing, or every host from
+allow-list (or, without one, from the domain groups), a person from the admin listing, or every host from
 `OPEN_REGISTRATION_HOSTS` takes effect at each person's next request once the
 gateway has restarted with the new setting, as a group change does. The renewal is issued by `/verify`
 and carried to the browser by the guard's auth gate; a hand-rolled
@@ -528,7 +559,7 @@ still reach an app during a time-critical event (e.g. a code stroke).
   `airdb_admin` as its editor, Planka maps `planka-admins` to its own
   administrator. A card targeting such a group would admit a stranger as an
   application administrator, so the gateway refuses it, and likewise refuses
-  to add an address outside the allow-list (a guest) as a member of one. It
+  to add an address that is not staff (a guest) as a member of one. It
   learns these groups from three places: every group a site's rule lists
   together with `admin` (`import protected_groups "airdb_admin admin"`, read
   from `ROUTE_ACCESS_FILE`, which keeps each rule's group set whole); every
@@ -708,7 +739,7 @@ Authorization: Bearer <token>
 The members are the people the gateway applies now: the group's own members
 and, through includes, the members of every group it includes, as
 `Remote-Groups` gives them at sign-in. A held feed change is not included
-until it is applied, and an address the allow-list does not admit is left
+until it is applied, and an address that is not staff is left
 out, so a guest member is never reported. Each read is recorded, one row per
 app, group, caller address and hour, and the App feeds page lists the
 reads of the last 30 days. A token used from a second container shows there

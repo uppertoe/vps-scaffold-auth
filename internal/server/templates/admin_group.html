@@ -43,6 +43,7 @@
     <input type="text" name="domain" class="mono" required placeholder="example.org.au" aria-label="Domain to add">
     <button type="submit" class="ghost">Add the domain</button>
   </form>
+  <p class="hint">Everyone with an address at these domains can sign in to the apps where this group holds a role.</p>
 </section>
 <section class="fsec">
   <h2><label for="org-{{$group}}">{{.OrgText.Label}}</label></h2>
@@ -124,13 +125,13 @@
   {{if .Members}}
   {{if .Feed}}
   <ul class="addresses">
-    {{range .Members}}<li>{{.Email}}{{if .AddedFrom}} <span class="pill tag" title="The roster holds this person as {{.AddedFrom}}. The feed also lists this form of the address, because a renumbered account is often renamed back.">added from {{.AddedFrom}}</span>{{end}}{{if .Guest}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</li>{{end}}
+    {{range .Members}}<li>{{.Email}}{{if .AddedFrom}} <span class="pill tag" title="The roster holds this person as {{.AddedFrom}}. The feed also lists this form of the address, because a renumbered account is often renamed back.">added from {{.AddedFrom}}</span>{{end}}{{if .Guest}} <span class="pill guest" title="The gateway does not count this address as staff. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not staff</span>{{end}}</li>{{end}}
   </ul>
   {{else}}
   {{$display := .Display}}
   <div class="glist">
     {{range .Members}}
-    <div class="grow"><span>{{.Email}}{{if .Guest}} <span class="pill guest" title="The allow-list does not admit this address. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not on the allow-list</span>{{end}}</span>
+    <div class="grow"><span>{{.Email}}{{if .Guest}} <span class="pill guest" title="The gateway does not count this address as staff. The person can sign in only as a guest, and this membership admits them to every app guarded by this group.">not staff</span>{{end}}</span>
       <form class="inline" method="post" action="/admin/groups/{{$group}}/members/delete">
         <input type="hidden" name="csrf" value="{{$csrf}}">
         <input type="hidden" name="email" value="{{.Email}}">

@@ -164,7 +164,7 @@ func TestDomainRemovalAndDeleteConfirmations(t *testing.T) {
 	}
 }
 
-// A list member outside the allow-list keeps the "not on the allow-list"
+// A list member outside the allow-list keeps the "not staff"
 // pill even when the list holds an app role, because the membership still
 // admits them wherever the list guards an older app; the list's facts say
 // which roles it holds.
@@ -180,7 +180,7 @@ func TestOutsideListMemberIsMarkedEvenWithARole(t *testing.T) {
 		}
 	}
 	page := c.get("/admin/groups/registrars", nil).Body.String()
-	if !strings.Contains(page, "not on the allow-list") {
+	if !strings.Contains(page, "not staff") {
 		t.Error("a member of a list with no role is not marked")
 	}
 	mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignList, Ref: "registrars"})
@@ -188,7 +188,7 @@ func TestOutsideListMemberIsMarkedEvenWithARole(t *testing.T) {
 	// The person signs in as a member through the role, and older guards
 	// treat a member as a guest: this membership still admits them wherever
 	// the list guards an older app, so the warning stays.
-	if !strings.Contains(page, "not on the allow-list") {
+	if !strings.Contains(page, "not staff") {
 		t.Error("an outside member of a list that holds a role is no longer marked")
 	}
 	if !strings.Contains(page, "One role in one app") {

@@ -77,17 +77,72 @@ type RoleAssignment struct {
 	CreatedAt time.Time
 }
 
-// webmailDomains are free email providers. A domain rule for one would open
-// a role to anyone who signs up with that provider, so it is refused.
-var webmailDomains = map[string]struct{}{
-	"gmail.com": {}, "googlemail.com": {}, "outlook.com": {}, "outlook.com.au": {},
-	"hotmail.com": {}, "hotmail.com.au": {}, "live.com": {}, "live.com.au": {},
-	"msn.com": {}, "yahoo.com": {}, "yahoo.com.au": {}, "ymail.com": {},
-	"icloud.com": {}, "me.com": {}, "mac.com": {}, "bigpond.com": {}, "bigpond.net.au": {},
-	"proton.me": {}, "protonmail.com": {}, "pm.me": {}, "aol.com": {}, "gmx.com": {},
-	"gmx.net": {}, "mail.com": {}, "zoho.com": {}, "yandex.com": {}, "fastmail.com": {},
-	"optusnet.com.au": {}, "iinet.net.au": {}, "tpg.com.au": {},
-}
+// webmailDomains are free email providers and the mail services of
+// consumer internet providers. A domain rule for one would open a role to
+// anyone who signs up with that provider, so it is refused. The list is
+// kept by hand: add a domain here when one is found missing.
+var webmailDomains = func() map[string]struct{} {
+	m := map[string]struct{}{}
+	for _, list := range []string{
+		// Gmail
+		"gmail.com googlemail.com",
+		// Outlook, Hotmail, Live and MSN
+		"outlook.com outlook.com.au outlook.co.nz outlook.co.uk outlook.ie " +
+			"outlook.fr outlook.de outlook.es outlook.it outlook.jp outlook.in " +
+			"outlook.sg outlook.my outlook.ph outlook.kr outlook.cl " +
+			"outlook.com.br outlook.com.ar outlook.com.vn outlook.com.gr " +
+			"outlook.com.tr outlook.sa outlook.at outlook.be outlook.dk " +
+			"outlook.cz outlook.hu outlook.pt outlook.sk hotmail.com " +
+			"hotmail.com.au hotmail.co.nz hotmail.co.uk hotmail.ie hotmail.fr " +
+			"hotmail.de hotmail.es hotmail.it hotmail.nl hotmail.be hotmail.ca " +
+			"hotmail.co.jp hotmail.co.in hotmail.sg hotmail.my hotmail.ph " +
+			"hotmail.co.za hotmail.com.br hotmail.com.ar hotmail.com.mx " +
+			"hotmail.se hotmail.no hotmail.dk hotmail.fi hotmail.gr hotmail.ch " +
+			"hotmail.at live.com live.com.au live.co.nz live.co.uk live.ie " +
+			"live.fr live.de live.nl live.be live.ca live.it live.se live.no " +
+			"live.dk live.jp live.cn live.in live.com.sg live.com.my " +
+			"live.com.ph live.co.za live.com.mx live.com.ar live.cl live.at " +
+			"msn.com passport.com windowslive.com",
+		// Yahoo, Y7, Ymail and Rocketmail
+		"yahoo.com yahoo.com.au yahoo.co.nz yahoo.co.uk yahoo.ie yahoo.fr " +
+			"yahoo.de yahoo.es yahoo.it yahoo.ca yahoo.co.jp yahoo.co.in " +
+			"yahoo.in yahoo.com.sg yahoo.com.my yahoo.com.ph yahoo.com.hk " +
+			"yahoo.com.tw yahoo.co.id yahoo.co.th yahoo.co.kr yahoo.com.vn " +
+			"yahoo.com.br yahoo.com.ar yahoo.com.mx yahoo.cl yahoo.co.za " +
+			"yahoo.se yahoo.no yahoo.dk yahoo.fi yahoo.gr yahoo.nl yahoo.be " +
+			"yahoo.at yahoo.ch yahoo.pl y7mail.com ymail.com rocketmail.com",
+		// iCloud
+		"icloud.com me.com mac.com",
+		// GMX, web.de and mail.com
+		"gmx.com gmx.net gmx.de gmx.at gmx.ch gmx.fr gmx.co.uk gmx.us " +
+			"web.de mail.com email.com",
+		// Proton
+		"proton.me protonmail.com protonmail.ch pm.me",
+		// Tutanota
+		"tutanota.com tutanota.de tutamail.com tuta.io tuta.com keemail.me",
+		// Zoho
+		"zoho.com zohomail.com zoho.eu zohomail.eu zoho.in zohomail.in " +
+			"zoho.com.au zohomail.com.au",
+		// AOL
+		"aol.com aol.co.uk aol.fr aol.de aim.com",
+		// Yandex and mail.ru
+		"yandex.com yandex.ru ya.ru yandex.ua yandex.by yandex.kz mail.ru " +
+			"bk.ru inbox.ru list.ru",
+		// Fastmail
+		"fastmail.com fastmail.fm fastmail.com.au",
+		// DuckDuckGo
+		"duck.com",
+		// Australian ISPs
+		"bigpond.com bigpond.net.au bigpond.com.au " +
+			"optusnet.com.au internode.on.net iinet.net.au " +
+			"westnet.com.au tpg.com.au dodo.com.au",
+	} {
+		for _, d := range strings.Fields(list) {
+			m[d] = struct{}{}
+		}
+	}
+	return m
+}()
 
 // IsWebmailDomain reports whether domain is a public webmail provider.
 func IsWebmailDomain(domain string) bool {

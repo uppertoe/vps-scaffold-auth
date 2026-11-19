@@ -855,6 +855,10 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	// The role comes from the current policy, as for an email code. A passkey
 	// is never a way in for an address the allow-list no longer permits, and
 	// never makes a guest.
+	if s.rolesUnavailable(r.Context()) {
+		s.renderUnavailable(w, rd)
+		return
+	}
 	role := s.loginRole(r.Context(), pk.Email, s.isOpenHost(rd))
 	if role != authz.RoleUser && role != authz.RoleAdmin && role != authz.RoleMember {
 		s.recordAuth(r, pk.Email, store.AuthEventPasskey, store.AuthOutcomeDenied)
