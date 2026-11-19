@@ -18,8 +18,8 @@ lists it carries.
 
 Being a gateway administrator gives no role in any app. An app's roles are
 given on its page, to administrators as to anyone else. On the department's
-server, each administrator who needs an app's Administrator role has been
-given it by name.
+server, the administrators hold each app's Administrator role through the
+Server Administrators list.
 
 ## The second factor
 

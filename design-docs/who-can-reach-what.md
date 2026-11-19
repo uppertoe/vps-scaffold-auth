@@ -90,9 +90,10 @@ would admit a guest.
 
 A person outside the allow-list is never counted as a member of a list that
 the server's settings close to outsiders, and the gateway drops such a list
-from that person's session. On the department's server these are the lists
-that hold a tool's Administrator role, and the prototypes list. An
-administrator can still give such a person the role by name.
+from that person's session. On the department's server these are the
+administrators lists of the airway database, the enquiries page, the project
+boards and the roster insights, and the prototypes list. An administrator can
+still give such a person the role by name.
 
 ## Signing in for a domain
 
@@ -106,10 +107,10 @@ page names the domains but declines no address.
 ## Guests
 
 One tool on the department's server, the fellowship enquiries page, is for
-members of the public. Its host is listed in the gateway's settings as open to
-registration, and its User role is given to guests. A person who signs in on
-the way to that host, with an address the gateway would not otherwise admit,
-is signed in as a guest.
+members of the public, and its User role is given to guests. A person who
+signs in on the way to that tool, with an address the gateway would not
+otherwise admit, is signed in as a guest. The gateway offers a guest sign-in
+only on a host that its settings open to registration.
 
 A guest holds a role only where a tool gives the role to guests, and guests
 can be given only the User role. Every other tool refuses them. A tool that
