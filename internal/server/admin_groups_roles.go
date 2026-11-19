@@ -150,8 +150,8 @@ func (s *Server) fillGroupRoles(r *http.Request, view []groupView) error {
 		}
 		if s.rolesOn() {
 			g.Uses = s.groupUses(g, readers)
-			g.NotUsed = g.Unused && g.RoleCount == 0 && len(g.Uses) == 0
 		}
+		g.NotUsed = g.Unused && g.RoleCount == 0 && len(g.Uses) == 0
 		if g.Label == "" {
 			// A group without a label is named by its slug, drawn as a slug.
 			g.Token.Tone = "slug"

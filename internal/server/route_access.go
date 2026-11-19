@@ -8,13 +8,31 @@ import (
 	"strings"
 )
 
+// The Overview's "Who can reach what" wording. Each is kept here, once.
+const (
+	msgReachIntro = "Each site admits anyone who meets one of its rules, and a site may apply different rules to different paths. For a site behind app roles, the app's page lists who holds each role."
+	// msgReachRoles is a role-guarded site's line; %s is the app, linked to
+	// its page.
+	msgReachRoles = "App roles: see %s"
+)
+
 // siteAccessView is one row of the overview's "who can reach what" table.
 type siteAccessView struct {
 	Host  string
 	Rules []accessRuleView
 	// Roles is set when a role guard ("roles" in the file) guards some of
-	// the site. The overview's table does not list such a rule.
-	Roles bool
+	// the site. RoleApps are the apps whose roles guard it, in the file's
+	// order, each listed once; the overview's table points to each app's page.
+	Roles    bool
+	RoleApps []siteRoleApp
+}
+
+// siteRoleApp is an app whose roles guard a site, for the overview's table:
+// Label is the app's label, Href its Apps page, and Before and After the
+// words of its line on either side of the label.
+type siteRoleApp struct {
+	Name, Label, Href string
+	Before, After     string
 }
 
 // accessRuleView is one access rule on a site. Kind is one of groups, domains,
@@ -29,7 +47,7 @@ type accessRuleView struct {
 var accessKindOrder = map[string]int{"public": 0, "network": 1, "guests": 2, "signed-in": 3, "domains": 4, "groups": 5}
 
 // routeAccess reads ROUTE_ACCESS_FILE for the overview's table, which lists
-// every site with a rule other than a role guard. It returns nil when the
+// every site with a rule, a role guard included. It returns nil when the
 // feature is off or the file cannot be read; the overview then leaves the
 // table out.
 func (s *Server) routeAccess() []siteAccessView {
@@ -39,7 +57,7 @@ func (s *Server) routeAccess() []siteAccessView {
 	}
 	out := make([]siteAccessView, 0, len(all))
 	for _, v := range all {
-		if len(v.Rules) > 0 {
+		if len(v.Rules) > 0 || len(v.RoleApps) > 0 {
 			out = append(out, v)
 		}
 	}
@@ -102,6 +120,9 @@ func (s *Server) readRouteAccess() []siteAccessView {
 			}
 			if kind == "roles" {
 				v.Roles = true
+				if app, _, _ := strings.Cut(value, " "); app != "" {
+					v.addRoleApp(s.roleAppRef(app))
+				}
 				continue
 			}
 			v.Rules = append(v.Rules, rule)
@@ -118,4 +139,25 @@ func (s *Server) readRouteAccess() []siteAccessView {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
 	return out
+}
+
+// roleAppRef is an app named by a role guard, linked to its Apps page. An
+// app the manifest does not list is named as written, without a link.
+func (s *Server) roleAppRef(app string) siteRoleApp {
+	ref := siteRoleApp{Name: app, Label: app}
+	if a, ok := s.appRoles.Apps[app]; ok {
+		ref.Label, ref.Href = a.Label, "/admin/apps/"+app
+	}
+	ref.Before, ref.After, _ = strings.Cut(msgReachRoles, "%s")
+	return ref
+}
+
+// addRoleApp adds an app to a site's role apps, once.
+func (v *siteAccessView) addRoleApp(ref siteRoleApp) {
+	for _, r := range v.RoleApps {
+		if r.Name == ref.Name {
+			return
+		}
+	}
+	v.RoleApps = append(v.RoleApps, ref)
 }

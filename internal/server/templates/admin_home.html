@@ -53,7 +53,7 @@
 {{if .Sites}}
 <div class="panel">
   <h2>Who can reach what</h2>
-  <p class="muted">Each site admits anyone who meets one of its rules. Where a site lists several, it may apply them to different paths.</p>
+  <p class="muted">{{.ReachIntro}}</p>
   <div class="tablewrap">
   <table class="stack">
     <thead><tr><th>Site</th><th>Who can reach it</th></tr></thead>
@@ -62,6 +62,7 @@
       <tr>
         <td><code class="mono">{{.Host}}</code></td>
         <td data-label="Who can reach it">
+          {{range .RoleApps}}<div>{{.Before}}{{if .Href}}<a href="{{.Href}}">{{.Label}}</a>{{else}}{{.Label}}{{end}}{{.After}}</div>{{end}}
           {{range .Rules}}
           <div>
             {{if eq .Kind "public"}}Open to everyone{{if .Reason}}: <span class="muted">{{.Reason}}</span>{{end}}
