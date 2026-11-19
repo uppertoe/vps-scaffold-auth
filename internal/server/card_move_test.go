@@ -216,14 +216,15 @@ func TestMoveCardCSRFAndAdminOnly(t *testing.T) {
 	if rec := c.postForm("/admin/break/"+sid+"/move", form); rec.Code != http.StatusForbidden {
 		t.Errorf("forged CSRF = %d, want 403", rec.Code)
 	}
-	// Anyone but an administrator is sent to sign in before the form is read.
+	// Anyone but an administrator is turned away before the form is read: a
+	// signed-in user to the no-access page, a visitor to sign in.
 	user := newClient(t, srv.Handler())
 	loginAs(t, user, sender, "user@example.com", nil)
 	anon := newClient(t, srv.Handler())
-	for name, cl := range map[string]*client{"a signed-in user": user, "no session": anon} {
-		rec := cl.postForm("/admin/break/"+sid+"/move", form)
-		if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login?") {
-			t.Errorf("%s: move = %d to %q, want sign in", name, rec.Code, rec.Header().Get("Location"))
+	for name, want := range map[*client]string{user: "/denied?", anon: "/login?"} {
+		rec := name.postForm("/admin/break/"+sid+"/move", form)
+		if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), want) {
+			t.Errorf("move = %d to %q, want %s", rec.Code, rec.Header().Get("Location"), want)
 		}
 	}
 	if got := getCard(t, srv, id); got.App != "" || got.TargetGroup != "bg_nd" {

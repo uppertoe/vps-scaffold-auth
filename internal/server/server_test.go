@@ -1206,3 +1206,26 @@ func TestVerifyDoesNotClearAmbiguousSessionCookies(t *testing.T) {
 		}
 	}
 }
+
+// Someone signed in who is not an administrator is shown the no-access page,
+// naming the address they used, rather than the email page: the email page
+// looked as though the sign-in had failed. A visitor with no session is still
+// sent to sign in.
+func TestNonAdminSeesNoAccessOnAdminPages(t *testing.T) {
+	srv, sender := testServer(t)
+	user := newClient(t, srv.Handler())
+	loginAs(t, user, sender, "user@example.com", nil)
+	rec := user.get("/admin/groups", nil)
+	loc := rec.Header().Get("Location")
+	if rec.Code != http.StatusFound || !strings.Contains(loc, "/denied?rd=") || !strings.Contains(loc, "%2Fadmin%2Fgroups") {
+		t.Fatalf("non-admin on an admin page = %d to %q, want the no-access page", rec.Code, loc)
+	}
+	page := user.get(strings.TrimPrefix(loc, "https://auth.example.com"), nil)
+	if !strings.Contains(page.Body.String(), "user@example.com") {
+		t.Errorf("no-access page does not name the address signed in")
+	}
+	anon := newClient(t, srv.Handler())
+	if rec := anon.get("/admin/groups", nil); !strings.Contains(rec.Header().Get("Location"), "/login?") {
+		t.Errorf("visitor on an admin page = %q, want sign in", rec.Header().Get("Location"))
+	}
+}
