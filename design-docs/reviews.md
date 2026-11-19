@@ -2,7 +2,7 @@
 title: Reviews
 summary: How the gateway has been reviewed since it was built in May 2026, what each review found, and what it changed.
 weight: 8
-lastmod: 2026-10-31
+lastmod: 2026-11-19
 ---
 
 ## How the gateway is reviewed
@@ -25,6 +25,9 @@ with a test that would have caught it, and the tests run on every change.
 | 29 October 2026 | Three successive reviews found ways an anonymous visitor could exhaust the gateway's memory, and so take every tool offline: oversized forms, floods of logo requests and images that expand when decoded. Send limits could be used up by a stranger. | The limits listed under [keeping the gateway available](security-hardening.md) were added, and the send limits were reshaped around the hospital's network. |
 | 31 October 2026 | The server's [review](../server/security-reviews.md) examined the login wall as one of five areas and found no way in from outside. | No change was needed. |
 | 31 October 2026 | A pass tested every assumption the chain relies on, through the production version of Caddy. It found that the snippet for a public route passed identity headers sent by the browser on to its app. No live tool was exposed, because every tool on the servers that reads those headers already removed them. | A snippet for public routes now removes those headers, and every public route on the three servers uses it. Every assumption is listed with the test that proves it, each test was shown to fail when its protection was removed, and the whole chain is tested before every release. |
+| 13 November 2026 | A review of app roles before release found that a person outside the allow-list who held a role, or had an open invitation, counted as staff on every tool still behind the older guards. It also found three shapes of Caddy route in which Caddy and the manifest decided a path differently, and that invitation links reached the server's access log. | Such a person signs in as a member, whom the older guards treat as a guest. The renderer refuses the three shapes. Each guard is bound to its app's hosts, a list never matches the name of a kind of session, and invitation links are kept out of the access log. |
+| 14 November 2026 | A second review of app roles, which tested the rule that a network or guests hold only an app's User role, found nothing of high or medium severity. | One sentence of wording was corrected. |
+| 17 November 2026 | A review of the lists that apps may read found that an app's own snippet could widen the lists it reads, with nothing on the gateway's side to approve it. | An administrator now approves each app and list on the App feeds page, and each approval is recorded and emailed to the other administrators. |
 
 The finding of 11 October was the most serious in the gateway's history. When
 it was fixed, every session in use was ended, so everyone signed in again
@@ -45,8 +48,11 @@ browsers, and checked against the live servers before release.
 These risks are known and have been accepted, each for the reason given on
 the page that describes it.
 
-- A photographed break-glass card can be used until it is revoked, within the
-  scope of its group.
+- A photographed break-glass card can be used until it is withdrawn, within
+  the User role of its app.
+- A visitor who has not signed in can learn the domains of a role that is
+  given only to domain groups, because the sign-in page names them, as it
+  named a tool's domains before app roles.
 - Another site can make an older version of Safari sign out or start a
   sign-in, because that browser does not report where a form came from. It
   cannot complete a sign-in.

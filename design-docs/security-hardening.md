@@ -2,7 +2,7 @@
 title: Security hardening
 summary: The defences in one place, from refusing to start on a bad setting to the limits that keep one visitor from taking every tool offline.
 weight: 7
-lastmod: 2026-11-02
+lastmod: 2026-11-19
 ---
 
 ## Failing closed
@@ -15,7 +15,9 @@ other defence on this page follows from that rule.
 | A setting is missing, malformed or unsafe | Refuses to start, naming the setting |
 | The signing key is short or plainly not random | Refuses to start |
 | Mail is set to go to the log, where codes could be read | Refuses to start unless the server is in local development mode |
-| A tool's rule is missing or malformed | Shows every visitor the no-access page |
+| A guard names an app or role the manifest does not declare, or sits on a host that is not the app's | Shows every signed-in visitor the no-access page |
+| The manifest of app roles cannot be read | Refuses every guard that names an app |
+| The role assignments cannot be read | Keeps the last copy it read, or, with none, admits nobody through a role |
 | A session is of a kind this version does not know | Clears it and asks the person to sign in |
 | A second-factor attempt cannot be recorded | Does not check the code |
 | The check for a recent code fails | Treats the address as having one, so that a fresh code cannot reset the guess count |
@@ -46,13 +48,16 @@ would open the others.
 
 The gateway relies on three things that Caddy guarantees on every request.
 
-- Caddy deletes any identity headers the browser sent, before the gateway is
-  asked, so a tool sees only the gateway's answer.
-- Caddy replaces any copy of the rule header the browser sent with the rule
-  from the tool's own route.
+- Caddy deletes any identity headers the browser sent, `Remote-Roles`
+  included, before the gateway is asked, so a tool sees only the gateway's
+  answer.
+- Caddy replaces any app or role header the browser sent with the app and
+  role from the tool's own snippet.
 - Caddy records the visitor's real network address, and the gateway reads
   only the entry that Caddy wrote. A visitor therefore cannot pose as a new
-  address on every request to escape the limits.
+  address on every request to escape the limits, or pose as a visitor on the
+  hospital network. That holds only while Caddy faces the internet directly,
+  with no other proxy in front of it.
 
 A public route has no guard, so the snippets include one for public routes
 that removes the session cookie and any identity headers the browser sent. A
@@ -68,11 +73,13 @@ the test that proves it, is listed in the repository's security register.
 
 ## The pages
 
-The sign-in and admin pages contain no scripts, and the gateway's content
-policy forbids scripts, frames and outside resources. The one exception comes
-with passkeys: when a server switches them on, the pages that use a passkey
+The sign-in pages and most admin pages contain no scripts, and the gateway's
+content policy forbids scripts, frames and outside resources. There are two
+exceptions. When a server switches passkeys on, the pages that use a passkey
 load one script from the gateway itself, and their policy allows that script
-alone. [Passkeys](passkeys.md) explains why. Forms may be sent only
+alone; [Passkeys](passkeys.md) explains why. The admin pages for apps and for
+making cards and designs each carry one script written into the page, and
+their policy allows that script alone, by its hash. Forms may be sent only
 to the gateway itself and to hosts on the server's domain. The pages send no
 referrer and are never cached. Uploaded images are served with a policy that
 stops them from acting as a page, so a malicious image cannot run code even
@@ -130,8 +137,10 @@ change. Each server pins the image it runs by digest.
 
 - A person who controls a staff member's inbox can sign in as that staff
   member, because ordinary staff have no second factor.
-- A stolen session cookie works until it expires, or until the person loses
-  their listing and the session next renews.
+- A stolen session cookie works until it expires, or until the person may no
+  longer sign in.
+- Anyone on the hospital network reaches, without signing in, the User role
+  of each tool that gives that role to the network.
 - Anyone who photographs a break-glass card can use it within the limits
   [Break-glass cards](break-glass-cards.md) describes.
 - A tool on the same domain can overwrite the session cookie.

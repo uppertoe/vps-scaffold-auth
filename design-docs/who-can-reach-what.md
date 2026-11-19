@@ -1,91 +1,125 @@
 ---
 title: Who can reach what
-summary: The three roles, the groups administrators manage, the rule each tool declares, and how guests from the public are kept to the one tool meant for them.
+summary: The roles each tool declares, who the gateway gives each role to, who may sign in, and how guests from the public are kept to the one tool meant for them.
 weight: 3
-lastmod: 2026-11-04
+lastmod: 2026-11-19
 ---
 
-## Roles
+## What a tool declares
 
-Every session carries one of three roles, and the role is always the first
-entry in the groups a tool receives.
+Each tool's Caddy snippet declares the tool's roles. Every tool has a User
+role, and a tool with a staff or administrator side declares more, such as
+Administrator. The snippet also says which paths need which role, which paths
+are open by design and the reason for each, and which pages a break-glass card
+may open. The server renders the snippets into one manifest, which the gateway
+reads when it starts.
 
-| Role | Who holds it |
+Each guarded path imports the role guard, which sends the gateway the tool's
+name and the role the path needs. Caddy replaces any copy of those headers
+that the browser sent, so a visitor cannot change the tool or the role being
+asked for.
+
+The gateway reads the guard strictly. A guard that names a tool or a role the
+manifest does not declare, or that sits on a host the manifest does not give
+the tool, is refused, and every signed-in visitor to that path is shown the
+no-access page. A guard copied onto another site therefore cannot borrow a
+tool's roles, and a typing error closes the path rather than opening it. The
+gateway also writes each refusal to its log, so that the fault is found
+quickly.
+
+## How a role opens a path
+
+Any role in a tool opens the tool's ordinary paths, which are the paths that
+need the User role. A path that needs another role, such as an administrator's
+page, opens only to the people who hold that role. The roles have no order of
+rank, so holding one role never gives another.
+
+The gateway works out a person's roles in a tool on every request, so a role
+given or taken away applies from the person's next request.
+
+## Who the gateway gives a role to
+
+An administrator gives each role on the tool's page in the gateway's admin
+pages. A role can be given to any of the following.
+
+| Given to | Who it covers |
 |---|---|
-| `admin` | An address on the gateway's list of administrators |
-| `user` | An address at one of the allowed domains |
-| `guest` | Any other verified address, signed in on the way to a tool that admits the public |
+| A domain group | Every address at the group's domains, such as `rch.org.au` |
+| A list | The members of a list, kept by hand or filled from a feed such as the roster |
+| A person | One address, added by hand or by invitation, until an end date or permanently |
+| A break-glass card | Whoever scans the card, as [Break-glass cards](break-glass-cards.md) describes |
+| The hospital network | Every request from the network's address ranges, whether or not the person has signed in |
+| Guests | Anyone signed in with a verified address, on a tool that admits the public |
 
-A break-glass session has no role of its own. It carries only the group its
-card names, as [Break-glass cards](break-glass-cards.md) describes.
+A card, the hospital network and guests identify nobody, so each can be given
+only the User role. The gateway refuses any other role for them, so no one
+becomes a tool's administrator by carrying a card, by being on the network or
+by confirming an address.
 
-Administrators also manage named groups on the gateway's admin pages, such as
-the group for the clinical prototypes. Group names may contain only lower-case
-letters, digits, hyphens and underscores, and the three role names are
-reserved. These two restrictions mean that no group can make its members
-administrators, and no group can make a member of staff look like a guest.
+Before a change is saved, the page lists it for review. The review warns when
+the change would leave a role with nobody, and when it would open a role to
+the network or to guests. Each saved change is recorded in the admin audit,
+and the other administrators are emailed.
 
-## The rule each tool declares
+An invitation gives one person a role in one tool. The gateway emails the
+invitation to that address, and its link works only for that address, for
+fourteen days. The person accepts it with a code sent to the same address, and
+then holds the role until the end date, if the administrator set one. Seven
+days before a person's role ends, the gateway emails the person and the
+administrator who gave the role.
 
-Each tool's Caddy route imports one guard, and the guard sends the gateway one
-header that states the tool's rule. Caddy replaces any copy of that header the
-browser sent, so a visitor cannot change or widen the rule.
+## Who can sign in
 
-| Guard | Who it admits |
-|---|---|
-| Any signed-in person | Any `user` or `admin`, but no guest and no break-glass card |
-| Open to the public | Anyone signed in, guests included |
-| Listed domains | People whose address is at one of the named domains |
-| Listed groups | Members of the named groups, and break-glass cards that name one of them |
-| Administrators only | Members of the `admin` group |
-| Domains or groups | Either of the two conditions above |
+An address at one of the domains on the allow-list in the gateway's settings
+signs in as staff, and an address on the gateway's list of administrators
+signs in as an administrator. An address outside the allow-list signs in as a
+member if it holds a role in some tool through a domain group, a list or a
+person assignment. An address with an open invitation signs in through the
+invitation's link and code. On a tool that admits the public, any other
+verified address signs in as a guest, as described below.
 
-The gateway reads the rule strictly. A guard that sends no rule, an empty
-list, a misspelt field or a contradictory rule is refused, and every visitor
-to that tool is shown the no-access page. A typing error in a guard therefore
-closes the tool rather than opening it to everyone. The gateway also writes
-the refused rule to its log, so that the fault is found quickly.
+The hospital network and guests give nobody a reason to sign in, because they
+admit people without naming them. An address that may not sign in is sent no
+code and sees the same page as any other address, so the sign-in page does
+not reveal who holds a role.
 
-An earlier design used several headers, and each guard had to delete the ones
-it did not set. A guard that forgot one deletion would have let a visitor add
-a rule of their own. The single header, replaced on every request, removed
-that risk.
+The allow-list predates app roles and is still in use. Removing it, so that
+signing in depends on holding a role, is a later step. On a server where some
+tools still use the older guards, those guards admit a member only where they
+would admit a guest.
+
+A person outside the allow-list is never counted as a member of a list that
+the server's settings close to outsiders, and the gateway drops such a list
+from that person's session. On the department's server these are the
+administrators lists of the airway database, the enquiries page, the project
+boards and the roster insights, and the prototypes list. An administrator can
+still give such a person the role by name.
 
 ## Signing in for a domain
 
-When a tool's rule names a domain, the sign-in page tells the person which
-addresses the tool accepts, and declines an address at another domain before
-sending a code. A tool can show a phrase such as "an approved Victorian health
-service" instead of listing the domains.
-
-Administrators are not admitted by a domain rule unless their address is at
-that domain. A tool that administrators from elsewhere must reach gives them a
-separate entrance with the administrators-only guard, and the sign-in page
-can carry a link to that entrance. The gateway checks that the link leads to
-the server's own domain before showing it, so a tampered sign-in address
-cannot turn the link into one that leads elsewhere.
+When the role a page needs is given only to domain groups, the sign-in page
+names those domains, and it declines an address at another domain before
+sending a code. When the role is also given to a list, a person, the network
+or guests, the page names no domain, because an address at any domain might
+hold the role. When a card or an open invitation also gives the role, the
+page names the domains but declines no address.
 
 ## Guests
 
 One tool on the department's server, the fellowship enquiries page, is for
-members of the public. Its host is listed in the gateway's settings as open to
-registration. A person who signs in on the way to that host, with an address
-the allowed domains do not cover, is signed in as a guest.
+members of the public, and its User role is given to guests. A person who
+signs in on the way to that tool, with an address the gateway would not
+otherwise admit, is signed in as a guest. The gateway offers a guest sign-in
+only on a host that its settings open to registration.
 
-A guest is admitted only where a tool's rule opts in. The open-to-the-public
-guard admits guests, and a group guard admits a guest whom an administrator
-has placed in one of its groups. A group that a tool reads as one of its own
-roles is never given to a guest, whether directly, through an included group,
-or because the group became a role after the guest joined it. Every other
-guard refuses them, including the
-plain "any signed-in person" guard and a domain guard that names the guest's
-own domain. A tool that forgets to set a rule therefore stays closed to the
-public.
+A guest holds a role only where a tool gives the role to guests, and guests
+can be given only the User role. Every other tool refuses them. A tool that
+gives guests nothing therefore stays closed to the public.
 
 The host list decides only where the gateway offers a guest sign-in. It is not
 the boundary, because the destination travels in the sign-in address, which a
-visitor can change. The boundary is that only the tools which opt in admit
-guests.
+visitor can change. The boundary is that only the tools which give a role to
+guests admit them.
 
 A guest session renews like any other but always keeps the short lifetime.
 Removing every host from the list ends all guest sessions at their next
@@ -93,16 +127,7 @@ renewal. A guest who reaches a tool they cannot open is told they are signed
 in as a guest and is offered a way to sign out, so that they can sign in again
 with an approved address.
 
-Listing a host also gives effect to group memberships that were previously
-inert. A membership for an address outside the allowed domains did nothing
-while that address could not sign in. Once a host is open, the same address
-can sign in as a guest and the membership admits it. The admin groups page
-marks each member whom the allowed domains no longer cover, so that such
-memberships can be reviewed before a host is listed.
-
 ## Opening the gateway to everyone
 
-The gateway can also be set to admit any verified address as a `user` on
-every tool. This older setting is discouraged on a shared server, because any
-tool that relies on the plain "any signed-in person" guard is then open to the
-public. The department's server does not use it.
+The gateway can also be set to admit any verified address as staff. The
+department's server does not use this setting.
