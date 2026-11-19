@@ -539,7 +539,7 @@ func TestChain(t *testing.T) {
 				t.Errorf("guest at %s: %d to %q", host, r.status, r.location())
 			}
 		}
-		if r := g.get(authHost+"/admin/", nil); r.status != http.StatusFound || !strings.Contains(r.location(), "/login") {
+		if r := g.get(authHost+"/admin/", nil); r.status != http.StatusFound || !strings.Contains(r.location(), "/denied") {
 			t.Errorf("guest reached the admin pages: %d", r.status)
 		}
 	})
@@ -596,8 +596,10 @@ func TestChain(t *testing.T) {
 	})
 
 	t.Run("staff cannot open the admin pages", func(t *testing.T) {
+		// Signed in but not an administrator: the no-access page, which names
+		// the address, not the email page.
 		r := alice.get(authHost+"/admin/", nil)
-		if r.status != http.StatusFound || !strings.Contains(r.location(), "/login") {
+		if r.status != http.StatusFound || !strings.Contains(r.location(), "/denied") {
 			t.Fatalf("staff at /admin/: %d to %q", r.status, r.location())
 		}
 	})

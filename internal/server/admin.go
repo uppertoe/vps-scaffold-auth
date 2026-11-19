@@ -555,6 +555,14 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 		admin := ok && id.Kind == "" && s.policy.Role(id.Email) == authz.RoleAdmin && s.passkeyStillValid(r, id)
 		rd := s.cfg.PublicURL + r.URL.RequestURI()
 		if !admin {
+			// Someone signed in, but not as an administrator, is told so on
+			// the no-access page, which names the address they used and
+			// offers to sign in again. Sending them to the email page instead
+			// looked as though the sign-in had failed.
+			if ok && s.passkeyStillValid(r, id) {
+				http.Redirect(w, r, s.cfg.PublicURL+"/denied?rd="+url.QueryEscape(rd), http.StatusFound)
+				return
+			}
 			http.Redirect(w, r, s.cfg.PublicURL+"/login?rd="+url.QueryEscape(rd), http.StatusFound)
 			return
 		}
