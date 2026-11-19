@@ -2,7 +2,7 @@
 title: Passkeys
 summary: How a person signs in on their phone, or on their own computer, with a passkey instead of an emailed code, and the rules that keep a passkey as safe as the sign-in it replaces.
 weight: 4
-lastmod: 2026-11-18
+lastmod: 2026-11-19
 ---
 
 ## What a passkey changes
@@ -31,9 +31,9 @@ from another device there.
 
 A computer on the hospital's network cannot add a passkey, because the
 computers there are shared. The gateway knows the network by the address
-ranges the server lists for it, the same ranges that network roles use, and
-it checks the address both when the passkeys page starts the ceremony and
-when the passkey comes back. On that network, the passkeys page says why it
+ranges the server lists for it, which are the same ranges it uses when an app
+gives a role to the hospital network. The gateway checks the address both when
+the passkeys page starts the ceremony and when the passkey comes back. On that network, the passkeys page says why it
 offers nothing. A person can still sign in there with a passkey that their
 computer already holds, and phones on the hospital's Wi-Fi are offered a
 passkey as before.
@@ -46,9 +46,8 @@ The rule also covers only the addresses the server lists, so if the hospital
 reaches the gateway over IPv6 as well as IPv4, the server must list the
 hospital's ranges in both.
 
-Passkeys are built but switched off. Each server turns them on with one
-setting, so the department's server can try them before the data lab's other
-servers do.
+Each server turns passkeys on with one setting. The department's server has
+them on.
 
 ## Adding a passkey
 
@@ -69,8 +68,8 @@ passkey cannot add a passkey of their own that would survive the stolen one
 being removed. A person whose sign-in is older is asked to sign in again
 before a passkey is added.
 
-A guest, a break-glass session and an address the allow-list no longer
-permits cannot add a passkey.
+A guest and a break-glass session cannot add a passkey, and nor can an
+address that may no longer sign in.
 
 ## Administrators
 
@@ -123,8 +122,7 @@ administrator, can sign them out on every device, as
   reports was saved on a phone over Bluetooth or a QR code, or on a security
   key.
 - **The rules are checked again at every passkey sign-in.** A passkey does not
-  let in an address the allow-list no longer permits, and it never makes a
-  guest.
+  let in an address that may no longer sign in, and it never makes a guest.
 - **Only one kind of key is accepted.** The gateway accepts the P-256 keys that
   Apple's and Google's passkeys use, and nothing else. It asks the phone for no
   proof of its make or model, so the gateway's checks are short enough to read
@@ -136,7 +134,7 @@ A passkey sign-in needs a script in the page, which asks the phone to use the
 passkey. The sign-in pages had no scripts before passkeys, and the gateway's
 content policy forbade them. With passkeys on, the pages that use a passkey
 load one script from the gateway itself, and the content policy on those pages
-allows that script and no other. Every other page still forbids scripts. The
+allows that script and no other. Every other sign-in page still forbids scripts. The
 script makes no requests of its own: it puts the phone's answer into an
 ordinary form, and the gateway checks everything.
 

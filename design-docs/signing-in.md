@@ -2,7 +2,7 @@
 title: Signing in
 summary: The emailed code, the limits on guessing it, what the sign-in page reveals, how long a session lasts and where a person lands afterwards.
 weight: 2
-lastmod: 2026-10-31
+lastmod: 2026-11-19
 ---
 
 ## The code
@@ -51,17 +51,17 @@ or opening a new tab cannot reset the count.
 
 ## What the sign-in page reveals
 
-The sign-in page answers in the same way whether or not an address is
-allowed. For an address that is not allowed, the gateway stores a code that is
-never sent, so the step that follows behaves identically, down to the count of
+The sign-in page answers in the same way whether or not an address may sign
+in, as [Who can reach what](who-can-reach-what.md) describes. For an address
+that may not, the gateway stores a code that is never sent, so the step that follows behaves identically, down to the count of
 wrong guesses. The email is sent after the page has answered, so the time
 taken does not reveal the difference either.
 
-One exception is deliberate. If a tool's rule names a domain, the sign-in
-page says so, and it declines an address at another domain before sending a
-code. The person is then not emailed a code that would be refused after they
-had used it. The domain a tool requires is not a secret, and the rule itself
-is enforced afterwards on every request.
+One exception is deliberate. If the role a page needs is given only to
+domain groups, the sign-in page names the domains, and it declines an address
+at another domain before sending a code. The person is then not emailed a code
+that would be refused after they had used it. The domains are not a secret,
+and the role itself is checked afterwards on every request.
 
 ## The sign-in forms
 
@@ -91,9 +91,10 @@ hours and thirty days.
 
 A session in use renews itself, every hour by default and every six hours on
 the department's server. A change to the rules takes effect at each person's
-next request. A person whose domain is removed from the allow-list is signed
-out, a person removed from the admin listing loses the admin pages, and a
-change to a person's groups applies straight away.
+next request. A person who may no longer sign in is signed out, a person
+removed from the admin listing loses the admin pages, and a change to a
+person's roles or lists applies straight away. A person whose domain leaves
+the allow-list, but who still holds a role, continues as a member.
 
 However often it renews, no session lasts longer than a fixed time from the
 moment the person signed in: seven days by default, or the "Keep me signed in"

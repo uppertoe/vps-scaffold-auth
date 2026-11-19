@@ -6,14 +6,14 @@ contact: Eamonn Upperton
 decided-by: Eamonn Upperton, for the department's data lab, with the owner of each tool
 link: https://auth.rch-anaesthesia.org
 weight: 2
-lastmod: 2026-11-02
+lastmod: 2026-11-19
 ---
 
 Almost every web tool on the department's server sits behind one sign-in, the
 gateway at `auth.rch-anaesthesia.org`. A person enters their work email
 address, receives a code by email and types it in. From then on, the gateway
-decides on every request to every protected tool whether that person may open
-it. These pages explain how the gateway works, the rules it applies, and how
+decides on every request to every protected tool whether that person holds a
+role that opens the page they asked for. These pages explain how the gateway works, the rules it applies, and how
 it has been hardened against attack. They are written for someone who is
 comfortable with terms such as cookie and reverse proxy but has not read the
 code.
@@ -33,8 +33,8 @@ these pages describe the gateway itself.
 the reverse proxy to the gateway and back. [Signing in](signing-in.md) covers
 the emailed code, the limits on guessing it, and how long a session lasts.
 [Passkeys](passkeys.md) covers signing in on a phone without a code.
-[Who can reach what](who-can-reach-what.md) sets out the roles, the groups and
-the rule each tool declares. [Administrators](administrators.md) covers the
+[Who can reach what](who-can-reach-what.md) sets out the roles each tool
+declares, who the gateway gives them to, and who may sign in. [Administrators](administrators.md) covers the
 admin tier, its second factor and its records.
 [Break-glass cards](break-glass-cards.md) explains emergency access by QR code
 and the risk the department has accepted with it.
