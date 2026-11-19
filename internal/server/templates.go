@@ -86,6 +86,10 @@ type pageData struct {
 	RoleHint string
 	// LinkText replaces the message page's "Back to sign in".
 	LinkText string
+	// LinkHref replaces that link's address, for a page served on an app's
+	// host (through /verify), where a relative /login would not reach the
+	// gateway.
+	LinkHref string
 	// EmailPlaceholder is the login field's example address, derived from the
 	// effective domain (the route requirement, else the configured allow-list)
 	// as you@<domain>; empty falls back to a generic example in the template.

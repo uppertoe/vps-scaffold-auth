@@ -66,12 +66,15 @@ func (s *Server) appRoleGroups() map[string]bool {
 			out[g] = true
 		}
 	}
-	if m, ok := s.readRouteManifest(); ok {
+	m, ok := s.readRouteManifest()
+	if ok {
 		for g := range m.Declared {
 			out[g] = true
 		}
 	}
-	for _, site := range s.routeAccess() {
+	sites := s.routeAccess()
+	s.noteOlderGuards(olderGuardSites(m, sites))
+	for _, site := range sites {
 		for _, rule := range site.Rules {
 			if rule.Kind != "groups" || !containsFold(rule.Values, authz.RoleAdmin) {
 				continue

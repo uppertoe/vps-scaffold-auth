@@ -64,6 +64,7 @@ type Server struct {
 	branding          brandingCache  // public branding snapshot (see logo_cache.go)
 	appRoles          roles.Manifest // each app's roles (APP_ROLES_FILE, see app_roles.go)
 	roleCache         roleCache      // role assignments as /verify reads them
+	olderGuards       olderGuardWarning
 }
 
 // New constructs a Server from its dependencies.
@@ -135,6 +136,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		log.Printf("authz: guest sign-in open for %s: an OTP-verified address that is not known (the allow-list, or without one a domain group) and holds no app role becomes a guest, admitted only by guards that set guests=allow (protected_open).", strings.Join(cfg.OpenRegistrationHosts, ", "))
 	}
 	s.logWhoSignsIn(context.Background())
+	s.warnOlderGuards()
 	s.logDomainGroupReads(context.Background())
 	s.clearStaleReaderApprovals(context.Background())
 	s.handler = s.routes()

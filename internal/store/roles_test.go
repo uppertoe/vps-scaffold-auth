@@ -301,3 +301,23 @@ func TestMoveBreakGlassCard(t *testing.T) {
 		t.Errorf("withdrawn move = %v, want ErrCardNotGroup", err)
 	}
 }
+
+// The webmail list refuses the big providers' regional variants and the
+// Australian ISPs' mail, and not an institution's own domain.
+func TestWebmailDomainsIncludeRegionalVariants(t *testing.T) {
+	for _, d := range []string{
+		"y7mail.com", "hotmail.co.uk", "yahoo.co.uk", "duck.com", "tutanota.com", "gmx.de",
+		"internode.on.net", "outlook.co.nz", "Gmail.com", "live.com.au", "rocketmail.com",
+		"mac.com", "web.de", "proton.me", "zohomail.com", "aol.com", "yandex.ru", "mail.ru",
+		"fastmail.com", "bigpond.com", "optusnet.com.au", "iinet.net.au", "tpg.com.au", "dodo.com.au",
+	} {
+		if !IsWebmailDomain(d) {
+			t.Errorf("%s is not refused", d)
+		}
+	}
+	for _, d := range []string{"rch.org.au", "mcri.edu.au", "monashhealth.org", "telstra.com"} {
+		if IsWebmailDomain(d) {
+			t.Errorf("%s is refused", d)
+		}
+	}
+}

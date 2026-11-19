@@ -427,8 +427,10 @@ func TestStaffFromGroupsOrder(t *testing.T) {
 		{App: "a", Role: "user", Kind: store.AssignDomainGroup, Ref: "mcri-staff"},
 		{App: "b", Role: "admin", Kind: store.AssignDomainGroup, Ref: "rch-staff"},
 		{App: "a", Role: "user", Kind: store.AssignList, Ref: "exec"},
+		{App: "gone", Role: "user", Kind: store.AssignDomainGroup, Ref: "idle"},
 	}
-	staff, order, rank := staffFromGroups(groups, domains, as)
+	declared := func(app, role string) bool { return app == "a" || app == "b" }
+	staff, order, rank := staffFromGroups(groups, domains, as, declared)
 	if want := []string{"rch.org.au", "rch.vic.gov.au", "mcri.edu.au"}; !reflect.DeepEqual(order, want) {
 		t.Errorf("order = %v, want %v", order, want)
 	}
@@ -550,6 +552,10 @@ func TestRoleDataNeverLoaded(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Set-Cookie") != "" {
 		t.Errorf("verify = %d, cookie %q; want 503 and the session kept", rec.Code, rec.Header().Get("Set-Cookie"))
 	}
+	// The page is served on the app's host, so its link names the gateway.
+	if !strings.Contains(rec.Body.String(), `href="https://auth.example.com/login?rd=`) {
+		t.Errorf("the 503 page's link is not absolute:\n%s", rec.Body.String())
+	}
 	if rec := membersGet(srv.MembersHandler(), "/v1/groups/coordinators/members", digestToken, nil); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("members = %d %s, want 503", rec.Code, rec.Body)
 	}
@@ -592,4 +598,61 @@ func clearNotices(s *captureSender, want int) {
 	s.mu.Lock()
 	s.notices = nil
 	s.mu.Unlock()
+}
+
+// A domain-group assignment for an app or role the manifest no longer
+// declares makes nobody staff.
+func TestUndeclaredAssignmentMakesNobodyStaff(t *testing.T) {
+	srv, _ := staffServer(t, false, "")
+	ctx := context.Background()
+	mustAssign(t, srv, store.RoleAssignment{App: "removed", Role: "user", Kind: store.AssignDomainGroup, Ref: "partner"})
+	mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "editor", Kind: store.AssignDomainGroup, Ref: "partner"})
+	if srv.known(ctx, "x@partner.org") {
+		t.Error("an assignment the manifest does not declare makes its domain staff")
+	}
+	if got := srv.staffDomains(ctx); slices.Contains(got, "partner.org") {
+		t.Errorf("staff domains = %v", got)
+	}
+	partnerRole(t, srv, true)
+	if !srv.known(ctx, "x@partner.org") {
+		t.Error("a declared role does not make the domain staff")
+	}
+}
+
+// Without the allow-list, a site that still uses an older guard is warned
+// about at start and whenever the route files change, once for each change;
+// with the allow-list set there is no warning.
+func TestOlderGuardsWarnedWithoutAllowList(t *testing.T) {
+	capture := func(f func()) string {
+		var buf bytes.Buffer
+		log.SetOutput(&buf)
+		defer log.SetOutput(os.Stderr)
+		f()
+		return buf.String()
+	}
+	srv, _ := staffServer(t, false, "")
+	srv.olderGuards = olderGuardWarning{}
+	out := capture(srv.warnOlderGuards)
+	if !strings.Contains(out, "warning: authz: ALLOWED_EMAIL_DOMAINS is not set and") || !strings.Contains(out, "db.example.com") {
+		t.Errorf("start log = %q", out)
+	}
+	if out := capture(func() { srv.appRoleGroups() }); strings.Contains(out, "older guard") {
+		t.Errorf("the same sites were warned about again: %q", out)
+	}
+	// Only role guards and public sites left: no warning.
+	if err := os.WriteFile(srv.cfg.RouteGroupsFile, []byte("# none\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(srv.cfg.RouteAccessFile, []byte("db.{$DOMAIN}\troles\tcaffeine user\nwww.{$DOMAIN}\tpublic\twebsite\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out := capture(func() { srv.appRoleGroups() }); strings.Contains(out, "older guard") {
+		t.Errorf("warned with no older guard left: %q", out)
+	}
+
+	set, _ := staffServer(t, true, "")
+	set.olderGuards = olderGuardWarning{}
+	if out := capture(set.warnOlderGuards); strings.Contains(out, "older guard") {
+		t.Errorf("warned with the allow-list set: %q", out)
+	}
 }

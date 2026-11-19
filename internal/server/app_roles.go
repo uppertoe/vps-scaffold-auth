@@ -142,7 +142,7 @@ func (s *Server) roleData(ctx context.Context) roleState {
 		}
 	}
 	st := roleState{assignments: as, domains: domains, cards: cards, invited: invited, invitedRoles: invitedRoles}
-	st.staff, st.staffOrder, st.domainRank = staffFromGroups(groups, domains, as)
+	st.staff, st.staffOrder, st.domainRank = staffFromGroups(groups, domains, as, s.appRoles.Has)
 	s.roleCache.state = st
 	s.roleCache.at = now
 	s.roleCache.ok = true
@@ -160,11 +160,14 @@ func (s *Server) roleDataLoaded(ctx context.Context) (roleState, bool) {
 }
 
 // staffFromGroups works out the staff domains: those of the domain groups
-// that hold at least one app role, ordered by their groups' creation, oldest
-// first. A domain-group assignment has no end date (the store refuses one),
-// so holding a role is simply having an assignment. rank orders every domain
-// group's domains the same way, whether or not the group holds a role.
-func staffFromGroups(groups []store.Group, domains map[string][]string, as []store.RoleAssignment) (staff map[string]bool, order []string, rank map[string]int) {
+// that hold at least one app role the manifest declares (declared reports
+// whether it does), ordered by their groups' creation, oldest first. An
+// assignment left behind for an app or role the manifest no longer declares
+// makes nobody staff. A domain-group assignment has no end date (the store
+// refuses one), so holding a role is simply having an assignment. rank
+// orders every domain group's domains the same way, whether or not the group
+// holds a role.
+func staffFromGroups(groups []store.Group, domains map[string][]string, as []store.RoleAssignment, declared func(app, role string) bool) (staff map[string]bool, order []string, rank map[string]int) {
 	var dg []store.Group
 	for _, g := range groups {
 		if g.Kind == store.GroupKindDomain {
@@ -179,7 +182,7 @@ func staffFromGroups(groups []store.Group, domains map[string][]string, as []sto
 	})
 	held := map[string]bool{}
 	for _, a := range as {
-		if a.Kind == store.AssignDomainGroup {
+		if a.Kind == store.AssignDomainGroup && declared(a.App, a.Role) {
 			held[a.Ref] = true
 		}
 	}
@@ -550,7 +553,8 @@ func (s *Server) rolesUnavailable(ctx context.Context) bool {
 // rolesUnavailable, with a 503 and without touching the session cookie.
 func (s *Server) renderUnavailable(w http.ResponseWriter, rd string) {
 	w.Header().Set("Retry-After", "60")
-	s.render(w, http.StatusServiceUnavailable, "message", pageData{Title: msgUnavailableTitle, Message: msgUnavailable, Redirect: rd})
+	s.render(w, http.StatusServiceUnavailable, "message", pageData{Title: msgUnavailableTitle, Message: msgUnavailable, Redirect: rd,
+		LinkHref: s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd)})
 }
 
 // The page shown while rolesUnavailable.
@@ -593,6 +597,67 @@ func (s *Server) logWhoSignsIn(ctx context.Context) {
 	default:
 		log.Printf("authz: ALLOWED_EMAIL_DOMAINS is not set: addresses at the domains of the domain groups that hold an app role (%s) sign in as staff, as do the administrators in ADMIN_EMAILS; others who hold an app role sign in as members", strings.Join(st.staffOrder, ", "))
 	}
+}
+
+// olderGuardSites lists, sorted, the sites that still use an older guard: a
+// site named in ROUTE_GROUPS_FILE, or one with a rule in ROUTE_ACCESS_FILE
+// other than public (a role guard is not a rule there).
+func olderGuardSites(m routeManifest, sites []siteAccessView) []string {
+	set := map[string]bool{}
+	for _, hs := range m.Hosts {
+		for _, h := range hs {
+			set[h] = true
+		}
+	}
+	for _, v := range sites {
+		for _, r := range v.Rules {
+			if r.Kind != "public" {
+				set[v.Host] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for h := range set {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// olderGuardWarning remembers the sites last warned about, so the warning
+// is logged at start and again only when the route files change.
+type olderGuardWarning struct {
+	mu   sync.Mutex
+	last string
+	done bool
+}
+
+// warnOlderGuards reads the route files and warns about the sites that
+// still use an older guard (see noteOlderGuards). It runs at start; every
+// later read of the route files checks again through appRoleGroups.
+func (s *Server) warnOlderGuards() {
+	m, _ := s.readRouteManifest()
+	s.noteOlderGuards(olderGuardSites(m, s.routeAccess()))
+}
+
+// noteOlderGuards logs a warning when the allow-list is empty and some site
+// still uses an older guard: a domain group that holds any app role makes
+// everyone at its domains staff, and an older guard admits staff by "any"
+// or by domain, whatever app the role belongs to. It logs once for each new
+// list of sites.
+func (s *Server) noteOlderGuards(sites []string) {
+	if !s.staffFromDomainGroups() {
+		return
+	}
+	key := strings.Join(sites, " ")
+	s.olderGuards.mu.Lock()
+	same := s.olderGuards.done && s.olderGuards.last == key
+	s.olderGuards.last, s.olderGuards.done = key, true
+	s.olderGuards.mu.Unlock()
+	if same || len(sites) == 0 {
+		return
+	}
+	log.Printf("warning: authz: ALLOWED_EMAIL_DOMAINS is not set and %d site(s) still use an older guard (%s): a domain group that holds any app role also opens those guards to everyone at its domains as staff", len(sites), strings.Join(sites, ", "))
 }
 
 // loginRole is the sign-in decision: a known address (knownRole) as staff or
