@@ -650,38 +650,36 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 			ov.ActiveCards++
 		}
 	}
-	routeGroups, routeGroupsOn := s.routeGroups()
+	// The groups as the Groups pages see them, so that a group the Overview
+	// calls unused is one the Groups pages mark "Not used by any app".
+	view, missing, routeGroupsOn, err := s.groupViews(r)
+	if err == nil {
+		err = s.fillGroupRoles(r, view)
+	}
+	if err != nil {
+		s.adminError(w, r)
+		return
+	}
 	ov.RouteGroupsOn = routeGroupsOn
+	for _, g := range view {
+		if g.NotYetCreated {
+			continue
+		}
+		ov.Members += len(g.Members)
+		if g.NotUsed {
+			ov.UnusedGroups = append(ov.UnusedGroups, g.Name)
+		}
+	}
+	for _, m := range missing {
+		if !cardTargets[m.Name] {
+			ov.MissingGroups = append(ov.MissingGroups, m.Name)
+		}
+	}
 	includes, err := s.store.ListGroupIncludes(ctx)
 	if err != nil {
 		s.adminError(w, r)
 		return
 	}
-	includedSomewhere := map[string]bool{}
-	for _, incs := range includes {
-		for _, i := range incs {
-			includedSomewhere[i] = true
-		}
-	}
-	existing := map[string]bool{}
-	for _, g := range groups {
-		existing[g.Name] = true
-		members, err := s.store.ListGroupMembers(ctx, g.Name)
-		if err != nil {
-			s.adminError(w, r)
-			return
-		}
-		ov.Members += len(members)
-		if routeGroupsOn && len(routeGroups[g.Name]) == 0 && !cardTargets[g.Name] && !includedSomewhere[g.Name] {
-			ov.UnusedGroups = append(ov.UnusedGroups, g.Name)
-		}
-	}
-	for name := range routeGroups {
-		if !existing[name] && !cardTargets[name] {
-			ov.MissingGroups = append(ov.MissingGroups, name)
-		}
-	}
-	sort.Strings(ov.MissingGroups)
 	if states, err := s.store.ListGroupSyncStates(ctx); err == nil {
 		for g := range s.feeds.feeds {
 			if st, ok := states[g]; ok && st.Status != store.GroupSyncOK {
@@ -703,7 +701,7 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	ov.Sites = s.routeAccess()
+	ov.Sites, ov.ReachIntro = s.routeAccess(), msgReachIntro
 	// The Apps, Invitations and Cards pages' attention lines, so the
 	// Overview lists everything that needs an administrator.
 	if s.rolesOn() {
@@ -811,6 +809,7 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 			includedIn[inc] = append(includedIn[inc], g)
 		}
 	}
+	referenced := s.referencedGroups()
 	existing := make(map[string]bool, len(groups))
 	view := make([]groupView, 0, len(groups))
 	for _, g := range groups {
@@ -844,7 +843,7 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 			Feed: s.feedViewFor(g.Name, syncStates),
 			Name: g.Name, Label: g.Label, Members: mv,
 			Hosts:          hosts,
-			Unused:         routeGroupsOn && len(hosts) == 0 && !cardTargets[g.Name] && len(includedIn[g.Name]) == 0,
+			Unused:         routeGroupsOn && len(hosts) == 0 && !cardTargets[g.Name] && len(includedIn[g.Name]) == 0 && !referenced[g.Name],
 			Includes:       includes[g.Name],
 			IncludedIn:     includedIn[g.Name],
 			IncludeOptions: options,
@@ -877,6 +876,37 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 	}
 	sort.Slice(missing, func(i, j int) bool { return missing[i].Name < missing[j].Name })
 	return view, missing, routeGroupsOn, nil
+}
+
+// referencedGroups are the groups named by a setting or manifest other than
+// the route manifest and the role assignments: a feed fills it
+// (GROUP_FEEDS), an app reads its members (the member-readers manifest or
+// MEMBER_READERS), BREAKGLASS_REFUSED_GROUPS names it, or a site's rule in
+// ROUTE_ACCESS_FILE names it. Such a group is in use, so it is never offered
+// for deletion as unused.
+func (s *Server) referencedGroups() map[string]bool {
+	out := map[string]bool{}
+	for g := range s.feeds.feeds {
+		out[normalizeGroupName(g)] = true
+	}
+	for _, gs := range s.readerGroups() {
+		for _, g := range gs {
+			out[normalizeGroupName(g)] = true
+		}
+	}
+	for _, g := range s.cfg.BreakGlassRefusedGroups {
+		out[normalizeGroupName(g)] = true
+	}
+	for _, site := range s.readRouteAccess() {
+		for _, rule := range site.Rules {
+			if rule.Kind == "groups" {
+				for _, g := range rule.Values {
+					out[normalizeGroupName(g)] = true
+				}
+			}
+		}
+	}
+	return out
 }
 
 // feedViewFor describes a feed-filled group's source and last sync for the

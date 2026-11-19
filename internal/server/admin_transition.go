@@ -47,6 +47,7 @@ const (
 	msgOtherUsesHead  = "Also used by"
 	msgNoNameSet      = "No name set"
 	msgDomainGroupsBy = "Sites on older guards still admit people by email domain directly until they move to roles."
+	msgNotUsedTitle   = "This group holds no app role. No sign-in rule, feed, app, setting, other group or break-glass card names it, so the group may be left over from an app that has been removed."
 )
 
 // olderSiteView is one site on an older guard, as a row of the Apps pages:
@@ -226,10 +227,10 @@ func openPathsOf(reason string) (paths, why string, isPaths bool) {
 
 // groupsCopy is the Groups pages' wording for the move to roles.
 type groupsCopy struct {
-	NoName, OtherUses, DomainGroupsBy string
+	NoName, OtherUses, DomainGroupsBy, NotUsedTitle string
 }
 
-var groupsText = groupsCopy{NoName: msgNoNameSet, OtherUses: msgOtherUsesHead, DomainGroupsBy: msgDomainGroupsBy}
+var groupsText = groupsCopy{NoName: msgNoNameSet, OtherUses: msgOtherUsesHead, DomainGroupsBy: msgDomainGroupsBy, NotUsedTitle: msgNotUsedTitle}
 
 // groupUse is one use of a group: an app role it holds, an older guard that
 // names it, a group that includes it, or an app it is fed to.

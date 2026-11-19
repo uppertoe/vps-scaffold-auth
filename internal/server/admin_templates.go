@@ -134,8 +134,8 @@ type groupView struct {
 	Members []memberView
 	// Hosts whose routes require this group, from the route manifest.
 	Hosts []string
-	// Unused: the manifest was read and no route names this group, no
-	// break-glass card targets it, and no other group includes it.
+	// Unused: the manifest was read, and nothing outside the group's roles
+	// uses it (see referencedGroups). NotUsed adds that it holds no role.
 	Unused bool
 	// Includes are the groups whose members this group also admits;
 	// IncludedIn the groups that admit this group's members. IncludeOptions
@@ -238,6 +238,8 @@ type overviewView struct {
 	// Sites is the "who can reach what" table (ROUTE_ACCESS_FILE); nil
 	// leaves the table out.
 	Sites []siteAccessView
+	// ReachIntro is the table's opening sentence.
+	ReachIntro string
 	// Lines are the Apps, Invitations and Cards pages' attention lines.
 	Lines []attentionLine
 	// CardsTile labels the count of active cards.
