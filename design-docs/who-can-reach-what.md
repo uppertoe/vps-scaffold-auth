@@ -89,8 +89,11 @@ not reveal who holds a role.
 
 The allow-list predates app roles, and the department's server still sets it
 to the hospital's and the institute's domains. The domain groups for RCH and
-MCRI staff carry the same two domains. Once each of those groups holds a role,
-removing the allow-list would change no one's sign-in. On a server where some tools still use the older guards,
+MCRI staff carry the same two domains. The allow-list will be removed only once
+every tool has moved to app roles and each of those groups holds a role, and
+then no one's sign-in will change. Until then, a tool behind an older guard
+admits staff, so with the allow-list gone, a domain group holding a role in any
+tool would open such a tool to everyone at its domains. On a server where some tools still use the older guards,
 those guards admit a member only where they would admit a guest.
 
 The same test of who is staff decides which addresses a roster feed keeps,

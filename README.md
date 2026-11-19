@@ -364,9 +364,9 @@ The gateway refuses to start when neither `ALLOWED_EMAIL_DOMAINS` nor `ADMIN_EMA
 
 A server that uses app roles (`APP_ROLES_FILE`) can leave `ALLOWED_EMAIL_DOMAINS`
 empty. The gateway then counts as staff the administrators in `ADMIN_EMAILS` and
-every address at a domain of a domain group that holds at least one app role. A
-domain group that holds no role admits nobody, and the sign-in page does not name
-its domains. Staff sign in as before, feeds and the members endpoint keep them,
+every address at a domain of a domain group that holds at least one app role the
+manifest declares. A domain group that holds no role admits nobody, and the
+sign-in page does not name its domains. Staff sign in as before, feeds and the members endpoint keep them,
 and the lists closed to outsiders are kept in their sessions. Anyone else signs in
 as a member when they hold a role through a list, by name or by an invitation, or
 as a guest on an open host. While `ALLOWED_EMAIL_DOMAINS` is set, it alone decides
@@ -377,6 +377,14 @@ away, or removing a domain, signs those people out at their next request, or mak
 them members if they still hold a role. If the gateway has not been able to read
 its domain groups since it started, it answers sign-in and session checks with a
 503 and ends no session until it can.
+
+Remove the allow-list only once no site uses an older guard (`protected`,
+`protected_domains`, `protected_groups` or `protected_open`). An older guard admits
+staff by `any` or by domain, so while one remains, a domain group that holds a
+role in any app opens that site to everyone at its domains. The gateway logs a
+warning naming such sites at start, and again whenever they change. Once every
+site uses a role guard, everyone at a domain group's domains can sign in to the
+apps where the group holds a role, and to no other.
 At start, a gateway without the allow-list logs who can sign in.
 
 
