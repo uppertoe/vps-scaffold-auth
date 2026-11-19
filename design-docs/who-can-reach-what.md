@@ -72,7 +72,10 @@ administrator who gave the role.
 
 An address at one of the domains on the allow-list in the gateway's settings
 signs in as staff, and an address on the gateway's list of administrators
-signs in as an administrator. An address outside the allow-list signs in as a
+signs in as an administrator. When a server leaves the allow-list empty, the
+gateway counts as staff every address at one of a domain group's domains,
+whether or not the group holds a role. While the allow-list is set, the
+domain groups add no one to staff. An address that is not staff signs in as a
 member if it holds a role in some tool through a domain group, a list or a
 person assignment. An address with an open invitation signs in through the
 invitation's link and code. On a tool that admits the public, any other
@@ -83,14 +86,17 @@ admit people without naming them. An address that may not sign in is sent no
 code and sees the same page as any other address, so the sign-in page does
 not reveal who holds a role.
 
-The allow-list predates app roles and is still in use. Removing it, so that
-signing in depends on holding a role, is a later step. On a server where some
-tools still use the older guards, those guards admit a member only where they
-would admit a guest.
+The allow-list predates app roles, and the department's server still sets it
+to the hospital's and the institute's domains. The domain groups for RCH and
+MCRI staff carry the same two domains, so removing the allow-list would change
+no one's sign-in. On a server where some tools still use the older guards,
+those guards admit a member only where they would admit a guest.
 
-A person outside the allow-list is never counted as a member of a list that
-the server's settings close to outsiders, and the gateway drops such a list
-from that person's session. On the department's server these are the
+The same test of who is staff decides which addresses a roster feed keeps,
+which members a tool reading a list is given, and which members the Groups
+page marks as not staff. A person who is not staff is never counted as a
+member of a list that the server's settings close to outsiders, and the
+gateway drops such a list from that person's session. On the department's server these are the
 administrators lists of the airway database, the enquiries page, the project
 boards and the roster insights, and the prototypes list. An administrator can
 still give such a person the role by name.
