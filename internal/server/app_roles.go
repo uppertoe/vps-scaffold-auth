@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -246,7 +247,7 @@ func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *sessio
 		return
 	}
 	if id.Kind == session.KindGuest {
-		id.Groups = s.guestGroupsNow(id)
+		id.Groups = s.guestGroupsNow(r.Context(), id)
 	}
 	held := s.heldRoles(r, id, app)
 	if !roles.Admits(held, role) {
@@ -404,28 +405,111 @@ func (s *Server) mayHoldRoleSnapshot(ctx context.Context, id *session.Identity) 
 	return roles.MaySignIn(id.Email, sessionLists(id), st.assignments, s.roleEnv(st))
 }
 
-// loginRole is the sign-in decision: the allow-list and administrators as
-// before, and also an address that holds an app role, which signs in as a
-// member (and not as a guest, even on an open host). A member is decided by
-// its roles on a role guard, and is admitted by an older guard only where a
-// guest would be (see session.KindMember).
+// staffFromDomainGroups reports whether the domain groups' domains stand in
+// for the allow-list: the app-roles model is on and ALLOWED_EMAIL_DOMAINS is
+// empty. While the allow-list is set it alone decides, exactly as before.
+func (s *Server) staffFromDomainGroups() bool {
+	return s.rolesOn() && !s.policy.HasAllowList()
+}
+
+// knownRole is policy.Role with the domain groups in place of an empty
+// allow-list: an administrator, an address the allow-list admits, or (with
+// no allow-list) an address at one of a domain group's domains is known, and
+// signs in as staff. A domain group counts whether or not it holds a role, as
+// a domain on the allow-list did. Nothing else makes an address known: not a
+// list, a person assignment, an invitation, a card or an open-registration
+// host, so a member or a guest is never known by this test.
+func (s *Server) knownRole(ctx context.Context, email string) string {
+	role := s.policy.Role(email)
+	if role != authz.RoleDeny || !s.staffFromDomainGroups() {
+		return role
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	at := strings.LastIndexByte(email, '@')
+	if at <= 0 || at == len(email)-1 {
+		return authz.RoleDeny
+	}
+	domain := email[at+1:]
+	for _, ds := range s.roleData(ctx).domains {
+		for _, d := range ds {
+			if d == domain {
+				return authz.RoleUser
+			}
+		}
+	}
+	return authz.RoleDeny
+}
+
+// known reports whether an address is one of the department's: knownRole
+// admits it. It replaces the allow-list wherever the gateway asks whether an
+// address belongs to staff (feeds, the members endpoint, the lists closed to
+// outsiders, and the Groups page).
+func (s *Server) known(ctx context.Context, email string) bool {
+	return s.knownRole(ctx, email) != authz.RoleDeny
+}
+
+// staffDomains are the domains the sign-in page suggests on a direct visit:
+// the allow-list's, or, without one, the domain groups' (sorted).
+func (s *Server) staffDomains(ctx context.Context) []string {
+	if len(s.cfg.AllowedDomains) > 0 || !s.staffFromDomainGroups() {
+		return s.cfg.AllowedDomains
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, ds := range s.roleData(ctx).domains {
+		for _, d := range ds {
+			if !seen[d] {
+				seen[d] = true
+				out = append(out, d)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// logWhoSignsIn says at start who can sign in when ALLOWED_EMAIL_DOMAINS is
+// empty, so a server that has removed it can see whether staff can still
+// sign in. Config.Validate already refuses to start with neither
+// ALLOWED_EMAIL_DOMAINS nor ADMIN_EMAILS, so an administrator can always sign
+// in. It reads the domain groups once and then forgets them, so the first
+// decision reads them afresh.
+func (s *Server) logWhoSignsIn(ctx context.Context) {
+	if s.policy.HasAllowList() {
+		return
+	}
+	defer s.forgetRoles()
+	switch domains := s.staffDomains(ctx); {
+	case !s.rolesOn():
+		log.Printf("authz: ALLOWED_EMAIL_DOMAINS and APP_ROLES_FILE are not set: only the administrators in ADMIN_EMAILS can sign in")
+	case len(domains) == 0:
+		log.Printf("warning: authz: ALLOWED_EMAIL_DOMAINS is not set and no domain group has a domain: only the administrators in ADMIN_EMAILS and people who hold an app role through a list or a person assignment can sign in")
+	default:
+		log.Printf("authz: ALLOWED_EMAIL_DOMAINS is not set: addresses at the domain groups' domains (%s) sign in as staff, as do the administrators in ADMIN_EMAILS; others who hold an app role sign in as members", strings.Join(domains, ", "))
+	}
+}
+
+// loginRole is the sign-in decision: a known address (knownRole) as staff or
+// an administrator, and also an address that holds an app role, which signs
+// in as a member (and not as a guest, even on an open host). A member is
+// decided by its roles on a role guard, and is admitted by an older guard
+// only where a guest would be (see session.KindMember).
 func (s *Server) loginRole(ctx context.Context, email string, openHost bool) string {
-	role := s.policy.LoginRole(email, openHost)
-	if role == authz.RoleUser || role == authz.RoleAdmin {
+	if role := s.knownRole(ctx, email); role != authz.RoleDeny {
 		return role
 	}
 	if s.mayHoldRoleNow(ctx, email, false) {
 		return authz.RoleMember
 	}
-	return role
+	return s.policy.LoginRole(email, openHost)
 }
 
-// currentRole is policy.Role made role-aware: an address the allow-list
-// refuses but that holds an app role through a domain group, a list or a
-// current person assignment, or has an open invitation, is a member. With the
-// app-roles model off it is exactly policy.Role.
+// currentRole is knownRole made role-aware: an address that is not known but
+// holds an app role through a domain group, a list or a current person
+// assignment, or has an open invitation, is a member. With the app-roles
+// model off it is exactly policy.Role.
 func (s *Server) currentRole(ctx context.Context, email string) string {
-	role := s.policy.Role(email)
+	role := s.knownRole(ctx, email)
 	if role == authz.RoleDeny && s.mayHoldRoleNow(ctx, email, true) {
 		return authz.RoleMember
 	}

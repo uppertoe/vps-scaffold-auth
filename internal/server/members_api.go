@@ -186,12 +186,13 @@ func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 		membersError(w, http.StatusForbidden, notPermitted)
 		return
 	}
-	// Only people the allow-list admits: they are the ones the gateway
-	// signs in as members. A membership kept for an address the allow-list
-	// no longer admits is not reported.
+	// Only known people (knownRole: the allow-list, or without one a domain
+	// group's domains): they are the ones the gateway signs in as staff. A
+	// membership kept for an address that is no longer known is not
+	// reported.
 	members := make([]string, 0, len(all))
 	for _, e := range all {
-		if s.policy.Allowed(e) {
+		if s.known(r.Context(), e) {
 			members = append(members, e)
 		}
 	}

@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/uppertoe/vps-scaffold-auth/internal/session"
+	"context"
 	"log"
 	"os"
 	"sort"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
+	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 )
 
 // Some groups are not doors into an app but roles inside it: an app reads
@@ -145,12 +146,12 @@ func (s *Server) routeFilesReadable() bool {
 	return true
 }
 
-// guestGroupsNow returns a guest session's groups without any group that has
-// become an application role since the session's groups were worked out, so
-// a routes change reaches a guest at their next request.
-func (s *Server) guestGroupsNow(id *session.Identity) string {
+// guestGroupsNow returns a guest or member session's groups without any
+// group that has become an application role since the session's groups were
+// worked out, so a routes change reaches the session at its next request.
+func (s *Server) guestGroupsNow(ctx context.Context, id *session.Identity) string {
 	groups := strings.Split(id.Groups, ",")
-	kept := s.withoutAppRolesForOutsider(id.Email, groups)
+	kept := s.withoutAppRolesForOutsider(ctx, id.Email, authz.RoleGuest, groups)
 	if len(kept) == len(groups) {
 		return id.Groups
 	}
@@ -158,14 +159,19 @@ func (s *Server) guestGroupsNow(id *session.Identity) string {
 }
 
 // withoutAppRolesForOutsider removes from an address's groups every
-// application role, when the allow-list does not admit the address. A
-// stranger is refused as a direct member of such a group, but could still
-// reach one through an include, or keep one after the group became a role;
-// filtering when the groups are worked out closes every such path at once.
-// A group filled from a feed is kept: the feed lists the address directly,
-// and nothing can be included into a feed group.
-func (s *Server) withoutAppRolesForOutsider(email string, groups []string) []string {
-	if len(groups) == 0 || s.policy.Allowed(email) {
+// application role, when the session is built on the guest tier (a guest's or
+// a member's) or the address is not staff (see knownRole: the allow-list, or
+// without one a domain group, does not admit it). Being on a list, holding a
+// role or signing in on an open host never makes an address staff, and a
+// guest session stays a stranger's even if its domain has since become a
+// staff domain, until its person signs in again. A stranger is refused as a
+// direct member of such a group, but could still reach one through an
+// include, or keep one after the group became a role; filtering when the
+// groups are worked out closes every such path at once. A group filled from
+// a feed is kept: the feed lists only staff, and nothing can be included
+// into a feed group.
+func (s *Server) withoutAppRolesForOutsider(ctx context.Context, email, tier string, groups []string) []string {
+	if len(groups) == 0 || (tier != authz.RoleGuest && s.known(ctx, email)) {
 		return groups
 	}
 	roles := s.appRoleGroups()

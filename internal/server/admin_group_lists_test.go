@@ -39,7 +39,7 @@ func TestBulkAddShowsConfirmationThenAddsTicked(t *testing.T) {
 	if !strings.Contains(body, `value="stranger@other.org">`) {
 		t.Error("an address not on the allow-list should start unticked")
 	}
-	for _, want := range []string{"To be added (2)", `value="jane@example.com"`, `value="stranger@other.org"`, "not on the allow-list", "Already members (1)", "Not email addresses (1)", "bad@"} {
+	for _, want := range []string{"To be added (2)", `value="jane@example.com"`, `value="stranger@other.org"`, "not staff", "Already members (1)", "Not email addresses (1)", "bad@"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("confirmation page missing %q", want)
 		}

@@ -187,7 +187,7 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 	// placeholder), so even a direct visit tells the user which domain to use.
 	if page == "login" {
 		data.LoginNotice = s.cfg.LoginNotice
-		s.applyLoginBranding(&data)
+		s.applyLoginBranding(context.Background(), &data)
 		// Every rendering of the sign-in page carries a fresh passkey challenge,
 		// so the phone can offer a saved passkey as soon as the page opens.
 		if s.cfg.PasskeysEnabled {

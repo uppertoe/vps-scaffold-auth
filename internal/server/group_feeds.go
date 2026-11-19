@@ -373,7 +373,7 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 	autoApplied := false
 	skippedNote := ""
 	if skipped > 0 {
-		skippedNote = fmt.Sprintf(" %d entries were skipped because they were not plain email addresses or not on the allow-list.", skipped)
+		skippedNote = fmt.Sprintf(" %d entries were skipped because they were not plain email addresses or the gateway does not count them as staff.", skipped)
 	}
 
 	if accept && hash != prev.PendingHash {
@@ -632,10 +632,11 @@ func (s *Server) fetchFeed(ctx context.Context, feed config.GroupFeed) ([]string
 	skipped := 0
 	for _, raw := range list {
 		e := normalizeEmail(raw)
-		// Only plain addresses the allow-list admits: a feed never brings in
+		// Only plain addresses of known people (knownRole: the allow-list,
+		// or without one a domain group's domains): a feed never brings in
 		// an outside address, which would otherwise reach group-gated apps
 		// through a guest session.
-		if !plainAddress(e) || !s.policy.Allowed(e) {
+		if !plainAddress(e) || !s.known(ctx, e) {
 			skipped++
 			continue
 		}

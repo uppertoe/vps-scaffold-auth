@@ -54,6 +54,9 @@ func NewPolicy(allowedDomains, adminEmails []string) *Policy {
 	}
 	for _, d := range allowedDomains {
 		d = strings.ToLower(strings.TrimSpace(d))
+		if d == "" {
+			continue
+		}
 		if d == Wildcard {
 			p.openReg = true
 			continue // not a literal domain; never store "*" in the exact set
@@ -69,6 +72,11 @@ func NewPolicy(allowedDomains, adminEmails []string) *Policy {
 // OpenRegistration reports whether any verified email is accepted as a user
 // (the "*" wildcard). Callers use it to suppress domain-specific login hints.
 func (p *Policy) OpenRegistration() bool { return p.openReg }
+
+// HasAllowList reports whether ALLOWED_EMAIL_DOMAINS names any domain, or the
+// "*" wildcard. Without one, the gateway takes its staff domains from the
+// domain groups instead (see the server's knownRole).
+func (p *Policy) HasAllowList() bool { return p.openReg || len(p.allowedDomains) > 0 }
 
 // Role returns the role for an email address: RoleAdmin, RoleUser, or RoleDeny
 // (empty string) if the email is not permitted.

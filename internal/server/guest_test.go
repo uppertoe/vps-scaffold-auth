@@ -469,7 +469,7 @@ func TestGroupPageMarksMemberNotOnAllowList(t *testing.T) {
 	loginAs(t, c, sender, "admin@example.com", nil)
 	body := c.get("/admin/groups/reviewers", nil).Body.String()
 
-	const mark = "not on the allow-list"
+	const mark = "not staff"
 	if strings.Count(body, mark) != 1 {
 		t.Fatalf("want exactly one %q mark, got %d in:\n%s", mark, strings.Count(body, mark), body)
 	}

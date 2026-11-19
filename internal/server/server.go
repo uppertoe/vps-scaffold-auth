@@ -132,8 +132,9 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		log.Printf("authz: OPEN REGISTRATION enabled (ALLOWED_EMAIL_DOMAINS contains %q): any email verified by one-time code is admitted as a user. Private apps behind this auth must gate by group or domain, not a bare `import protected`. On a shared server prefer OPEN_REGISTRATION_HOSTS, which opens one app only.", authz.Wildcard)
 	}
 	if len(cfg.OpenRegistrationHosts) > 0 {
-		log.Printf("authz: guest sign-in open for %s: an OTP-verified address outside the allow-list becomes a guest, admitted only by guards that set guests=allow (protected_open).", strings.Join(cfg.OpenRegistrationHosts, ", "))
+		log.Printf("authz: guest sign-in open for %s: an OTP-verified address that is not known (the allow-list, or without one a domain group) and holds no app role becomes a guest, admitted only by guards that set guests=allow (protected_open).", strings.Join(cfg.OpenRegistrationHosts, ", "))
 	}
+	s.logWhoSignsIn(context.Background())
 	s.logDomainGroupReads(context.Background())
 	s.clearStaleReaderApprovals(context.Background())
 	s.handler = s.routes()

@@ -21,7 +21,7 @@ const maxBulkAddresses = 1000
 type bulkPlan struct {
 	Group   string
 	Label   string       // the group's label, or its name when it has none
-	Add     []memberView // valid and not yet members; Permitted false = not on the allow-list
+	Add     []memberView // valid and not yet members; Permitted false = not known (knownRole)
 	Already []string     // already members
 	Invalid []string     // not an email address
 	TooMany bool         // the paste was cut at maxBulkAddresses
@@ -102,10 +102,10 @@ func (s *Server) planBulkAdd(r *http.Request, group, raw string) (*bulkPlan, err
 			plan.Invalid = append(plan.Invalid, tok)
 		case existing[e]:
 			plan.Already = append(plan.Already, e)
-		case plan.RefusedReason != "" && !s.policy.Allowed(e):
+		case plan.RefusedReason != "" && !s.known(r.Context(), e):
 			plan.Refused = append(plan.Refused, e)
 		default:
-			ok := s.policy.Allowed(e)
+			ok := s.known(r.Context(), e)
 			plan.Add = append(plan.Add, memberView{Email: e, Permitted: ok, Guest: !ok})
 		}
 	}
@@ -137,7 +137,7 @@ func (s *Server) handleAdminConfirmMembers(w http.ResponseWriter, r *http.Reques
 		if !plainAddress(e) || len(emails) >= maxBulkAddresses {
 			continue
 		}
-		if refused && !s.policy.Allowed(e) {
+		if refused && !s.known(r.Context(), e) {
 			dropped = true
 			continue
 		}
@@ -202,7 +202,7 @@ func (s *Server) handleAdminAddInclude(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
-	// An include must not bring an address the allow-list does not admit
+	// An include must not bring an address that is not known (knownRole)
 	// into a group an application reads as one of its own roles, directly or
 	// through groups that include this one. Sessions drop such groups for
 	// those addresses anyway (withoutAppRolesForOutsider); refusing the
@@ -226,7 +226,7 @@ func (s *Server) handleAdminAddInclude(w http.ResponseWriter, r *http.Request) {
 }
 
 // appRoleOutsiders lists, for each hand-managed application-role group, the
-// addresses it admits through includes that the allow-list does not admit.
+// addresses it admits through includes that are not known (knownRole).
 func (s *Server) appRoleOutsiders(r *http.Request) (map[string]map[string]bool, error) {
 	out := map[string]map[string]bool{}
 	for g := range s.appRoleGroups() {
@@ -241,7 +241,7 @@ func (s *Server) appRoleOutsiders(r *http.Request) (map[string]map[string]bool, 
 			continue
 		}
 		for _, m := range members {
-			if !s.policy.Allowed(m) {
+			if !s.known(r.Context(), m) {
 				if out[g] == nil {
 					out[g] = map[string]bool{}
 				}

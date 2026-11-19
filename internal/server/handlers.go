@@ -98,7 +98,7 @@ func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups st
 		return "", false
 	}
 	tier := s.tierRole(id, role)
-	return authz.BuildGroups(tier, s.withoutAdminPairedGroups(id.Email, tier, s.withoutAppRolesForOutsider(id.Email, dbGroups))), true
+	return authz.BuildGroups(tier, s.withoutAdminPairedGroups(id.Email, tier, s.withoutAppRolesForOutsider(r.Context(), id.Email, tier, dbGroups))), true
 }
 
 // handleVerify is the forward_auth target. Caddy calls it on every request to a
@@ -162,7 +162,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		// A member (signed in by an app role) is no more than a guest here:
 		// it is admitted only where guests are, or by a group it is in.
 		if id.Kind == session.KindGuest || id.Kind == session.KindMember {
-			id.Groups = s.guestGroupsNow(id)
+			id.Groups = s.guestGroupsNow(r.Context(), id)
 		}
 		allowed := func(id *session.Identity) bool {
 			return authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass,
@@ -416,8 +416,9 @@ func applyRoleHint(d *pageData, rqr, rhd string) {
 }
 
 // applyLoginBranding fills the domain-derived UX fields on the login page from
-// the configured ALLOWED_EMAIL_DOMAINS, so a DIRECT visit (no route rqd) still
-// tells the user which domain to use. It runs after applyAccessHint, so a
+// the staff domains (ALLOWED_EMAIL_DOMAINS, or without it the domain groups'
+// domains; see staffDomains), so a DIRECT visit (no route rqd) still tells
+// the user which domain to use. It runs after applyAccessHint, so a
 // route-supplied requirement (HintDomains/RequireDomains) always wins; this only
 // fills the gaps:
 //   - HintDomains: the "This page is for <domains> email addresses" line, from
@@ -425,7 +426,7 @@ func applyRoleHint(d *pageData, rqr, rhd string) {
 //   - EmailPlaceholder: you@<first effective domain> — the route requirement if
 //     present, else the first allow-list domain — so the example matches who may
 //     sign in. Left empty (→ generic placeholder) when no domain is configured.
-func (s *Server) applyLoginBranding(d *pageData) {
+func (s *Server) applyLoginBranding(ctx context.Context, d *pageData) {
 	// A group-gated door declares no domain on purpose (it's the entrance for
 	// people who can't match one), so never presume the allow-list here.
 	if d.RequireGroups != "" {
@@ -452,13 +453,14 @@ func (s *Server) applyLoginBranding(d *pageData) {
 		}
 		return
 	}
-	if d.HintDomains == "" && len(s.cfg.AllowedDomains) > 0 {
-		d.HintDomains = formatDomains(strings.Join(s.cfg.AllowedDomains, ","))
+	staff := s.staffDomains(ctx)
+	if d.HintDomains == "" && len(staff) > 0 {
+		d.HintDomains = formatDomains(strings.Join(staff, ","))
 	}
 	if d.EmailPlaceholder == "" {
 		dom := firstDomain(d.RequireDomains)
-		if dom == "" && len(s.cfg.AllowedDomains) > 0 {
-			dom = s.cfg.AllowedDomains[0]
+		if dom == "" && len(staff) > 0 {
+			dom = staff[0]
 		}
 		if dom != "" {
 			d.EmailPlaceholder = "you@" + dom
@@ -1380,10 +1382,11 @@ func (s *Server) tierRole(id *session.Identity, role string) string {
 // renews the session at once, so the admin group leaves or reaches the apps'
 // headers at the next request rather than at the next scheduled renewal.
 //
-// A person's sign-in whose kind no longer matches the allow-list is stale
-// too: a normal session whose address has left the allow-list but holds an
-// app role becomes a member at once, and a member whose address the
-// allow-list now admits becomes an ordinary session at once.
+// A person's sign-in whose kind no longer matches knownRole is stale too: a
+// normal session whose address is no longer known (it has left the
+// allow-list, or without one every domain group) but holds an app role
+// becomes a member at once, and a member whose address is now known becomes
+// an ordinary session at once.
 func (s *Server) tierStale(id *session.Identity) bool {
 	switch id.Kind {
 	case "":
@@ -1393,17 +1396,19 @@ func (s *Server) tierStale(id *session.Identity) bool {
 		}
 		return authz.HasGroup(id.Groups, authz.RoleAdmin) != (s.tierRole(id, role) == authz.RoleAdmin)
 	case session.KindMember:
-		return s.policy.Role(id.Email) != authz.RoleDeny
+		return s.known(context.Background(), id.Email)
 	}
 	return false
 }
 
 // policyWithdrawn reports whether the current policy refuses a normal or
-// guest session's person: their domain has been taken off the allow-list (and
-// they are not listed as an administrator), or no host admits guests any
-// longer. The policy is read from the configuration at start, so this is a
-// lookup in memory. Break-glass sessions are not policy logins and end at
-// their own short lifetime or when their card is revoked.
+// guest session's person: their domain has been taken off the allow-list
+// (or, without one, off every domain group) and they hold no app role and are
+// not listed as an administrator, or no host admits guests any longer. The
+// allow-list is read from the configuration at start, and the domain groups
+// and roles from the cached role data, so this is a lookup in memory.
+// Break-glass sessions are not policy logins and end at their own short
+// lifetime or when their card is revoked.
 func (s *Server) policyWithdrawn(id *session.Identity) bool {
 	if !personSession(id) && id.Kind != session.KindGuest {
 		return false
@@ -1480,12 +1485,13 @@ func (s *Server) renewalRole(id *session.Identity) string {
 		}
 		return authz.RoleDeny
 	}
-	// A member whom the allow-list now admits renews as an ordinary user or
-	// administrator (renewSessionWith changes its kind).
-	role := s.policy.Role(id.Email)
+	// A member who is now known (the allow-list, or without one a domain
+	// group, admits the address) renews as an ordinary user or administrator
+	// (renewSessionWith changes its kind).
+	role := s.knownRole(context.Background(), id.Email)
 	if role == authz.RoleDeny && personSession(id) && s.mayHoldRoleSnapshot(context.Background(), id) {
-		// Not on the allow-list, but holds an app role through a domain group,
-		// a list or a current person assignment (app_roles.go): a member.
+		// Not known, but holds an app role through a domain group, a list or
+		// a current person assignment (app_roles.go): a member.
 		return authz.RoleMember
 	}
 	return role
@@ -1518,7 +1524,7 @@ func (s *Server) computeGroups(ctx context.Context, emailAddr, role string) stri
 	if err != nil {
 		log.Printf("groups for %s: %v", emailAddr, err)
 	}
-	return authz.BuildGroups(role, s.withoutAdminPairedGroups(emailAddr, role, s.withoutAppRolesForOutsider(emailAddr, dbGroups)))
+	return authz.BuildGroups(role, s.withoutAdminPairedGroups(emailAddr, role, s.withoutAppRolesForOutsider(ctx, emailAddr, role, dbGroups)))
 }
 
 // getTOTPSecret reads and decrypts the stored TOTP secret. A legacy plaintext
