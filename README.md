@@ -115,8 +115,8 @@ them.
 `import protected` lets in **any** signed-in user. To restrict an app to
 particular people, the access rule lives in **that app's own `.caddy` snippet**
 (the scaffold's per-app folder), and the gateway enforces it. Authentication
-stays global (`ALLOWED_EMAIL_DOMAINS`, or without it the domain groups, is the
-superset of who can sign in *at all*); each app then narrows to its own subset (the upstream is the last arg):
+stays global (`ALLOWED_EMAIL_DOMAINS`, or without it the domain groups that
+hold a role, is the superset of who can sign in *at all*); each app then narrows to its own subset (the upstream is the last arg):
 
 > **Opening one app to the public.** An app that strangers must be able to sign
 > in to (an application form, say) does not need the allow-list widened. List its
@@ -343,7 +343,7 @@ for the annotated list. Key ones:
 | Variable | Purpose |
 |---|---|
 | `AUTH_PUBLIC_URL` | Base URL of the `auth.<domain>` site |
-| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose addresses sign in as staff; `*` = open registration on every host (discouraged on a shared server). Optional on a server with app roles (`APP_ROLES_FILE`): without it, the domain groups' domains decide who is staff; see [Without the allow-list](#without-the-allow-list) |
+| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose addresses sign in as staff; `*` = open registration on every host (discouraged on a shared server). Optional on a server with app roles (`APP_ROLES_FILE`): without it, the domains of the domain groups that hold an app role decide who is staff; see [Without the allow-list](#without-the-allow-list) |
 | `OPEN_REGISTRATION_HOSTS` | CSV of hosts (`DOMAIN` or a subdomain) where other addresses may sign in as guests; see [Open registration for one app](#open-registration-for-one-app) |
 | `ADMIN_EMAILS` | CSV of explicit admin addresses |
 | `SESSION_SECRET` | 32+ random bytes (`openssl rand -hex 32`) |
@@ -364,15 +364,19 @@ The gateway refuses to start when neither `ALLOWED_EMAIL_DOMAINS` nor `ADMIN_EMA
 
 A server that uses app roles (`APP_ROLES_FILE`) can leave `ALLOWED_EMAIL_DOMAINS`
 empty. The gateway then counts as staff the administrators in `ADMIN_EMAILS` and
-every address at a domain group's domains, whether or not the group holds a role.
-Staff sign in as before, feeds and the members endpoint keep them, and the lists
-closed to outsiders are kept in their sessions. Anyone else signs in as a member
-when they hold a role through a list, by name or by an invitation, or as a guest
-on an open host. While `ALLOWED_EMAIL_DOMAINS` is set, it alone decides who is
-staff, and a domain group adds no one. Without it, adding a domain to a domain
-group admits everyone at that domain to every plain `import protected` app, as
-adding it to the allow-list did. Removing the domain signs those people out at
-their next request, or makes them members if they still hold a role.
+every address at a domain of a domain group that holds at least one app role. A
+domain group that holds no role admits nobody, and the sign-in page does not name
+its domains. Staff sign in as before, feeds and the members endpoint keep them,
+and the lists closed to outsiders are kept in their sessions. Anyone else signs in
+as a member when they hold a role through a list, by name or by an invitation, or
+as a guest on an open host. While `ALLOWED_EMAIL_DOMAINS` is set, it alone decides
+who is staff, and a domain group adds no one. Without it, giving a domain group
+its first role admits everyone at its domains to every plain `import protected`
+app, as adding the domains to the allow-list did. Taking the group's last role
+away, or removing a domain, signs those people out at their next request, or makes
+them members if they still hold a role. If the gateway has not been able to read
+its domain groups since it started, it answers sign-in and session checks with a
+503 and ends no session until it can.
 At start, a gateway without the allow-list logs who can sign in.
 
 

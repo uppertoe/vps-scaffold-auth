@@ -94,8 +94,8 @@ the department's server. A change to the rules takes effect at each person's
 next request. A person who may no longer sign in is signed out, a person
 removed from the admin listing loses the admin pages, and a change to a
 person's roles or lists applies straight away. A person whose domain leaves
-the allow-list, or leaves every domain group on a server without the
-allow-list, continues as a member if they still hold a role.
+the allow-list, or on a server without the allow-list leaves every domain
+group that holds a role, continues as a member if they still hold a role.
 
 However often it renews, no session lasts longer than a fixed time from the
 moment the person signed in: seven days by default, or the "Keep me signed in"

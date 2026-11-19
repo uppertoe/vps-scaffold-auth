@@ -73,13 +73,14 @@ administrator who gave the role.
 An address at one of the domains on the allow-list in the gateway's settings
 signs in as staff, and an address on the gateway's list of administrators
 signs in as an administrator. When a server leaves the allow-list empty, the
-gateway counts as staff every address at one of a domain group's domains,
-whether or not the group holds a role. While the allow-list is set, the
-domain groups add no one to staff. An address that is not staff signs in as a
-member if it holds a role in some tool through a domain group, a list or a
-person assignment. An address with an open invitation signs in through the
-invitation's link and code. On a tool that admits the public, any other
-verified address signs in as a guest, as described below.
+gateway counts as staff every address at a domain of a domain group that holds
+a role in at least one tool. A domain group that holds no role admits nobody.
+While the allow-list is set, the domain groups add no one to staff. An address
+that is not staff signs in as a member if it holds a role in some tool through
+a domain group, a list or a person assignment. An address with an open
+invitation signs in through the invitation's link and code. On a tool that
+admits the public, any other verified address signs in as a guest, as
+described below.
 
 The hospital network and guests give nobody a reason to sign in, because they
 admit people without naming them. An address that may not sign in is sent no
@@ -88,8 +89,8 @@ not reveal who holds a role.
 
 The allow-list predates app roles, and the department's server still sets it
 to the hospital's and the institute's domains. The domain groups for RCH and
-MCRI staff carry the same two domains, so removing the allow-list would change
-no one's sign-in. On a server where some tools still use the older guards,
+MCRI staff carry the same two domains. Once each of those groups holds a role,
+removing the allow-list would change no one's sign-in. On a server where some tools still use the older guards,
 those guards admit a member only where they would admit a guest.
 
 The same test of who is staff decides which addresses a roster feed keeps,
