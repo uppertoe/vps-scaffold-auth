@@ -1159,6 +1159,7 @@ func (s *Server) renderStepUp(w http.ResponseWriter, r *http.Request, id *sessio
 			}
 		}
 	}
+	data.Message = stepUpSub(data.Passkey != nil)
 	s.render(w, status, "totp", data)
 }
 
@@ -1176,6 +1177,24 @@ func (s *Server) hasAdminPasskey(r *http.Request, email string) bool {
 		}
 	}
 	return false
+}
+
+// shouldOfferAdminPasskey decides whether the admin door offers a passkey
+// after a right authenticator code. A phone is offered one while the account
+// holds no admin passkey, as before. A computer is offered one while it holds
+// no admin passkey of the account's (adminPasskeysHere), unless it is on a
+// listed network, where no computer may add a passkey. The offer on a
+// computer carries the warning to add one only on a computer nobody else
+// signs in to, and its ceremony is the computer's: a platform authenticator,
+// held by the computer, refused otherwise (handlePasskeyRegister).
+func (s *Server) shouldOfferAdminPasskey(r *http.Request, email string) bool {
+	if !s.cfg.PasskeysEnabled {
+		return false
+	}
+	if isPhone(r) {
+		return !s.hasAdminPasskey(r, email)
+	}
+	return !s.computerOnNetwork(r) && s.adminPasskeysHere(r, email) == ""
 }
 
 // handleTOTP takes the authenticator code at the admin door and gives the
@@ -1216,14 +1235,15 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dest := s.adminDest(rd)
-	// On a phone with no passkey that can open the admin pages, offer one now,
-	// while the authenticator code is fresh, so that the code is not needed
-	// again on this phone. A passkey that started this session is never
-	// upgraded in place: the cookie naming it could have been planted by a
-	// sibling host, so the passkey offered is a new one, made on the phone in
-	// front of the person who has just entered the code. Made for the same
-	// account, it replaces the phone's older passkey there.
-	if s.cfg.PasskeysEnabled && isPhone(r) && !s.hasAdminPasskey(r, id.Email) && s.offerAdminPasskey(w, r, id.Email, dest) {
+	// Where no passkey that can open the admin pages is at hand, offer one
+	// now, while the authenticator code is fresh, so that the code is not
+	// needed again on this device (shouldOfferAdminPasskey). A passkey that
+	// started this session is never upgraded in place: the cookie naming it
+	// could have been planted by a sibling host, so the passkey offered is a
+	// new one, made on the device in front of the person who has just entered
+	// the code. Made for the same account, it replaces a phone's older
+	// passkey there.
+	if s.shouldOfferAdminPasskey(r, id.Email) && s.offerAdminPasskey(w, r, id.Email, dest) {
 		return
 	}
 	http.Redirect(w, r, dest, http.StatusFound)
@@ -1364,6 +1384,22 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 // tier inside it lasts this long from the last authenticator code or admin
 // passkey, then the admin door asks again.
 const adminStepMaxAge = 12 * time.Hour
+
+// The line under the heading of the admin second step, with a passkey offered
+// and without. %s is adminStepMaxAge in words ("12 hours"). Approved by the
+// owner on 23 November 2026.
+const (
+	msgStepUpSubPasskey = "The admin pages need a second step, which lasts %s. Use your passkey, or enter the 6-digit code from your authenticator app."
+	msgStepUpSub        = "The admin pages need a second step, which lasts %s. Enter the 6-digit code from your authenticator app."
+)
+
+// stepUpSub is the line under the heading of the admin second step.
+func stepUpSub(passkey bool) string {
+	if passkey {
+		return fmt.Sprintf(msgStepUpSubPasskey, renewWithin(adminStepMaxAge))
+	}
+	return fmt.Sprintf(msgStepUpSub, renewWithin(adminStepMaxAge))
+}
 
 // adminStepFresh reports whether a session has passed the admin second step
 // recently enough to hold the admin tier. With TOTP off there is no second
