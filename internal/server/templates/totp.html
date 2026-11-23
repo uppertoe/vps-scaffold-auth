@@ -1,7 +1,7 @@
 {{define "title"}}Open the admin pages{{end}}
 {{define "content"}}
 <h1>Open the admin pages</h1>
-<p class="sub">{{if .Passkey}}To open the admin pages, use your passkey or enter the 6-digit code from your authenticator app.{{else}}To open the admin pages, enter the 6-digit code from your authenticator app.{{end}}</p>
+<p class="sub">{{.Message}}</p>
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 {{with .Passkey}}
 <div class="err" id="passkey-error" hidden>Your passkey could not be used. Please try again, or enter the code from your authenticator app.</div>

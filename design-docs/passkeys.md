@@ -2,7 +2,7 @@
 title: Passkeys
 summary: How a person signs in on their phone, or on their own computer, with a passkey instead of an emailed code, and the rules that keep a passkey as safe as the sign-in it replaces.
 weight: 4
-lastmod: 2026-11-19
+lastmod: 2026-11-23
 ---
 
 ## What a passkey changes
@@ -14,7 +14,7 @@ matching public key. A passkey cannot be guessed, phished or replayed, and the
 face, fingerprint and PIN never leave the phone.
 
 The department's computers cannot hold passkeys, so the gateway never offers
-one on a computer unasked. A computer continues to use the emailed code, and
+one on a computer after an emailed code. A computer continues to use the emailed code, and
 the sign-in page shows nothing new there.
 
 A person may add a passkey on their own computer, held by the computer itself
@@ -80,7 +80,10 @@ offers that passkey first on a phone.
 
 An administrator can add an admin passkey only after an authenticator code.
 The offer comes at the admin door, straight after the code, rather than after
-signing in. An administrator whose second step is not recent enters an
+signing in, on a phone and on the administrator's own computer alike. On a
+computer, the offer carries the same warning as the passkeys page, and the
+gateway makes it only when the computer holds no admin passkey of the
+administrator's and is not on the hospital's network. An administrator whose second step is not recent enters an
 authenticator code on the passkeys page first, and the phone makes the
 passkey only once the code has been accepted.
 
@@ -154,7 +157,8 @@ could already register a key of its own, as the paragraph above describes.
 
 A passkey on a computer is only as safe as the computer. Anyone who can unlock
 the computer can sign in as its owner, which is why the gateway adds one only
-when the person asks, after warning them.
+when the person asks, or accepts the offer at the admin door, after warning
+them.
 
 A passkey is only as safe as the phone and the account it syncs to. Anyone who
 can unlock the person's phone, or who controls the Apple or Google account

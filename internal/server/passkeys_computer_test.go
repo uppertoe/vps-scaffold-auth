@@ -61,7 +61,7 @@ func signInFromComputer(t *testing.T, c *client, a *passkeytest.Authenticator) (
 	}, computer)
 }
 
-// A computer is never offered a passkey unasked: not after an email code, and
+// A computer is never offered a passkey after an email code, and
 // on the passkeys page only once the person chooses to add one, behind the
 // warning. A phone's passkeys page is as it was.
 func TestComputerPasskeyIsOfferedOnlyOnRequest(t *testing.T) {

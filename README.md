@@ -410,7 +410,10 @@ attestation, and need no new dependency: the verifier is `internal/passkey`.
 - Adding a passkey needs an emailed-code sign-in within the last 15 minutes
   (a passkey sign-in never counts); an administrator also needs a recent
   second step, or an authenticator code entered first. The admin door offers
-  a passkey on a phone straight after the code.
+  a passkey straight after the code: on a phone while the account holds no
+  admin passkey, and on a computer while that computer holds none of the
+  account's (`adminPasskeysHere`) and its address is not in `NETWORK_RANGES`,
+  behind the same warning and under the same computer rules.
 - An administrator's passkey, added that way with `TOTP_ENABLED=true`, is the
   second step at sign-in and at the admin door. One added before its owner
   became an administrator, or while TOTP was off, is not; after the code at
