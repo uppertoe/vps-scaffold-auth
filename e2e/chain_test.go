@@ -582,8 +582,13 @@ func TestChain(t *testing.T) {
 		}
 		right := hidden(step.body)
 		right.Set("code", otpCode)
-		if r := boss.submit("/totp", right); r.status != http.StatusFound || r.location() != "https://admin."+domain+"/" {
-			t.Fatalf("the right authenticator code: %d to %q: %.200s", r.status, r.location(), r.body)
+		// On a computer off the listed networks, the door offers an admin
+		// passkey held by the computer; "Not now" leads to the admin site.
+		offer := boss.submit("/totp", right)
+		if offer.status != http.StatusOK || !strings.Contains(offer.body, "Sign in faster on this computer") ||
+			!strings.Contains(offer.body, `data-device="computer"`) ||
+			!strings.Contains(offer.body, `href="https://admin.`+domain+`/" id="passkey-skip"`) {
+			t.Fatalf("the right authenticator code: %d, want the computer's admin passkey offer: %.300s", offer.status, offer.body)
 		}
 		h := appSees(t, boss.get("https://admin."+domain+"/", nil))
 		if h.Get("Remote-Groups") != "admin" {

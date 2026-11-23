@@ -62,9 +62,19 @@ const (
 	msgPkNoticeOther   = "a computer"
 )
 
+// The offer of an admin passkey on a computer, straight after the
+// authenticator code at the admin door. The page also shows the approved
+// warning (msgPkComputerWarning) and button (msgPkComputerAdd). Drafted on
+// 23 November 2026 for approval.
+const (
+	msgPkComputerOfferHeading = "Sign in faster on this computer"
+	msgPkComputerAdminOffer   = "Next time, you can sign in on this computer and open the admin pages with a passkey, without an email code or an authenticator code."
+)
+
 // passkeyText carries the strings above into the templates.
 type passkeyText struct {
 	Intro, Add, Warning, Unavailable, Exists, Lost, Added, NextTime string
+	OfferHeading, AdminOffer                                        string
 }
 
 var pkText = &passkeyText{
@@ -76,4 +86,7 @@ var pkText = &passkeyText{
 	Lost:        msgPkComputerLost,
 	Added:       msgPkComputerAdded,
 	NextTime:    msgPkComputerNextTime,
+
+	OfferHeading: msgPkComputerOfferHeading,
+	AdminOffer:   msgPkComputerAdminOffer,
 }

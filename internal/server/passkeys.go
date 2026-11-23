@@ -60,9 +60,13 @@ import (
 //   - The department's computers cannot hold a passkey, and their browsers
 //     would offer to use a phone over Bluetooth or a QR code instead, which
 //     those computers block. A computer is therefore never offered a passkey
-//     unasked: there is no offer after an email code, and the passkeys page
-//     adds one only once the person has chosen to, after a warning to do so
-//     only on a computer nobody else signs in to.
+//     after an email code, and the passkeys page adds one only once the
+//     person has chosen to, after a warning to do so only on a computer
+//     nobody else signs in to. The one offer a computer is made unasked is
+//     at the admin door, straight after a right authenticator code, to an
+//     administrator whose computer holds no admin passkey of theirs and is
+//     not on a listed network (shouldOfferAdminPasskey); it carries the same
+//     warning, the same ceremony, and the same refusals.
 //   - A computer's passkey is held by the computer. The ceremony asks for a
 //     platform authenticator, with the "client-device" hint, and a
 //     registration whose browser reports the passkey anywhere else (a phone
@@ -385,8 +389,11 @@ func (s *Server) offerPasskey(w http.ResponseWriter, r *http.Request, email, rd 
 }
 
 // offerAdminPasskey offers a passkey straight after an authenticator code at
-// the admin door. The challenge is marked confirmed, so the passkey added is
-// one that stands in for the second step.
+// the admin door, on a phone or a computer (shouldOfferAdminPasskey). The
+// challenge is marked confirmed, so the passkey added is one that stands in
+// for the second step; on a computer it is also marked as a computer's, so
+// the registration is refused on a listed network or when the passkey is not
+// held by the computer.
 func (s *Server) offerAdminPasskey(w http.ResponseWriter, r *http.Request, email, next string) bool {
 	pp, err := s.passkeyRegisterOptionsFor(w, r, email, true)
 	if err != nil {
