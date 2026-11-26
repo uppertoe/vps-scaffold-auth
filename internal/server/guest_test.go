@@ -49,6 +49,14 @@ func loginGuest(t *testing.T, c *client, sender *captureSender, addr string) {
 }
 
 // sessionOf decodes the client's session cookie as the server would.
+// groupsAfter makes a request to /verify through the guard h and returns the
+// groups the session holds afterwards.
+func groupsAfter(t *testing.T, srv *Server, c *client, h map[string]string) string {
+	t.Helper()
+	c.get("/verify", h)
+	return sessionOf(t, srv, c).Groups
+}
+
 func sessionOf(t *testing.T, srv *Server, c *client) *session.Identity {
 	t.Helper()
 	ck := c.cookies[session.SessionCookie]
@@ -199,8 +207,8 @@ func TestVerifyGuestRoles(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("a role held by guests = %d, want 200", rec.Code)
 	}
-	if g := rec.Header().Get("Remote-Groups"); g != "guest,reviewers" {
-		t.Errorf("Remote-Groups = %q, want guest,reviewers", g)
+	if g := sessionOf(t, srv, c).Groups; g != "guest,reviewers" {
+		t.Errorf("groups = %q, want guest,reviewers", g)
 	}
 	if e := rec.Header().Get("Remote-Email"); e != strangerAddr {
 		t.Errorf("Remote-Email = %q", e)

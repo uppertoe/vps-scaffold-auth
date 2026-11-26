@@ -44,7 +44,7 @@ func TestDemotedAdminLosesAdminGroupAtRenewal(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	if g := c.get("/verify", anyGuard(t, srv)).Header().Get("Remote-Groups"); g != "admin" {
+	if g := groupsAfter(t, srv, c, anyGuard(t, srv)); g != "admin" {
 		t.Fatalf("initial groups = %q, want admin", g)
 	}
 
@@ -56,7 +56,7 @@ func TestDemotedAdminLosesAdminGroupAtRenewal(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("demoted-but-allowed user = %d, want 200", rec.Code)
 	}
-	if g := rec.Header().Get("Remote-Groups"); g != "user" {
+	if g := sessionOf(t, srv, c).Groups; g != "user" {
 		t.Errorf("groups after demotion = %q, want user", g)
 	}
 }
@@ -224,13 +224,13 @@ func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
 		srv, sender := testServer(t)
 		c := newClient(t, srv.Handler())
 		loginAs(t, c, sender, "admin@example.com", nil)
-		if g := c.get("/verify", anyGuard(t, srv)).Header().Get("Remote-Groups"); g != "admin" {
+		if g := groupsAfter(t, srv, c, anyGuard(t, srv)); g != "admin" {
 			t.Fatalf("initial groups = %q, want admin", g)
 		}
 		srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
 		rec := c.get("/verify", anyGuard(t, srv))
-		if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
-			t.Fatalf("de-listed admin = %d groups=%q, want 200 as user", rec.Code, rec.Header().Get("Remote-Groups"))
+		if rec.Code != http.StatusOK || sessionOf(t, srv, c).Groups != "user" {
+			t.Fatalf("de-listed admin = %d groups=%q, want 200 as user", rec.Code, sessionOf(t, srv, c).Groups)
 		}
 		if rec := c.get("/admin/", nil); rec.Code == http.StatusOK {
 			t.Error("de-listed admin still reaches the admin pages")

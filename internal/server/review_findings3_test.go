@@ -30,8 +30,8 @@ func TestReviewGuestKeepsGroupThatBecomesAppRole(t *testing.T) {
 		t.Fatal("reviewers not an app role after the routes change")
 	}
 	rec := g.get("/verify", groupGuard(t, srv, "reviewers"))
-	t.Logf("after routes change: %d groups=%q", rec.Code, rec.Header().Get("Remote-Groups"))
-	if rec.Code == http.StatusOK && strings.Contains(rec.Header().Get("Remote-Groups"), "reviewers") {
+	t.Logf("after routes change: %d groups=%q", rec.Code, sessionOf(t, srv, g).Groups)
+	if rec.Code == http.StatusOK && strings.Contains(sessionOf(t, srv, g).Groups, "reviewers") {
 		t.Errorf("guest still carries 'reviewers' after it became an app role")
 	}
 }

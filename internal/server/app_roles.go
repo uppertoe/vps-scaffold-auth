@@ -232,6 +232,13 @@ func (s *Server) roleRequestProblem(r *http.Request) (app, role, problem string)
 		role = roles.UserRole
 	}
 	switch {
+	case r.Header.Get("X-Auth-Policy") != "":
+		// Only an older guard sends a policy, and an older guard does not
+		// delete a client's X-Auth-App or X-Auth-Role, so the app and role on
+		// such a request may be the client's own. Every server has retired the
+		// older guards; until their snippets are gone from the servers'
+		// auth.caddy copies, a request that still carries one is refused.
+		return app, role, "the guard sends X-Auth-Policy, which only an older guard sends"
 	case !s.appRoles.Has(app, role):
 		return app, role, "not in the app roles manifest"
 	case !s.appRoles.Apps[app].ServesHost(forwardedHost(r)):
@@ -347,9 +354,20 @@ func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *sessio
 	s.access.record(r.Context(), id.Email, r.Header.Get("X-Forwarded-Host"), id.Kind, now)
 	w.Header().Set("Remote-User", id.Email)
 	w.Header().Set("Remote-Email", id.Email)
-	w.Header().Set("Remote-Groups", id.Groups)
 	w.Header().Set(headerRoles, strings.Join(held, ","))
+	blankIdentity(w, "Remote-Groups")
 	w.WriteHeader(http.StatusOK)
+}
+
+// blankIdentity sends each named identity header with an empty value. Apps
+// decide by Remote-Roles, and the gateway sends no groups. A server's copy of
+// auth.caddy may still copy a header the gateway does not send, and Caddy
+// then hands the app its placeholder text, "{http.reverse_proxy.header.…}",
+// rather than nothing; an empty header makes the copy empty too.
+func blankIdentity(w http.ResponseWriter, names ...string) {
+	for _, n := range names {
+		w.Header()[n] = []string{""}
+	}
 }
 
 // verifyByNetwork admits a request with no session when its guard names an
@@ -374,6 +392,7 @@ func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
 	// No identity: the app sees an empty Remote-User and the roles the
 	// network holds.
 	w.Header().Set(headerRoles, strings.Join(held, ","))
+	blankIdentity(w, "Remote-User", "Remote-Email", "Remote-Groups")
 	w.WriteHeader(http.StatusOK)
 	return true
 }

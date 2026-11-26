@@ -463,8 +463,8 @@ func TestChain(t *testing.T) {
 		if got := h["Remote-Roles"]; len(got) != 1 || got[0] != "user" {
 			t.Errorf("app saw Remote-Roles %q, want exactly [user]", got)
 		}
-		if got := h["Remote-Groups"]; len(got) != 1 || got[0] != "user" {
-			t.Errorf("app saw Remote-Groups %q, want exactly [user]", got)
+		if got := h.Get("Remote-Groups"); got != "" {
+			t.Errorf("app saw Remote-Groups %q, want none", got)
 		}
 		cookies := strings.Join(h["Cookie"], "; ")
 		if strings.Contains(cookies, cookieKey) {
@@ -617,8 +617,8 @@ func TestChain(t *testing.T) {
 		g := newBrowser(t)
 		g.signIn("https://open."+domain+"/", "stranger@outside.example")
 		h := appSees(t, g.get("https://open."+domain+"/", nil))
-		if groups := h.Get("Remote-Groups"); !strings.HasPrefix(groups, "guest") {
-			t.Errorf("guest's groups = %q", groups)
+		if roles := h.Get("Remote-Roles"); roles != "user" {
+			t.Errorf("guest's roles = %q, want user", roles)
 		}
 		for _, host := range []string{"app", "reports", "roles"} {
 			r := g.get("https://"+host+"."+domain+"/", nil)
@@ -652,8 +652,8 @@ func TestChain(t *testing.T) {
 		// No waiting for a renewal: a membership change reaches the session
 		// at its next request.
 		h := appSees(t, alice.get("https://reports."+domain+"/", nil))
-		if h.Get("Remote-Groups") != "user,reports" {
-			t.Errorf("alice's groups after renewal = %q", h.Get("Remote-Groups"))
+		if h.Get("Remote-Roles") != "user" {
+			t.Errorf("alice's roles after the change = %q, want user", h.Get("Remote-Roles"))
 		}
 	})
 
@@ -692,8 +692,8 @@ func TestChain(t *testing.T) {
 		if got := h["Remote-Roles"]; len(got) != 1 || got[0] != "manager" {
 			t.Errorf("app saw Remote-Roles %q, want exactly [manager]", got)
 		}
-		if got := h["Remote-Groups"]; len(got) != 1 || got[0] != "user,reports" {
-			t.Errorf("app saw Remote-Groups %q, want exactly [user,reports]", got)
+		if got := h.Get("Remote-Groups"); got != "" {
+			t.Errorf("app saw Remote-Groups %q, want none", got)
 		}
 		for _, k := range []string{"X-Auth-App", "X-Auth-Role"} {
 			if v := h.Get(k); v != "" {
