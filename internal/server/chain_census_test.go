@@ -142,7 +142,7 @@ func TestSecretsNeverReachTheLog(t *testing.T) {
 	c.postForm("/verify-code", url.Values{"code": {"000000"}}) // a wrong guess is logged as an event
 	c.postForm("/verify-code", url.Values{"code": {code}})
 	c.get("/admin/break", nil)
-	c.get("/verify", map[string]string{"X-Auth-Policy": "any", "X-Forwarded-Host": "app.example.com"})
+	c.get("/verify", anyGuard(t, srv))
 	for _, ck := range c.cookies {
 		secrets = append(secrets, ck.Value) // session and CSRF
 	}

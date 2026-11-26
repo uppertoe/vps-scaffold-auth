@@ -82,56 +82,6 @@ func TestAllowed(t *testing.T) {
 	}
 }
 
-func TestCanAccessApp(t *testing.T) {
-	cases := []struct {
-		name       string
-		email      string
-		groups     string
-		breakGlass bool
-		reqDomains string
-		reqGroups  string
-		want       bool
-	}{
-		// No requirement: normal sessions in, break-glass out.
-		{"no req, normal user", "u@rch.org.au", "user", false, "", "", true},
-		{"no req, break-glass denied", "breakglass:Lab 1", "bg_stroke", true, "", "", false},
-
-		// Domain requirement.
-		{"domain match", "u@rch.org.au", "user", false, "rch.org.au", "", true},
-		{"domain miss", "u@partner.com", "user", false, "rch.org.au", "", false},
-		{"domain match, multi-list", "u@partner.com", "user", false, "rch.org.au, partner.com", "", true},
-		{"domain case-insensitive", "U@RCH.ORG.AU", "user", false, "rch.org.au", "", true},
-
-		// Group requirement.
-		{"group match", "u@partner.com", "user,dashboard", false, "", "dashboard", true},
-		{"group miss", "u@partner.com", "user", false, "", "dashboard", false},
-
-		// OR across the two lists.
-		{"domain or group: via group", "u@partner.com", "user,guests", false, "rch.org.au", "guests", true},
-		{"domain or group: neither", "u@partner.com", "user", false, "rch.org.au", "guests", false},
-
-		// Break-glass is scoped strictly by its group; it has no domain.
-		{"break-glass via group", "breakglass:Lab 1", "bg_stroke", true, "", "bg_stroke", true},
-		{"break-glass wrong group", "breakglass:Lab 1", "bg_stroke", true, "", "bg_other", false},
-		{"break-glass can't satisfy a domain", "breakglass:Lab 1", "bg_stroke", true, "rch.org.au", "", false},
-		// A break-glass label containing an "@domain" must NOT forge a domain
-		// match: emergency access is group-only regardless of label content.
-		{"break-glass label with @domain can't forge domain", "breakglass:ops@rch.org.au", "bg_stroke", true, "rch.org.au", "", false},
-		{"break-glass label with @domain still group-scoped", "breakglass:ops@rch.org.au", "bg_stroke", true, "rch.org.au", "bg_stroke", true},
-
-		// Admins are not auto-allowed: they get in via domain or by the app
-		// listing the admin group explicitly.
-		{"admin not auto-allowed", "admin@elsewhere.com", "admin", false, "rch.org.au", "", false},
-		{"admin via explicit group", "admin@elsewhere.com", "admin", false, "rch.org.au", "admin", true},
-	}
-	for _, c := range cases {
-		if got := CanAccessApp(c.email, c.groups, c.breakGlass, false, c.reqDomains, c.reqGroups, false); got != c.want {
-			t.Errorf("%s: CanAccessApp(%q,%q,bg=%v,d=%q,g=%q) = %v, want %v",
-				c.name, c.email, c.groups, c.breakGlass, c.reqDomains, c.reqGroups, got, c.want)
-		}
-	}
-}
-
 func TestValidGroupName(t *testing.T) {
 	cases := []struct {
 		name string
@@ -253,40 +203,6 @@ func TestLoginRoleGuest(t *testing.T) {
 
 // Guests are deny-by-default: only guests=allow or an explicit group opens a
 // route to them, and a domain list never does, even one naming their domain.
-func TestCanAccessAppGuest(t *testing.T) {
-	cases := []struct {
-		name        string
-		groups      string
-		reqDomains  string
-		reqGroups   string
-		allowGuests bool
-		want        bool
-	}{
-		{"bare any denies guest", "guest", "", "", false, false},
-		{"guests=allow admits", "guest", "", "", true, true},
-		{"domain naming the guest's own domain denies", "guest", "gmail.com", "", false, false},
-		{"group not held denies", "guest", "", "reports", false, false},
-		{"group held admits", "guest,reports", "", "reports", false, true},
-		{"domain or group: via group", "guest,reports", "rch.org.au", "reports", false, true},
-		{"guests=allow on a domain route admits the guest", "guest", "rch.org.au", "", true, true},
-	}
-	for _, c := range cases {
-		if got := CanAccessApp("stranger@gmail.com", c.groups, false, true, c.reqDomains, c.reqGroups, c.allowGuests); got != c.want {
-			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
-		}
-	}
-	// guests=allow changes nothing for the other kinds.
-	if !CanAccessApp("u@rch.org.au", "user", false, false, "", "", true) {
-		t.Error("normal session denied on any;guests=allow")
-	}
-	if CanAccessApp("breakglass:Lab", "bg", true, false, "", "", true) {
-		t.Error("break-glass admitted by guests=allow")
-	}
-	if CanAccessApp("u@partner.com", "user", false, false, "rch.org.au", "", true) {
-		t.Error("guests=allow widened a domain route for a normal off-domain session")
-	}
-}
-
 func TestGuestIsReservedGroup(t *testing.T) {
 	if !IsReservedGroup("guest") || !IsReservedGroup(" Guest ") {
 		t.Error(`"guest" must be reserved so a DB group or card cannot pose as a guest`)
@@ -311,6 +227,25 @@ func TestHasAllowList(t *testing.T) {
 	} {
 		if got := NewPolicy(c.domains, []string{"admin@example.com"}).HasAllowList(); got != c.want {
 			t.Errorf("HasAllowList(%q) = %v, want %v", c.domains, got, c.want)
+		}
+	}
+}
+
+func TestDomainIn(t *testing.T) {
+	cases := []struct {
+		email, list string
+		want        bool
+	}{
+		{"a@rch.org.au", "rch.org.au", true},
+		{"A@RCH.ORG.AU", "mcri.edu.au rch.org.au", true},
+		{"a@rch.org.au", "mcri.edu.au,monashhealth.org", false},
+		{"a@sub.rch.org.au", "rch.org.au", false},
+		{"breakglass:Lab", "rch.org.au", false},
+		{"a@rch.org.au", "", false},
+	}
+	for _, c := range cases {
+		if got := DomainIn(c.email, c.list); got != c.want {
+			t.Errorf("DomainIn(%q, %q) = %v, want %v", c.email, c.list, got, c.want)
 		}
 	}
 }

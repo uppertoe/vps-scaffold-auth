@@ -20,7 +20,7 @@ func TestRevokedPrincipalNotRenewed(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
 
-	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
 		t.Fatalf("initial /verify = %d, want 200", rec.Code)
 	}
 
@@ -29,7 +29,7 @@ func TestRevokedPrincipalNotRenewed(t *testing.T) {
 	// Push the clock past the renew threshold so /verify hits the renew path.
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
 
-	rec := c.get("/verify", protectedAny())
+	rec := c.get("/verify", anyGuard(t, srv))
 	if rec.Code == http.StatusOK {
 		t.Fatal("revoked principal still granted at renewal (access-revocation bypass)")
 	}
@@ -44,7 +44,7 @@ func TestDemotedAdminLosesAdminGroupAtRenewal(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	if g := c.get("/verify", protectedAny()).Header().Get("Remote-Groups"); g != "admin" {
+	if g := c.get("/verify", anyGuard(t, srv)).Header().Get("Remote-Groups"); g != "admin" {
 		t.Fatalf("initial groups = %q, want admin", g)
 	}
 
@@ -52,7 +52,7 @@ func TestDemotedAdminLosesAdminGroupAtRenewal(t *testing.T) {
 	srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
 
-	rec := c.get("/verify", protectedAny())
+	rec := c.get("/verify", anyGuard(t, srv))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("demoted-but-allowed user = %d, want 200", rec.Code)
 	}
@@ -123,7 +123,7 @@ func TestGroupNameWithSeparatorRejected(t *testing.T) {
 // break-glass session reach the admin UI.
 func TestBreakGlassSessionRejectedFromAdminUI(t *testing.T) {
 	srv, _ := testServer(t)
-	token := mintCode(t, srv, "Sneaky", authz.RoleAdmin)
+	token := mintGroupCode(t, srv, "Sneaky", authz.RoleAdmin)
 	c := newClient(t, srv.Handler())
 	if rec := c.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan = %d, want 302", rec.Code)
@@ -158,9 +158,9 @@ func TestBreakGlassTTLCapped(t *testing.T) {
 	}
 }
 
-// A break-glass session reaches only routes naming its card's group. It
-// cannot open the admin pages or make an admin change, manage passkeys, or
-// pass a plain sign-in, domain or admin rule.
+// A break-glass session reaches only its card's app. It cannot open the
+// admin pages or make an admin change, manage passkeys, or hold a role given
+// to guests.
 func TestBreakGlassSessionCannotActOutsideItsCard(t *testing.T) {
 	srv, _ := pkServer(t, nil)
 	ctx := context.Background()
@@ -170,13 +170,11 @@ func TestBreakGlassSessionCannotActOutsideItsCard(t *testing.T) {
 	if rec := c.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan = %d", rec.Code)
 	}
-	if rec := c.get("/verify", requireGroups("ward")); rec.Code != http.StatusOK {
-		t.Fatalf("the card's own group = %d", rec.Code)
+	if rec := c.get("/verify", groupGuard(t, srv, "ward")); rec.Code != http.StatusOK {
+		t.Fatalf("the card's own app = %d", rec.Code)
 	}
-	for _, policy := range []string{"any", "groups=other", "groups=admin", "domains=example.com"} {
-		if rec := c.get("/verify", map[string]string{"X-Auth-Policy": policy}); rec.Code == http.StatusOK {
-			t.Errorf("policy %q admitted a break-glass session", policy)
-		}
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code == http.StatusOK {
+		t.Error("a role held by guests admitted a break-glass session")
 	}
 	for _, page := range []string{"/admin/", "/admin/groups", "/admin/groups/ward", "/admin/access", "/admin/app-feeds", "/admin/break", "/admin/totp", "/admin/settings", "/passkeys", "/passkeys/confirm"} {
 		if rec := c.get(page, phone); rec.Code == http.StatusOK {
@@ -210,11 +208,11 @@ func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
 		srv, sender := testServer(t)
 		c := newClient(t, srv.Handler())
 		loginAs(t, c, sender, "user@example.com", nil)
-		if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
+		if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
 			t.Fatalf("initial /verify = %d, want 200", rec.Code)
 		}
 		srv.policy = authz.NewPolicy([]string{"other.org"}, []string{"admin@example.com"})
-		rec := c.get("/verify", protectedAny())
+		rec := c.get("/verify", anyGuard(t, srv))
 		if rec.Code == http.StatusOK {
 			t.Fatal("de-listed person still admitted before the scheduled renewal")
 		}
@@ -226,11 +224,11 @@ func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
 		srv, sender := testServer(t)
 		c := newClient(t, srv.Handler())
 		loginAs(t, c, sender, "admin@example.com", nil)
-		if g := c.get("/verify", protectedAny()).Header().Get("Remote-Groups"); g != "admin" {
+		if g := c.get("/verify", anyGuard(t, srv)).Header().Get("Remote-Groups"); g != "admin" {
 			t.Fatalf("initial groups = %q, want admin", g)
 		}
 		srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
-		rec := c.get("/verify", protectedAny())
+		rec := c.get("/verify", anyGuard(t, srv))
 		if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
 			t.Fatalf("de-listed admin = %d groups=%q, want 200 as user", rec.Code, rec.Header().Get("Remote-Groups"))
 		}
@@ -244,7 +242,7 @@ func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
 		c := newClient(t, srv.Handler())
 		loginAs(t, c, sender, "boss@other.org", nil)
 		srv.policy = authz.NewPolicy([]string{"example.com"}, []string{"admin@example.com"})
-		if rec := c.get("/verify", protectedAny()); rec.Code == http.StatusOK {
+		if rec := c.get("/verify", anyGuard(t, srv)); rec.Code == http.StatusOK {
 			t.Fatal("de-listed admin outside the allow-list still admitted")
 		}
 	})
@@ -252,7 +250,7 @@ func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
 		srv, sender := guestServer(t)
 		c := newClient(t, srv.Handler())
 		loginGuest(t, c, sender, "stranger@other.org")
-		guestRoute := map[string]string{"X-Auth-Policy": "any;guests=allow"}
+		guestRoute := anyGuard(t, srv)
 		if rec := c.get("/verify", guestRoute); rec.Code != http.StatusOK {
 			t.Fatalf("initial guest /verify = %d, want 200", rec.Code)
 		}

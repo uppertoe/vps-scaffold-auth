@@ -22,9 +22,7 @@ import (
 // The app-roles guard. A guard that names an app sends X-Auth-App, and the
 // role its path needs in X-Auth-Role (the user role when absent), both with
 // header_up so a client's copies are replaced. /verify then decides by who
-// holds that role (roles.Held), not by X-Auth-Policy. A request carrying both
-// X-Auth-App (or X-Auth-Role) and X-Auth-Policy is refused: no shipped guard
-// sends both, so it is a misconfigured guard or a client adding a header.
+// holds that role (roles.Held). A request that names no app is refused.
 const (
 	headerApp   = "X-Auth-App"
 	headerRole  = "X-Auth-Role"
@@ -212,8 +210,7 @@ func wantsRoles(r *http.Request) bool {
 }
 
 // roleRequest reads and checks the app and role a guard asks for. It logs and
-// returns ok=false for a guard that also sends X-Auth-Policy, that names an
-// app or role the manifest does not declare, or that guards a host the
+// returns ok=false for a guard that names an app or role the manifest does not declare, or that guards a host the
 // manifest does not give the app (see roleRequestProblem).
 func (s *Server) roleRequest(r *http.Request) (app, role string, ok bool) {
 	app, role, problem := s.roleRequestProblem(r)
@@ -235,8 +232,6 @@ func (s *Server) roleRequestProblem(r *http.Request) (app, role, problem string)
 		role = roles.UserRole
 	}
 	switch {
-	case r.Header.Get(headerPolicy) != "":
-		return app, role, "it sends both X-Auth-App and X-Auth-Policy"
 	case !s.appRoles.Has(app, role):
 		return app, role, "not in the app roles manifest"
 	case !s.appRoles.Apps[app].ServesHost(forwardedHost(r)):
@@ -308,9 +303,9 @@ func sessionLists(id *session.Identity) map[string]bool {
 	return out
 }
 
-// verifyByRole decides a signed-in request whose guard names an app. It
-// mirrors the legacy path: a refusal re-reads the person's groups once, in
-// case an administrator has just added them to a list.
+// verifyByRole decides a signed-in request whose guard names an app. A
+// refusal re-reads the person's groups once, in case an administrator has
+// just added them to a list.
 func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *session.Identity, now time.Time, renewed bool) {
 	app, role, ok := s.roleRequest(r)
 	if !ok {
@@ -362,19 +357,14 @@ func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *sessio
 // whether it wrote a response; when it did not, the caller sends the request
 // to sign in as before.
 //
-// A guard that also sends X-Auth-Policy is refused. A guard naming an app or
-// role the manifest does not declare, or guarding a host that is not the
+// A guard naming an app or role the manifest does not declare, or guarding a host that is not the
 // app's, admits nobody through a network and is sent to sign in like any
 // other (see roleLoginHint), so a visitor with no session cannot tell
 // declared names from undeclared ones; once signed in, it is refused.
 func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
 	app, role, ok := s.roleRequest(r)
 	if !ok {
-		if r.Header.Get(headerPolicy) == "" {
-			return false
-		}
-		s.redirectToDenied(w, r)
-		return true
+		return false
 	}
 	st := s.roleData(r.Context())
 	held := roles.Held(app, roles.Subject{Addr: clientAddr(r)}, st.assignments, s.roleEnv(st))
@@ -391,8 +381,7 @@ func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
 // roleLoginHint is what a role guard adds to the login URL, in the parameters
 // a domain guard uses (see redirectToLogin). When the role is held only by
 // domain groups, it carries their domains as rqd, so the sign-in page hints
-// them and /request declines an address at none of them, exactly as for
-// protected_domains. Otherwise it carries rqr=1, which marks a role guard so
+// them and /request declines an address at none of them. Otherwise it carries rqr=1, which marks a role guard so
 // the page does not fall back to the allow-list's domains. When the role's
 // assignments are domain groups only and a card or an open invitation also
 // admits someone, it adds rhd, those domains, which the page hints but never
@@ -408,9 +397,6 @@ func (s *Server) roleLoginHint(r *http.Request) string {
 	role := strings.TrimSpace(r.Header.Get(headerRole))
 	if role == "" {
 		role = roles.UserRole
-	}
-	if r.Header.Get(headerPolicy) != "" {
-		return ""
 	}
 	if _, _, problem := s.roleRequestProblem(r); problem != "" {
 		return "&rqr=1"
@@ -597,67 +583,6 @@ func (s *Server) logWhoSignsIn(ctx context.Context) {
 	default:
 		log.Printf("authz: ALLOWED_EMAIL_DOMAINS is not set: addresses at the domains of the domain groups that hold an app role (%s) sign in as staff, as do the administrators in ADMIN_EMAILS; others who hold an app role sign in as members", strings.Join(st.staffOrder, ", "))
 	}
-}
-
-// olderGuardSites lists, sorted, the sites that still use an older guard: a
-// site named in ROUTE_GROUPS_FILE, or one with a rule in ROUTE_ACCESS_FILE
-// other than public (a role guard is not a rule there).
-func olderGuardSites(m routeManifest, sites []siteAccessView) []string {
-	set := map[string]bool{}
-	for _, hs := range m.Hosts {
-		for _, h := range hs {
-			set[h] = true
-		}
-	}
-	for _, v := range sites {
-		for _, r := range v.Rules {
-			if r.Kind != "public" {
-				set[v.Host] = true
-			}
-		}
-	}
-	out := make([]string, 0, len(set))
-	for h := range set {
-		out = append(out, h)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// olderGuardWarning remembers the sites last warned about, so the warning
-// is logged at start and again only when the route files change.
-type olderGuardWarning struct {
-	mu   sync.Mutex
-	last string
-	done bool
-}
-
-// warnOlderGuards reads the route files and warns about the sites that
-// still use an older guard (see noteOlderGuards). It runs at start; every
-// later read of the route files checks again through appRoleGroups.
-func (s *Server) warnOlderGuards() {
-	m, _ := s.readRouteManifest()
-	s.noteOlderGuards(olderGuardSites(m, s.routeAccess()))
-}
-
-// noteOlderGuards logs a warning when the allow-list is empty and some site
-// still uses an older guard: a domain group that holds any app role makes
-// everyone at its domains staff, and an older guard admits staff by "any"
-// or by domain, whatever app the role belongs to. It logs once for each new
-// list of sites.
-func (s *Server) noteOlderGuards(sites []string) {
-	if !s.staffFromDomainGroups() {
-		return
-	}
-	key := strings.Join(sites, " ")
-	s.olderGuards.mu.Lock()
-	same := s.olderGuards.done && s.olderGuards.last == key
-	s.olderGuards.last, s.olderGuards.done = key, true
-	s.olderGuards.mu.Unlock()
-	if same || len(sites) == 0 {
-		return
-	}
-	log.Printf("warning: authz: ALLOWED_EMAIL_DOMAINS is not set and %d site(s) still use an older guard (%s): a domain group that holds any app role also opens those guards to everyone at its domains as staff", len(sites), strings.Join(sites, ", "))
 }
 
 // loginRole is the sign-in decision: a known address (knownRole) as staff or

@@ -66,17 +66,10 @@ type pageData struct {
 	// IsAdmin surfaces an Admin link on the signed-in /welcome landing for a
 	// real (non-break-glass) admin session.
 	IsAdmin bool
-	// HintDomains is the display string for the domain requirement (an app-set
-	// label, else the enumerated domains). RequireDomains/RequireDomainLabel
-	// carry the raw requirement + optional label through to /request.
-	HintDomains        string
-	RequireDomains     string
-	RequireDomainLabel string
-	// RequireGroups marks a group-gated route (admin/collaborator door) carried
-	// through to the login page. It suppresses the configured-domain fallback
-	// hint/placeholder: that door is deliberately for people who can't match the
-	// domain, so it must neither hint a domain nor presume one in the example.
-	RequireGroups string
+	// HintDomains is the display string for the domain requirement.
+	// RequireDomains carries the raw requirement through to /request.
+	HintDomains    string
+	RequireDomains string
 	// RoleGuard marks a login from a role guard that may not decline early,
 	// and RoleHintDomains are the domains it hints (see roleLoginHint). Both
 	// are carried to /request as hidden fields.
@@ -94,11 +87,6 @@ type pageData struct {
 	// effective domain (the route requirement, else the configured allow-list)
 	// as you@<domain>; empty falls back to a generic example in the template.
 	EmailPlaceholder string
-	// AltLoginURL/AltLoginLabel offer a small "sign in another way" link for
-	// people who can't match the domain (e.g. admins via a separate route). The
-	// URL is validated to be within the server domain before it's ever rendered.
-	AltLoginURL   string
-	AltLoginLabel string
 	// Passkey drives the passkey parts of a page (passkeys.go); nil when
 	// passkeys are off. A page with one loads /passkey.js, and render widens
 	// its Content-Security-Policy to allow that one same-origin script.

@@ -1,0 +1,6 @@
+# The app-roles manifest (APP_ROLES_FILE) for the standalone example. Fields
+# are separated by one TAB; internal/roles/manifest.go describes the format.
+
+demo	user	User	app.{$DOMAIN}
+@label	demo	Demo app
+@path	demo	*	user

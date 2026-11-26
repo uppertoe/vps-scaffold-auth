@@ -55,7 +55,7 @@ func TestAppAccessRecordedAndDeduped(t *testing.T) {
 	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
 
 	for i := 0; i < 3; i++ {
-		rec := c.get("/verify", map[string]string{"X-Forwarded-Host": "app.example.com", "X-Auth-Policy": "any"})
+		rec := c.get("/verify", anyGuard(t, srv))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("/verify #%d = %d, want 200", i, rec.Code)
 		}

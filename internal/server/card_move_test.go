@@ -34,10 +34,6 @@ const testMovePending = "neverdrugs\tuser\tUser\tneverdrugs.{$DOMAIN}\n" +
 	"@label\tcaffeine\tCaffeine\n" +
 	"@path\tcaffeine\t*\tuser\n"
 
-// olderGuard is the headers of NeverDrugs' older guard, which admits the
-// group bg_nd.
-var olderGuard = map[string]string{"X-Auth-Policy": "groups=bg_nd", "X-Forwarded-Host": "neverdrugs.example.com"}
-
 // moveAdmin is a server with manifest, two administrators, a client signed
 // in as the first, and a card for Theatre 3 that opens the group bg_nd.
 func moveAdmin(t *testing.T, manifest string) (*Server, *captureSender, *client, int64, string) {
@@ -52,7 +48,7 @@ func moveAdmin(t *testing.T, manifest string) (*Server, *captureSender, *client,
 	})
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	token := mintCode(t, srv, "Theatre 3", "bg_nd")
+	token := mintGroupCode(t, srv, "Theatre 3", "bg_nd")
 	code, ok, err := srv.store.LookupBreakGlassByTokenHash(context.Background(), otp.Hash(token))
 	if err != nil || !ok {
 		t.Fatalf("card: %v %v", ok, err)
@@ -96,13 +92,10 @@ func TestMoveGroupCardToApp(t *testing.T) {
 	sid := strconv.FormatInt(id, 10)
 	before := getCard(t, srv, id)
 
-	// A scan before the move: the older guard admits it, a role guard does not.
+	// A scan before the move: a role guard does not admit it.
 	early := newClient(t, srv.Handler())
 	if rec := early.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan = %d", rec.Code)
-	}
-	if rec := early.get("/verify", olderGuard); rec.Code != http.StatusOK {
-		t.Fatalf("older guard before the move = %d", rec.Code)
 	}
 	wantDenied(t, "a group card on a role guard", early.get("/verify", roleGuard("neverdrugs", "")))
 
@@ -172,9 +165,6 @@ func TestMoveGroupCardToApp(t *testing.T) {
 	}
 
 	// The session started before the move keeps its group until it ends.
-	if rec := early.get("/verify", olderGuard); rec.Code != http.StatusOK {
-		t.Errorf("older guard for a session started before the move = %d", rec.Code)
-	}
 	// That session keeps only the group: a role guard does not admit it to
 	// the app the card now names.
 	wantDenied(t, "a session started before the move, on the app's role guard", early.get("/verify", roleGuard("neverdrugs", "")))
@@ -189,7 +179,6 @@ func TestMoveGroupCardToApp(t *testing.T) {
 	}
 	wantDenied(t, "the app's admin role", later.get("/verify", roleGuard("neverdrugs", "admin")))
 	wantDenied(t, "another app", later.get("/verify", roleGuard("caffeine", "")))
-	wantDenied(t, "the older guard of the group", later.get("/verify", olderGuard))
 
 	// The list shows the card under its app, and no longer as a group card.
 	body = html.UnescapeString(c.get("/admin/break", nil).Body.String())
@@ -253,12 +242,6 @@ func TestMoveCardOnlyOnceTheAppIsLive(t *testing.T) {
 				if got := getCard(t, srv, id); got.App != "" || got.TargetGroup != "bg_nd" {
 					t.Fatalf("card = %+v", got)
 				}
-				// The card still works under the older guard.
-				anon := newClient(t, srv.Handler())
-				anon.scan(token)
-				if rec := anon.get("/verify", olderGuard); rec.Code != http.StatusOK {
-					t.Fatalf("older guard before the switch = %d", rec.Code)
-				}
 			}
 			switchTo(srv, testMoveLive)
 			if rec := postMove(t, c, id, "neverdrugs", "/"); rec.Code != http.StatusFound {
@@ -307,9 +290,6 @@ func TestMoveLandingDuringAScan(t *testing.T) {
 	}
 	if id := sessionOf(t, srv, racer); id.Groups != "bg_nd" {
 		t.Fatalf("session = %+v", id)
-	}
-	if rec := racer.get("/verify", olderGuard); rec.Code != http.StatusOK {
-		t.Errorf("older guard = %d, want 200", rec.Code)
 	}
 	wantDenied(t, "the app's role guard", racer.get("/verify", roleGuard("neverdrugs", "")))
 }

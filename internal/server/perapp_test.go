@@ -3,50 +3,88 @@ package server
 import (
 	"context"
 	"errors"
-	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
-	"github.com/uppertoe/vps-scaffold-auth/internal/config"
-	"github.com/uppertoe/vps-scaffold-auth/internal/store"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
+	"github.com/uppertoe/vps-scaffold-auth/internal/config"
+	"github.com/uppertoe/vps-scaffold-auth/internal/roles"
+	"github.com/uppertoe/vps-scaffold-auth/internal/store"
+
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 )
 
-// requireGroups/requireDomains simulate the single X-Auth-Policy header Caddy's
-// per-app snippets set on the /verify subrequest via header_up.
-func requireDomains(d string) map[string]string {
-	return map[string]string{"X-Auth-Policy": "domains=" + d}
-}
-func requireGroups(g string) map[string]string {
-	return map[string]string{"X-Auth-Policy": "groups=" + g}
+// testGuardApp adds an app to the server's app-roles manifest, on the host
+// <name>.example.com with a user and an admin role, and turns the model on.
+// Tests that only need "a guard that admits a signed-in person" use the
+// helpers below rather than writing a manifest of their own.
+func testGuardApp(t *testing.T, srv *Server, name string) {
+	t.Helper()
+	if srv.appRoles.Apps == nil {
+		srv.appRoles.Apps = map[string]*roles.App{}
+	}
+	if srv.cfg.AppRolesFile == "" {
+		srv.cfg.AppRolesFile = "test"
+	}
+	if _, ok := srv.appRoles.Apps[name]; ok {
+		return
+	}
+	srv.appRoles.Apps[name] = &roles.App{
+		Name: name, Label: name,
+		Roles:     map[string]string{"user": "User", "admin": "Administrator"},
+		RoleOrder: []string{"user", "admin"},
+		Hosts:     []string{name + ".example.com"},
+	}
 }
 
-// protectedAny simulates the plain `import protected` door, which sends the
-// explicit "any" sentinel (any authenticated non-break-glass user). /verify now
-// fails closed on a MISSING policy header, so plain-protected must be explicit.
-func protectedAny() map[string]string {
-	return map[string]string{"X-Auth-Policy": "any"}
+// guardFor is the headers a role guard for app's user role sends.
+func guardFor(app string) map[string]string {
+	return map[string]string{"X-Auth-App": app, "X-Forwarded-Host": app + ".example.com"}
 }
 
-func TestPerAppDomainGate(t *testing.T) {
-	srv, sender := testServer(t)
-	c := newClient(t, srv.Handler())
-	loginAs(t, c, sender, "user@example.com", nil)
+// anyGuard is a role guard whose User role is held by guests, so it admits
+// any signed-in person who is not a break-glass card.
+func anyGuard(t *testing.T, srv *Server) map[string]string {
+	t.Helper()
+	if _, ok := srv.appRoles.Apps["app"]; !ok {
+		testGuardApp(t, srv, "app")
+		mustAssign(t, srv, store.RoleAssignment{App: "app", Role: "user", Kind: store.AssignGuests})
+	}
+	return guardFor("app")
+}
 
-	// App that accepts this user's domain -> allowed.
-	if rec := c.get("/verify", requireDomains("example.com")); rec.Code != http.StatusOK {
-		t.Fatalf("matching domain = %d, want 200", rec.Code)
+// appForGroup names the app groupGuard makes for the group g.
+func appForGroup(g string) string {
+	return "g-" + strings.NewReplacer("_", "-", " ", "-").Replace(g)
+}
+
+// groupGuard is a role guard whose User role is held by the list group g,
+// which it creates when there is none.
+func groupGuard(t *testing.T, srv *Server, g string) map[string]string {
+	t.Helper()
+	name := appForGroup(g)
+	if _, ok := srv.appRoles.Apps[name]; !ok {
+		ctx := context.Background()
+		gs, err := srv.store.ListGroups(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, have := range gs {
+			found = found || have.Name == g
+		}
+		if !found {
+			if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		testGuardApp(t, srv, name)
+		mustAssign(t, srv, store.RoleAssignment{App: name, Role: "user", Kind: store.AssignList, Ref: g})
 	}
-	// App that accepts only another domain -> denied (sent to /denied, not login).
-	rec := c.get("/verify", requireDomains("partner.com"))
-	if rec.Code != http.StatusFound {
-		t.Fatalf("non-matching domain = %d, want 302", rec.Code)
-	}
-	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "/denied?rd=") {
-		t.Errorf("denied redirect went to %q, want /denied", loc)
-	}
+	return guardFor(name)
 }
 
 func TestPerAppGroupGate(t *testing.T) {
@@ -61,10 +99,10 @@ func TestPerAppGroupGate(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
 
-	if rec := c.get("/verify", requireGroups("dashboard")); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", groupGuard(t, srv, "dashboard")); rec.Code != http.StatusOK {
 		t.Fatalf("member of required group = %d, want 200", rec.Code)
 	}
-	if rec := c.get("/verify", requireGroups("finance")); rec.Code != http.StatusFound {
+	if rec := c.get("/verify", groupGuard(t, srv, "finance")); rec.Code != http.StatusFound {
 		t.Fatalf("not in required group = %d, want 302 (denied)", rec.Code)
 	}
 }
@@ -76,8 +114,8 @@ func TestDeniedPreservesSessionAndOffersLogin(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
 
-	// Bounce off an app that requires a different domain.
-	if rec := c.get("/verify", requireDomains("partner.com")); rec.Code != http.StatusFound {
+	// Bounce off an app whose role the user does not hold.
+	if rec := c.get("/verify", groupGuard(t, srv, "finance")); rec.Code != http.StatusFound {
 		t.Fatalf("expected 302 denied, got %d", rec.Code)
 	}
 	// Session cookie is untouched...
@@ -85,7 +123,7 @@ func TestDeniedPreservesSessionAndOffersLogin(t *testing.T) {
 		t.Fatal("denial cleared the session cookie")
 	}
 	// ...so a plain app still grants.
-	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
 		t.Fatalf("plain /verify after denial = %d, want 200 (session intact)", rec.Code)
 	}
 
@@ -105,9 +143,8 @@ func TestDeniedPreservesSessionAndOffersLogin(t *testing.T) {
 	}
 }
 
-// Break-glass is deny-by-default: a plain `import protected` app (no
-// requirement) rejects it; only a route requiring its group accepts it. The
-// denial page frames it as emergency access.
+// Break-glass is deny-by-default: a role given to guests does not admit it,
+// nor another app's role; only its card's app does.
 func TestBreakGlassScopedToItsGroup(t *testing.T) {
 	srv, _ := testServer(t)
 	token := mintCode(t, srv, "Angiography Lab 1", "bg_stroke")
@@ -116,46 +153,42 @@ func TestBreakGlassScopedToItsGroup(t *testing.T) {
 		t.Fatalf("scan = %d", rec.Code)
 	}
 
-	// Plain protected app (any signed-in user) -> break-glass still denied.
-	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusFound {
-		t.Fatalf("break-glass on plain /verify = %d, want 302 (denied)", rec.Code)
+	// A role held by guests (any signed-in person) -> break-glass denied.
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusFound {
+		t.Fatalf("break-glass on a role held by guests = %d, want 302 (denied)", rec.Code)
 	}
 	// An app requiring a different group -> denied.
-	if rec := c.get("/verify", requireGroups("bg_other")); rec.Code != http.StatusFound {
+	if rec := c.get("/verify", groupGuard(t, srv, "bg_other")); rec.Code != http.StatusFound {
 		t.Fatalf("break-glass wrong group = %d, want 302 (denied)", rec.Code)
 	}
 	// The route that opts into this code's group -> allowed.
-	rec := c.get("/verify", requireGroups("bg_stroke"))
+	rec := c.get("/verify", groupGuard(t, srv, "bg_stroke"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("break-glass on its own route = %d, want 200", rec.Code)
 	}
-	if g := rec.Header().Get("Remote-Groups"); g != "bg_stroke" {
-		t.Errorf("Remote-Groups = %q, want bg_stroke", g)
+	if g := rec.Header().Get("Remote-Roles"); g != "user" {
+		t.Errorf("Remote-Roles = %q, want user", g)
 	}
 
-	// Denial page frames it as emergency access and shows the card label.
+	// The denial page names the card and the app it opens.
 	body := c.get("/denied?rd="+url.QueryEscape("https://app.example.com/"), nil).Body.String()
-	if !strings.Contains(body, "emergency access") || !strings.Contains(body, "Angiography Lab 1") {
-		t.Errorf("break-glass denial page missing emergency framing/label:\n%s", body)
+	if !strings.Contains(body, "The card for Angiography Lab 1 opens g-bg-stroke only.") {
+		t.Errorf("break-glass denial page missing the card and its app:\n%s", body)
 	}
 }
 
-// TestMissingPolicyFailsClosed verifies the deny-by-default fix: an authenticated
-// user hitting /verify with NO X-Auth-Policy (a hand-rolled guard that forgot the
-// header) is denied rather than silently granted, while the explicit "any"
-// sentinel still admits them.
-func TestMissingPolicyFailsClosed(t *testing.T) {
+// A guard that names no app (a hand-rolled one, or an older guard left in a
+// snippet) is denied, whatever else it sends, while a role guard admits.
+func TestGuardWithNoAppFailsClosed(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
 
-	// No policy header → deny (302 to /denied).
-	if rec := c.get("/verify", nil); rec.Code != http.StatusFound {
-		t.Fatalf("missing-policy /verify = %d, want 302 (deny-by-default)", rec.Code)
+	for _, h := range []map[string]string{nil, {"X-Auth-Policy": "any"}, {"X-Auth-Policy": "domains=example.com"}} {
+		wantDenied(t, fmt.Sprintf("a guard with no app, %v", h), c.get("/verify", h))
 	}
-	// Explicit "any" sentinel → allowed.
-	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
-		t.Fatalf("explicit any /verify = %d, want 200", rec.Code)
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
+		t.Fatalf("role guard = %d, want 200", rec.Code)
 	}
 }
 
@@ -170,7 +203,7 @@ func TestGroupGateAdmitsNewMemberWithoutRelogin(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
 
-	if rec := c.get("/verify", requireGroups("planka-users")); rec.Code != http.StatusFound {
+	if rec := c.get("/verify", groupGuard(t, srv, "planka-users")); rec.Code != http.StatusFound {
 		t.Fatalf("before joining = %d, want 302 (denied)", rec.Code)
 	}
 	// An administrator adds them on the Groups page, which also clears the
@@ -181,7 +214,7 @@ func TestGroupGateAdmitsNewMemberWithoutRelogin(t *testing.T) {
 	if rec := admin.postForm("/admin/groups/planka-users/members", url.Values{"csrf": {tok}, "email": {"user@example.com"}}); rec.Code != http.StatusFound {
 		t.Fatalf("admin add member = %d", rec.Code)
 	}
-	rec := c.get("/verify", requireGroups("planka-users"))
+	rec := c.get("/verify", groupGuard(t, srv, "planka-users"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("after joining = %d, want 200", rec.Code)
 	}
@@ -193,7 +226,7 @@ func TestGroupGateAdmitsNewMemberWithoutRelogin(t *testing.T) {
 	}
 	// The renewed cookie now carries the group, so the next request passes
 	// without another lookup.
-	if rec := c.get("/verify", requireGroups("planka-users")); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", groupGuard(t, srv, "planka-users")); rec.Code != http.StatusOK {
 		t.Fatalf("next request = %d, want 200", rec.Code)
 	}
 }
@@ -205,7 +238,7 @@ func TestGroupGateRefusalWithUnchangedGroupsKeepsCookie(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
 
-	rec := c.get("/verify", requireGroups("finance"))
+	rec := c.get("/verify", groupGuard(t, srv, "finance"))
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/denied") {
 		t.Fatalf("refusal = %d %q, want 302 to /denied", rec.Code, rec.Header().Get("Location"))
 	}
@@ -229,7 +262,7 @@ func TestGroupRecheckClearsRevokedPrincipal(t *testing.T) {
 	if err := srv.store.AddGroupMember(ctx, "team", "user@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	rec := c.get("/verify", requireGroups("team"))
+	rec := c.get("/verify", groupGuard(t, srv, "team"))
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
 		t.Fatalf("revoked principal = %d %q, want a redirect to sign in", rec.Code, rec.Header().Get("Location"))
 	}
@@ -253,12 +286,9 @@ func TestGroupRecheckGivesNewAdminNoAdminTier(t *testing.T) {
 	if err := srv.store.AddGroupMember(ctx, "team", "user@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	rec := c.get("/verify", requireGroups("team"))
+	rec := c.get("/verify", groupGuard(t, srv, "team"))
 	if rec.Code != http.StatusOK || authz.HasGroup(rec.Header().Get("Remote-Groups"), "admin") {
 		t.Fatalf("new admin on a group route = %d groups=%q, want 200 without admin", rec.Code, rec.Header().Get("Remote-Groups"))
-	}
-	if rec := c.get("/verify", requireGroups("admin")); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
-		t.Fatalf("new admin on an admin route: loc=%q, want the admin door", rec.Header().Get("Location"))
 	}
 }
 
@@ -274,7 +304,7 @@ func TestGroupRecheckKeepsGuestKind(t *testing.T) {
 	if err := srv.store.AddGroupMember(ctx, "applicants", "stranger@other.org"); err != nil {
 		t.Fatal(err)
 	}
-	if rec := c.get("/verify", requireGroups("applicants")); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", groupGuard(t, srv, "applicants")); rec.Code != http.StatusOK {
 		t.Fatalf("guest added to group = %d, want 200", rec.Code)
 	}
 	after := sessionOf(t, srv, c)
@@ -293,7 +323,7 @@ func TestGroupRecheckSkipsBreakGlass(t *testing.T) {
 	if rec := c.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan = %d", rec.Code)
 	}
-	rec := c.get("/verify", requireGroups("bg_other"))
+	rec := c.get("/verify", groupGuard(t, srv, "bg_other"))
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/denied") {
 		t.Fatalf("break-glass on another group = %d %q, want /denied", rec.Code, rec.Header().Get("Location"))
 	}
@@ -301,7 +331,7 @@ func TestGroupRecheckSkipsBreakGlass(t *testing.T) {
 		t.Errorf("break-glass session renewed or cleared: %q", rec.Header().Get("Set-Cookie"))
 	}
 	// The card still works on its own group.
-	if rec := c.get("/verify", requireGroups("bg_ward")); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", groupGuard(t, srv, "bg_ward")); rec.Code != http.StatusOK {
 		t.Errorf("break-glass on its group = %d, want 200", rec.Code)
 	}
 }
@@ -318,7 +348,7 @@ func TestGroupRecheckRefusesOnDatabaseError(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
 	srv.store = groupsReadFails{srv.store}
-	rec := c.get("/verify", requireGroups("team"))
+	rec := c.get("/verify", groupGuard(t, srv, "team"))
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/denied") {
 		t.Fatalf("db error = %d %q, want /denied", rec.Code, rec.Header().Get("Location"))
 	}
@@ -345,7 +375,7 @@ func TestGroupRecheckRemembersUnchanged(t *testing.T) {
 	n := 0
 	srv.store = countingGroups{srv.store, &n}
 	for i := 0; i < 5; i++ {
-		c.get("/verify", requireGroups("finance"))
+		c.get("/verify", groupGuard(t, srv, "finance"))
 	}
 	if n != 1 {
 		t.Errorf("group reads for 5 refusals = %d, want 1", n)

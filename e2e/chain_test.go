@@ -312,8 +312,9 @@ func TestChain(t *testing.T) {
 	t.Run("an unauthenticated request is sent to sign in, with its destination", func(t *testing.T) {
 		r := newBrowser(t).get("https://app."+domain+"/secret?q=1", nil)
 		want := authHost + "/login?rd=" + url.QueryEscape("https://app."+domain+"/secret?q=1")
-		if r.status != http.StatusFound || r.location() != want {
-			t.Fatalf("got %d to %q, want 302 to %q", r.status, r.location(), want)
+		// The role guard's hint follows; see roleLoginHint.
+		if r.status != http.StatusFound || !strings.HasPrefix(r.location(), want+"&") {
+			t.Fatalf("got %d to %q, want 302 to %q and the guard's hint", r.status, r.location(), want)
 		}
 	})
 
@@ -329,9 +330,9 @@ func TestChain(t *testing.T) {
 	t.Run("forged identity and rule headers do not admit a visitor with no session", func(t *testing.T) {
 		forged := map[string]string{
 			"Remote-User": "boss@admins.example", "Remote-Email": "boss@admins.example",
-			"Remote-Groups": "admin", "Remote-Roles": "admin", "X-Auth-Policy": "any;guests=allow",
+			"Remote-Groups": "admin", "Remote-Roles": "admin", "X-Auth-App": "e2e-open",
 		}
-		for _, host := range []string{"app", "reports", "admin"} {
+		for _, host := range []string{"app", "reports", "roles"} {
 			r := newBrowser(t).get("https://"+host+"."+domain+"/", forged)
 			if r.status != http.StatusFound || !strings.Contains(r.location(), "/login?") {
 				t.Errorf("%s with forged headers: %d to %q", host, r.status, r.location())
@@ -346,6 +347,93 @@ func TestChain(t *testing.T) {
 					t.Errorf("%s handed the app a forged %s: %q", target, k, v)
 				}
 			}
+		}
+	})
+
+	boss := newBrowser(t) // an administrator at a domain no role is given to
+
+	t.Run("an administrator signs in like staff and takes the second step at the admin door", func(t *testing.T) {
+		out := compose(t, "exec", "-T", "auth", "/app", "-totp-enroll", "boss@admins.example")
+		m := regexp.MustCompile(`Setup key:\s+([A-Z2-7]+)`).FindStringSubmatch(out)
+		if m == nil {
+			t.Fatalf("no setup key in enrolment output")
+		}
+		secret := m[1]
+
+		before := mailsTo(t, "boss@admins.example")
+		codePage := boss.requestCode(boss.startAt("https://roles."+domain+"/"), "boss@admins.example", false)
+		code, _ := codeFor(t, "boss@admins.example", before)
+		form := hidden(codePage.body)
+		form.Set("code", code)
+		if r := boss.submit("/verify-code", form); r.status != http.StatusFound {
+			t.Fatalf("after the email code an admin got %d, want 302 straight on", r.status)
+		}
+		// The admin pages send the administrator to the admin door.
+		r := boss.get(authHost+"/admin/", nil)
+		if !strings.HasPrefix(r.location(), authHost+"/totp?rd=") {
+			t.Fatalf("admin pages before the second step: %d to %q, want the admin door", r.status, r.location())
+		}
+		step := boss.get(r.location(), nil)
+		if step.status != http.StatusOK || !strings.Contains(step.body, `action="/totp"`) {
+			t.Fatalf("the admin door: %d", step.status)
+		}
+		wrong := hidden(step.body)
+		wrong.Set("code", "000000")
+		if r := boss.submit("/totp", wrong); r.status != http.StatusUnauthorized {
+			t.Errorf("a wrong authenticator code: %d", r.status)
+		}
+		otpCode, err := totp.GenerateCode(secret, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		right := hidden(step.body)
+		right.Set("code", otpCode)
+		// On a computer off the listed networks, the door offers an admin
+		// passkey held by the computer; "Not now" leads to the admin pages.
+		offer := boss.submit("/totp", right)
+		if offer.status != http.StatusOK || !strings.Contains(offer.body, "Sign in faster on this computer") ||
+			!strings.Contains(offer.body, `data-device="computer"`) ||
+			!strings.Contains(offer.body, `href="`+authHost+`/admin/" id="passkey-skip"`) {
+			t.Fatalf("the right authenticator code: %d, want the computer's admin passkey offer: %.300s", offer.status, offer.body)
+		}
+		if r := boss.get(authHost+"/admin/", nil); r.status != http.StatusOK {
+			t.Fatalf("admin pages after the second step: %d", r.status)
+		}
+	})
+
+	t.Run("the administrator gives the test apps' roles", func(t *testing.T) {
+		page := boss.get(authHost+"/admin/groups/new", nil)
+		csrf := hidden(page.body).Get("csrf")
+		if csrf == "" {
+			t.Fatalf("no form token on the new-group page (%d)", page.status)
+		}
+		admin := func(path string, form url.Values) reply {
+			form.Set("csrf", csrf)
+			return boss.do(http.MethodPost, authHost+path, form, map[string]string{"Origin": authHost, "Sec-Fetch-Site": "same-origin"})
+		}
+		if r := admin("/admin/groups", url.Values{"from": {"new"}, "kind": {"domain"}, "label": {"Department"}, "domains": {"example.org example.net"}}); r.status >= 400 {
+			t.Fatalf("create the domain group: %d: %.300s", r.status, r.body)
+		}
+		if r := admin("/admin/groups", url.Values{"name": {"reports"}, "label": {"Reports"}}); r.status >= 400 {
+			t.Fatalf("create the list: %d", r.status)
+		}
+		for app, holder := range map[string]string{
+			"e2e-app":     "give|user|domain_group|department|0",
+			"e2e-open":    "give|user|guests||0",
+			"e2e-reports": "give|user|list|reports|0",
+		} {
+			if r := admin("/admin/apps/"+app+"/save", url.Values{"c": {holder}}); r.status != http.StatusFound {
+				t.Fatalf("give %s: %d: %.300s", app, r.status, r.body)
+			}
+		}
+		// Without the token a change is refused.
+		bare := boss.do(http.MethodPost, authHost+"/admin/groups", url.Values{"name": {"sneaky"}}, map[string]string{"Origin": authHost, "Sec-Fetch-Site": "same-origin"})
+		if bare.status != http.StatusForbidden {
+			t.Errorf("admin change without a form token: %d", bare.status)
+		}
+		// An administrator at a domain the role is not given to is refused.
+		if r := boss.get("https://app."+domain+"/", nil); !strings.HasPrefix(r.location(), authHost+"/denied?") {
+			t.Errorf("off-domain admin at the staff app: %d to %q", r.status, r.location())
 		}
 	})
 
@@ -365,16 +453,15 @@ func TestChain(t *testing.T) {
 		}
 		alice.setCookie("app."+domain, "app_own", "kept")
 		h := appSees(t, alice.get("https://app."+domain+"/after", map[string]string{
-			"Remote-User": "boss@admins.example", "Remote-Groups": "admin", "X-Auth-Policy": "groups=admin",
+			"Remote-User": "boss@admins.example", "Remote-Groups": "admin", "X-Auth-App": "e2e-reports",
 			"Remote-Roles": "admin",
 		}))
 		if got := h.Get("Remote-User"); got != "alice@example.org" {
 			t.Errorf("app saw Remote-User %q", h["Remote-User"])
 		}
-		// An older guard sends no Remote-Roles, so a client-sent one must not
-		// reach the app: an app that reads Remote-Roles would believe it.
-		if got := h["Remote-Roles"]; len(got) != 0 {
-			t.Errorf("a client-sent Remote-Roles reached the app through an older guard: %q", got)
+		// The app sees the gateway's Remote-Roles only, never the client's.
+		if got := h["Remote-Roles"]; len(got) != 1 || got[0] != "user" {
+			t.Errorf("app saw Remote-Roles %q, want exactly [user]", got)
 		}
 		if got := h["Remote-Groups"]; len(got) != 1 || got[0] != "user" {
 			t.Errorf("app saw Remote-Groups %q, want exactly [user]", got)
@@ -440,8 +527,8 @@ func TestChain(t *testing.T) {
 
 	t.Run("each guard admits and refuses as its rule says", func(t *testing.T) {
 		admitted := map[string]bool{
-			"app": true, "staff": true, "public": true, "mixed": true,
-			"reports": false, "admin": false, "either": false, "broken": false, "open": true,
+			"app": true, "public": true, "mixed": true, "open": true,
+			"reports": false, "broken": false,
 		}
 		for host, want := range admitted {
 			r := alice.get("https://"+host+"."+domain+"/", nil)
@@ -458,7 +545,7 @@ func TestChain(t *testing.T) {
 	})
 
 	t.Run("a forged rule header cannot widen a guard", func(t *testing.T) {
-		r := alice.get("https://reports."+domain+"/", map[string]string{"X-Auth-Policy": "any"})
+		r := alice.get("https://reports."+domain+"/", map[string]string{"X-Auth-App": "e2e-app", "X-Auth-Role": "user"})
 		if !strings.HasPrefix(r.location(), authHost+"/denied?") {
 			t.Fatalf("reports with a forged rule: %d to %q", r.status, r.location())
 		}
@@ -516,7 +603,7 @@ func TestChain(t *testing.T) {
 	t.Run("an address at the wrong domain is declined before a code is sent", func(t *testing.T) {
 		b := newBrowser(t)
 		before := mailsTo(t, "bob@outside.example")
-		r := b.requestCode(b.startAt("https://staff."+domain+"/"), "bob@outside.example", false)
+		r := b.requestCode(b.startAt("https://app."+domain+"/"), "bob@outside.example", false)
 		if r.status != http.StatusForbidden {
 			t.Fatalf("wrong-domain request: %d", r.status)
 		}
@@ -533,7 +620,7 @@ func TestChain(t *testing.T) {
 		if groups := h.Get("Remote-Groups"); !strings.HasPrefix(groups, "guest") {
 			t.Errorf("guest's groups = %q", groups)
 		}
-		for _, host := range []string{"app", "staff", "reports", "admin", "either"} {
+		for _, host := range []string{"app", "reports", "roles"} {
 			r := g.get("https://"+host+"."+domain+"/", nil)
 			if !strings.HasPrefix(r.location(), authHost+"/denied?") {
 				t.Errorf("guest at %s: %d to %q", host, r.status, r.location())
@@ -541,62 +628,6 @@ func TestChain(t *testing.T) {
 		}
 		if r := g.get(authHost+"/admin/", nil); r.status != http.StatusFound || !strings.Contains(r.location(), "/denied") {
 			t.Errorf("guest reached the admin pages: %d", r.status)
-		}
-	})
-
-	boss := newBrowser(t) // an administrator at a domain no rule names
-
-	t.Run("an administrator signs in like staff and takes the second step at the admin door", func(t *testing.T) {
-		out := compose(t, "exec", "-T", "auth", "/app", "-totp-enroll", "boss@admins.example")
-		m := regexp.MustCompile(`Setup key:\s+([A-Z2-7]+)`).FindStringSubmatch(out)
-		if m == nil {
-			t.Fatalf("no setup key in enrolment output")
-		}
-		secret := m[1]
-
-		before := mailsTo(t, "boss@admins.example")
-		codePage := boss.requestCode(boss.startAt("https://admin."+domain+"/"), "boss@admins.example", false)
-		code, _ := codeFor(t, "boss@admins.example", before)
-		form := hidden(codePage.body)
-		form.Set("code", code)
-		if r := boss.submit("/verify-code", form); r.status != http.StatusFound {
-			t.Fatalf("after the email code an admin got %d, want 302 straight on", r.status)
-		}
-		// The admin-only site sends the administrator to the admin door.
-		r := boss.get("https://admin."+domain+"/", nil)
-		if !strings.HasPrefix(r.location(), authHost+"/totp?rd=") {
-			t.Fatalf("admin site before the second step: %d to %q, want the admin door", r.status, r.location())
-		}
-		step := boss.get(r.location(), nil)
-		if step.status != http.StatusOK || !strings.Contains(step.body, `action="/totp"`) {
-			t.Fatalf("the admin door: %d", step.status)
-		}
-		wrong := hidden(step.body)
-		wrong.Set("code", "000000")
-		if r := boss.submit("/totp", wrong); r.status != http.StatusUnauthorized {
-			t.Errorf("a wrong authenticator code: %d", r.status)
-		}
-		otpCode, err := totp.GenerateCode(secret, time.Now())
-		if err != nil {
-			t.Fatal(err)
-		}
-		right := hidden(step.body)
-		right.Set("code", otpCode)
-		// On a computer off the listed networks, the door offers an admin
-		// passkey held by the computer; "Not now" leads to the admin site.
-		offer := boss.submit("/totp", right)
-		if offer.status != http.StatusOK || !strings.Contains(offer.body, "Sign in faster on this computer") ||
-			!strings.Contains(offer.body, `data-device="computer"`) ||
-			!strings.Contains(offer.body, `href="https://admin.`+domain+`/" id="passkey-skip"`) {
-			t.Fatalf("the right authenticator code: %d, want the computer's admin passkey offer: %.300s", offer.status, offer.body)
-		}
-		h := appSees(t, boss.get("https://admin."+domain+"/", nil))
-		if h.Get("Remote-Groups") != "admin" {
-			t.Errorf("admin's groups = %q", h.Get("Remote-Groups"))
-		}
-		// The domain door refuses an administrator at another domain.
-		if r := boss.get("https://staff."+domain+"/", nil); !strings.HasPrefix(r.location(), authHost+"/denied?") {
-			t.Errorf("off-domain admin at the domain door: %d to %q", r.status, r.location())
 		}
 	})
 
@@ -610,27 +641,13 @@ func TestChain(t *testing.T) {
 	})
 
 	t.Run("an admin change through Caddy reaches a session at its next request", func(t *testing.T) {
-		// The new-group page carries the form token; since the app roles
-		// admin pages, the groups list has no form of its own.
+		if r := alice.get("https://reports."+domain+"/", nil); !strings.HasPrefix(r.location(), authHost+"/denied?") {
+			t.Fatalf("reports before alice is on the list: %d to %q", r.status, r.location())
+		}
 		page := boss.get(authHost+"/admin/groups/new", nil)
-		csrf := hidden(page.body).Get("csrf")
-		if csrf == "" {
-			t.Fatalf("no form token on the new-group page (%d)", page.status)
-		}
-		admin := func(path string, form url.Values) reply {
-			form.Set("csrf", csrf)
-			return boss.do(http.MethodPost, authHost+path, form, map[string]string{"Origin": authHost, "Sec-Fetch-Site": "same-origin"})
-		}
-		if r := admin("/admin/groups", url.Values{"name": {"reports"}, "label": {"Reports"}}); r.status >= 400 {
-			t.Fatalf("create group: %d", r.status)
-		}
-		if r := admin("/admin/groups/reports/members", url.Values{"email": {"alice@example.org"}}); r.status >= 400 {
+		form := url.Values{"csrf": {hidden(page.body).Get("csrf")}, "email": {"alice@example.org"}}
+		if r := boss.do(http.MethodPost, authHost+"/admin/groups/reports/members", form, map[string]string{"Origin": authHost, "Sec-Fetch-Site": "same-origin"}); r.status >= 400 {
 			t.Fatalf("add member: %d", r.status)
-		}
-		// Without the token the same change is refused.
-		bare := boss.do(http.MethodPost, authHost+"/admin/groups", url.Values{"name": {"sneaky"}}, map[string]string{"Origin": authHost, "Sec-Fetch-Site": "same-origin"})
-		if bare.status != http.StatusForbidden {
-			t.Errorf("admin change without a form token: %d", bare.status)
 		}
 		// No waiting for a renewal: a membership change reaches the session
 		// at its next request.
@@ -638,17 +655,14 @@ func TestChain(t *testing.T) {
 		if h.Get("Remote-Groups") != "user,reports" {
 			t.Errorf("alice's groups after renewal = %q", h.Get("Remote-Groups"))
 		}
-		appSees(t, alice.get("https://either."+domain+"/", nil))
 	})
 
 	t.Run("a role guard names its app and role to the gateway and gives the app the roles", func(t *testing.T) {
 		forged := map[string]string{
-			"X-Auth-Policy": "any", "X-Auth-App": "other", "X-Auth-Role": "user",
+			"X-Auth-App": "other", "X-Auth-Role": "user",
 			"Remote-User": "boss@admins.example", "Remote-Roles": "editor",
 		}
-		// No session: sent to sign in as from a role guard. Had the client's
-		// X-Auth-Policy reached the gateway beside the guard's X-Auth-App, the
-		// gateway would have refused the request as misconfigured instead.
+		// No session: sent to sign in as from a role guard.
 		r := newBrowser(t).get("https://roles."+domain+"/", forged)
 		if r.status != http.StatusFound || !strings.HasPrefix(r.location(), authHost+"/login?") || !strings.Contains(r.location(), "rqr=1") {
 			t.Fatalf("role guard without a session: %d to %q, want sign-in for a role guard", r.status, r.location())
@@ -681,7 +695,7 @@ func TestChain(t *testing.T) {
 		if got := h["Remote-Groups"]; len(got) != 1 || got[0] != "user,reports" {
 			t.Errorf("app saw Remote-Groups %q, want exactly [user,reports]", got)
 		}
-		for _, k := range []string{"X-Auth-App", "X-Auth-Role", "X-Auth-Policy"} {
+		for _, k := range []string{"X-Auth-App", "X-Auth-Role"} {
 			if v := h.Get(k); v != "" {
 				t.Errorf("the client's %s reached the app: %q", k, v)
 			}
@@ -698,13 +712,11 @@ func TestChain(t *testing.T) {
 
 	t.Run("the role gates for a static site and a redirect admit only the role's holders", func(t *testing.T) {
 		forged := map[string]string{
-			"X-Auth-Policy": "any", "X-Auth-App": "other", "X-Auth-Role": "user",
+			"X-Auth-App": "other", "X-Auth-Role": "user",
 			"Remote-User": "boss@admins.example", "Remote-Roles": "manager",
 		}
 		// No session, with forged headers: sent to sign in as from a role
-		// guard. Had the client's X-Auth-Policy reached the gateway beside the
-		// gate's X-Auth-App, the gateway would have refused the request as
-		// misconfigured instead.
+		// guard.
 		for _, target := range []string{"https://static." + domain + "/", "https://go." + domain + "/somewhere?x=1"} {
 			r := newBrowser(t).get(target, forged)
 			want := authHost + "/login?rd=" + url.QueryEscape(target)
@@ -731,7 +743,7 @@ func TestChain(t *testing.T) {
 		// A role the guard does not name, sent by the client, opens nothing:
 		// the administrator, who holds no role in the app, is still refused.
 		for _, host := range []string{"static", "go"} {
-			if r := boss.get("https://"+host+"."+domain+"/", map[string]string{"X-Auth-Role": "user", "X-Auth-Policy": "any"}); !strings.HasPrefix(r.location(), authHost+"/denied?") {
+			if r := boss.get("https://"+host+"."+domain+"/", map[string]string{"X-Auth-Role": "user"}); !strings.HasPrefix(r.location(), authHost+"/denied?") {
 				t.Errorf("%s for a person without the role: %d to %q", host, r.status, r.location())
 			}
 		}
@@ -752,7 +764,7 @@ func TestChain(t *testing.T) {
 	})
 
 	t.Run("the gateway's check endpoint reveals nothing to a visitor on the public host", func(t *testing.T) {
-		r := newBrowser(t).get(authHost+"/verify", map[string]string{"X-Auth-Policy": "any", "X-Forwarded-Host": "app." + domain})
+		r := newBrowser(t).get(authHost+"/verify", map[string]string{"X-Auth-App": "e2e-app", "X-Forwarded-Host": "app." + domain})
 		if r.header.Get("Remote-User") != "" || r.status == http.StatusOK {
 			t.Errorf("an anonymous /verify on the public host answered %d with Remote-User %q", r.status, r.header.Get("Remote-User"))
 		}
@@ -857,7 +869,7 @@ func TestChain(t *testing.T) {
 		if r.status != http.StatusFound {
 			t.Fatalf("sign out: %d", r.status)
 		}
-		for _, host := range []string{"app", "staff", "reports"} {
+		for _, host := range []string{"app", "open", "reports"} {
 			if r := alice.get("https://"+host+"."+domain+"/", nil); !strings.Contains(r.location(), "/login?") {
 				t.Errorf("%s after sign-out: %d to %q", host, r.status, r.location())
 			}

@@ -17,34 +17,23 @@ auth.{$DOMAIN} {
 	}
 }
 
-# Reusable access guards. A protected app adds ONE import line -- the LAST
-# argument is the app's upstream address. The guard runs forward_auth and then
-# reverse_proxies to that upstream with the shared session cookie stripped (see
-# strip_auth_cookie), so an app needs no separate reverse_proxy line. On an
-# unauthenticated request /verify returns a 302 to the login page; on a valid
-# session it returns 200 and Caddy forwards Remote-User / Remote-Email /
-# Remote-Groups upstream. Each guard deletes any client-supplied Remote-* up front
-# (import strip_client_identity) and forward_auth's copy_headers re-adds the
-# authoritative values from the auth response, so the app can never see a spoofed
-# identity header. A user who is signed in but not allowed on THIS app is sent to
-# a friendly "no access" page with a sign-in link -- never bounced back to login.
+# Reusable access guards, by app role. A protected app adds ONE import line,
+# naming its app and the role the path needs; the LAST argument of the role
+# guard is the app's upstream address. The guard asks the gateway at /verify
+# and then reverse_proxies to that upstream with the shared session cookie
+# stripped (see strip_auth_cookie), so an app needs no separate reverse_proxy
+# line. On an unauthenticated request /verify returns a 302 to the login page;
+# on a session that holds the role it returns 200 and Caddy forwards
+# Remote-User / Remote-Email / Remote-Groups / Remote-Roles upstream. Each guard
+# deletes any client-supplied Remote-* and rule headers up front (import
+# strip_client_identity), so the app can never see a spoofed identity header.
+# A person who is signed in but holds no role in THIS app is sent to a
+# friendly "no access" page with a sign-in link -- never bounced back to login.
 #
 # NOTE: keep comments in .caddy files free of braces -- the scaffold's
 # run-caddy.sh counts braces when assembling the Caddyfile.
 #
-# Usage (domains and groups are space/comma-separated; UPSTREAM is host:port):
-#   import protected UPSTREAM                       -- any signed-in user; NOT break-glass, NOT guests
-#   import protected_open UPSTREAM                  -- any signed-in user AND guests: strangers who
-#                                                      signed in through a host listed in
-#                                                      OPEN_REGISTRATION_HOSTS. For the one public app.
-#   import protected_domains "rch.org.au" UPSTREAM  -- signed-in user at a listed email domain.
-#                                                      The login page hints the domain and a
-#                                                      wrong-domain address is declined early.
-#   import protected_groups  "bg_stroke" UPSTREAM   -- members of a listed group, OR a
-#                                                      break-glass card targeting that group
-#   import protected_admin UPSTREAM                 -- admins only; for a separate admin door
-#   import protected_access  "rch.org.au" "dash_guests" UPSTREAM
-#                                                   -- in a listed domain OR a listed group
+# Usage (UPSTREAM is host:port):
 #   import role "enquiries" "admin" UPSTREAM        -- a person who holds that role in that app,
 #                                                      as the app roles admin pages assign it.
 #                                                      Use "user" for the app's ordinary role,
@@ -56,218 +45,33 @@ auth.{$DOMAIN} {
 #                                                      block's own root and file_server.
 #   import role_redir "numbers" "user" "https://example.org"
 #                                                   -- the role form for a site that only redirects.
-# e.g.  import protected dashboard:3000
 #
 # For a per-route entrance, put the import inside a handle block (the upstream
-# argument still rides on the import), e.g. an /admin door plus a domain gate on
-# the same host -- see the worked example in deploy/standalone/Caddyfile.
+# argument still rides on the import), e.g. an /admin door for the app's admin
+# role beside its user role on the same host -- see "Per-app access" in the
+# README.
 #
-# Any route that declares a domain (protected_domains, or the domain side of
-# protected_access) gives the login hint + early decline by that domain. A
-# group-only route (protected_groups, protected_admin) declares no domain, so it
-# neither hints nor declines -- that is the door for people who can't match the
-# domain. The domain door declines off-domain users (admins included), so give
-# admins their own route via  import protected_admin  rather than the main gate.
-# Admins whose email matches the app's domain need nothing extra; they pass it.
+# The app and role must be declared in the gateway's app roles manifest
+# (APP_ROLES_FILE), and the guard's host must be one of the app's hosts there,
+# or every request is refused. A guard that names no app is refused too: every
+# signed-in person is sent to the "no access" page. Always use these snippets
+# rather than hand-rolling forward_auth.
 #
-# Break-glass QR sessions are deny-by-default: they reach ONLY apps/routes whose
-# group list names the card's target group, so an emergency card is scoped to
-# its location. `import protected` deliberately excludes them.
-#
-# Guest sessions are deny-by-default in the same way. A guest is an address the
-# allow-list does not cover, signed in through an open-registration host. It
-# reaches only a route that says guests=allow, which is protected_open, or a
-# route whose group list names a group an admin has placed that guest in. Every
-# other guard, the bare `import protected` included, keeps guests out, so an app
-# that forgets to gate itself stays closed to strangers.
-#
-# Each guard declares its requirement in ONE header, X-Auth-Policy, set with
-# header_up. Because header_up REPLACES the header, a client can't inject or
-# widen it -- whatever it sends is overwritten. There is no per-guard "delete the
-# rest" list to keep in sync: new policy fields go inside X-Auth-Policy, so a
-# forgotten strip can't silently widen access. Always use these snippets rather
-# than hand-rolling forward_auth; a custom guard that omits X-Auth-Policy is
-# refused (every signed-in user is sent to the "no access" page), and the auth
-# service logs a warning if it still sends the old X-Auth-Require-* headers.
-#
-# X-Auth-Policy grammar: ";"-separated fields. "domains=<list>" and
-# "groups=<list>" each hold a NON-EMPTY space/comma-separated allow-list; a
-# bare "any" (on its own) is the plain-protected sentinel; "guests=allow"
-# additionally admits guest sessions, and only that exact value counts. The
-# gateway parses this strictly and REFUSES anything else -- an empty list
-# ("domains="), a misspelled or unknown field ("gruops=admin"), "any" combined
-# with a list, or no header at all -- by sending every signed-in user to the
-# "no access" page. A typo in a guard can therefore never widen it to "any
-# signed-in user". The hint label and alt-login link are UX only (the alt URL
-# is re-validated server-side to be within the domain), so they ride in their
-# own plain headers.
-
-# The auth gate every guard imports. It is the expanded form of Caddy's
-# forward_auth (method GET, rewrite to /verify, the two X-Forwarded-* headers
-# and the Remote-* copy on a 2xx) with one addition forward_auth cannot
-# express: when /verify answers 2xx AND sets a renewed session cookie, that
-# Set-Cookie is added to the response the browser receives. forward_auth's
-# copy_headers only copies into the upstream request, so a sliding renewal
-# issued at /verify never reached the browser and every session simply ran
-# out at its original expiry. Only the gateway's own cookie is forwarded
-# (matched by name), and it is ADDED, so an app's own Set-Cookie survives.
-# Args: policy. The labeled and alt variants add their UX header.
-(auth_gate) {
-	reverse_proxy auth:8080 {
-		import auth_gate_common
-		header_up X-Auth-Policy "{args[0]}"
-	}
-}
-
-# Args: policy, display label.
-(auth_gate_labeled) {
-	reverse_proxy auth:8080 {
-		import auth_gate_common
-		header_up X-Auth-Policy "{args[0]}"
-		header_up X-Auth-Domain-Label "{args[1]}"
-	}
-}
-
-# Args: policy, alt-login URL, alt-login label.
-(auth_gate_alt) {
-	reverse_proxy auth:8080 {
-		import auth_gate_common
-		header_up X-Auth-Policy "{args[0]}"
-		header_up X-Auth-Alt-Login "{args[1]}"
-		header_up X-Auth-Alt-Label "{args[2]}"
-	}
-}
-
-# Shared body of the gate: see auth_gate. The renewed branch is listed first
+# The role guard's gate is the expanded form of Caddy's forward_auth (method
+# GET, rewrite to /verify, the two X-Forwarded-* headers and the Remote-* copy
+# on a 2xx) with one addition forward_auth cannot express: when /verify answers
+# 2xx AND sets a renewed session cookie, that Set-Cookie is added to the
+# response the browser receives. forward_auth's copy_headers only copies into
+# the upstream request, so a sliding renewal issued at /verify would never reach
+# the browser and every session would simply run out at its original expiry.
+# Only the gateway's own cookie is forwarded (matched by name), and it is ADDED,
+# so an app's own Set-Cookie survives. The renewed branch is listed first
 # because the first matching handle_response wins.
-(auth_gate_common) {
-	method GET
-	rewrite /verify
-	header_up X-Forwarded-Method {method}
-	header_up X-Forwarded-Uri {uri}
-	@renewed {
-		status 2xx
-		header Set-Cookie vps_auth_session=*
-	}
-	handle_response @renewed {
-		request_header Remote-User {http.reverse_proxy.header.Remote-User}
-		request_header Remote-Email {http.reverse_proxy.header.Remote-Email}
-		request_header Remote-Groups {http.reverse_proxy.header.Remote-Groups}
-		header +Set-Cookie {http.reverse_proxy.header.Set-Cookie}
-	}
-	@allowed status 2xx
-	handle_response @allowed {
-		request_header Remote-User {http.reverse_proxy.header.Remote-User}
-		request_header Remote-Email {http.reverse_proxy.header.Remote-Email}
-		request_header Remote-Groups {http.reverse_proxy.header.Remote-Groups}
-	}
-}
 
-(protected) {
-	route {
-		import strip_client_identity
-		import auth_gate "any"
-		reverse_proxy {args[0]} {
-			import strip_auth_cookie
-		}
-	}
-}
-
-# Like protected, but also admits guests. Use it for the one app that is meant
-# for the public -- an application form, a sign-up page -- and list that app's
-# host in OPEN_REGISTRATION_HOSTS so strangers can sign in there. Leave every
-# other app on protected or a narrower guard. The app sees Remote-Groups
-# beginning "guest" for a guest and "user" or "admin" for everyone else, and
-# should treat the two accordingly.
-(protected_open) {
-	route {
-		import strip_client_identity
-		import auth_gate "any;guests=allow"
-		reverse_proxy {args[0]} {
-			import strip_auth_cookie
-		}
-	}
-}
-
-(protected_domains) {
-	route {
-		import strip_client_identity
-		import auth_gate "domains={args[0]}"
-		reverse_proxy {args[1]} {
-			import strip_auth_cookie
-		}
-	}
-}
-
-# Like protected_domains, but shows a friendly label instead of enumerating the
-# domains (handy when the list is long). Args: domains, label, upstream. The
-# label slots into "This page is for <label> email addresses", e.g.
-#   import protected_domains_labeled "rch.org.au monashhealth.org svha.org.au" "an approved Victorian health service" clinical:3000
-# The full domain list still governs the actual hint/decline; the label is
-# display only.
-(protected_domains_labeled) {
-	route {
-		import strip_client_identity
-		import auth_gate_labeled "domains={args[0]}" "{args[1]}"
-		reverse_proxy {args[2]} {
-			import strip_auth_cookie
-		}
-	}
-}
-
-# Like protected_domains, but also offers a small "sign in another way" link on
-# the login/decline page for users who can't match the domain (e.g. admins sent
-# to a separate door). Args: domains, alt-login URL (absolute https within the
-# server domain), link label, upstream. The URL is re-validated server-side
-# before it is shown.
-(protected_domains_alt) {
-	route {
-		import strip_client_identity
-		import auth_gate_alt "domains={args[0]}" "{args[1]}" "{args[2]}"
-		reverse_proxy {args[3]} {
-			import strip_auth_cookie
-		}
-	}
-}
-
-(protected_groups) {
-	route {
-		import strip_client_identity
-		import auth_gate "groups={args[0]}"
-		reverse_proxy {args[1]} {
-			import strip_auth_cookie
-		}
-	}
-}
-
-# Admin door: admins only, no login hint or early decline. Use on a separate
-# route/host so the app's main door can stay a pure domain gate.
-(protected_admin) {
-	route {
-		import strip_client_identity
-		import auth_gate "groups=admin"
-		reverse_proxy {args[0]} {
-			import strip_auth_cookie
-		}
-	}
-}
-
-(protected_access) {
-	route {
-		import strip_client_identity
-		import auth_gate "domains={args[0]};groups={args[1]}"
-		reverse_proxy {args[2]} {
-			import strip_auth_cookie
-		}
-	}
-}
-
-# The gate for a role guard. It is auth_gate_common with two differences: it
-# names the app and the role in X-Auth-App and X-Auth-Role instead of sending
-# X-Auth-Policy, which it removes, because the gateway refuses a request that
-# carries both; and it also copies Remote-Roles, the roles the person holds in
-# the app, to the upstream. Remote-Groups is still copied until the old
-# guards are retired. Args: app, role.
+# The gate for a role guard: it names the app and the role in X-Auth-App and
+# X-Auth-Role, and copies Remote-Roles, the roles the person holds in the app,
+# to the upstream. Remote-Groups is still copied until no app reads it.
+# Args: app, role.
 (auth_gate_role) {
 	reverse_proxy auth:8080 {
 		method GET
@@ -276,7 +80,6 @@ auth.{$DOMAIN} {
 		header_up X-Forwarded-Uri {uri}
 		header_up X-Auth-App "{args[0]}"
 		header_up X-Auth-Role "{args[1]}"
-		header_up -X-Auth-Policy
 		@renewed {
 			status 2xx
 			header Set-Cookie vps_auth_session=*
@@ -303,15 +106,13 @@ auth.{$DOMAIN} {
 # The app and role must be declared in the gateway's app roles manifest, or
 # every request is refused. The guard deletes the client's copies of every
 # identity and rule header first, Remote-Roles and the role headers included,
-# so the app sees only the gateway's answer. Caddy cannot give one snippet
-# two signatures, so this guard is named role rather than protected.
+# so the app sees only the gateway's answer.
 (role) {
 	route {
 		import strip_client_identity
 		request_header -Remote-Roles
 		request_header -X-Auth-App
 		request_header -X-Auth-Role
-		request_header -X-Auth-Policy
 		import auth_gate_role "{args[0]}" "{args[1]}"
 		reverse_proxy {args[2]} {
 			import strip_auth_cookie
@@ -342,7 +143,6 @@ auth.{$DOMAIN} {
 		request_header -Remote-Roles
 		request_header -X-Auth-App
 		request_header -X-Auth-Role
-		request_header -X-Auth-Policy
 		import auth_gate_role "{args[0]}" "{args[1]}"
 		@uncacheable not path_regexp (?:\.[0-9a-f]{8,}|_hu_[0-9a-f]{12,16})\.(?:css|js|mjs|woff2?|ttf|otf|svg|png|jpe?g|webp|avif|gif|ico)$
 		header @uncacheable ?Cache-Control "private, no-cache"
@@ -363,7 +163,6 @@ auth.{$DOMAIN} {
 		request_header -Remote-Roles
 		request_header -X-Auth-App
 		request_header -X-Auth-Role
-		request_header -X-Auth-Policy
 		import auth_gate_role "{args[0]}" "{args[1]}"
 		redir {args[2]}
 	}

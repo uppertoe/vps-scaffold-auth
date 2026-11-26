@@ -44,8 +44,12 @@ services:
     env_file:
       - path: ./.env
         required: false # keep `docker compose config` valid before you create .env
+    environment:
+      # The demo app's roles; give its User role on the admin pages.
+      - APP_ROLES_FILE=/etc/vps-auth/app-roles.tsv
     volumes:
       - auth_data:/data # SQLite: OTP codes, TOTP secrets, groups, break-glass codes
+      - ./app-roles.tsv:/etc/vps-auth/app-roles.tsv:ro
     networks: [web]
     # CIS Docker §5 runtime hardening. The only writable surface the binary needs
     # is /data + /tmp; it binds an internal :8080 and needs no extra capabilities.

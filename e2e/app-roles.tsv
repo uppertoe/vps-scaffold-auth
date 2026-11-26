@@ -6,3 +6,15 @@ e2e	manager	Manager	roles.{$DOMAIN},static.{$DOMAIN},go.{$DOMAIN}
 e2e	editor	Editor	editors.{$DOMAIN}
 @label	e2e	End-to-end test app
 @path	e2e	*	manager
+
+e2e-app	user	User	app.{$DOMAIN},mixed.{$DOMAIN}
+@label	e2e-app	Staff app
+@path	e2e-app	*	user
+
+e2e-open	user	User	open.{$DOMAIN}
+@label	e2e-open	Public app
+@path	e2e-open	*	user
+
+e2e-reports	user	User	reports.{$DOMAIN}
+@label	e2e-reports	Reports
+@path	e2e-reports	*	user

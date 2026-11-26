@@ -54,10 +54,9 @@ jobs:
       - name: Fuzz the access decisions
         run: |
           set -e
-          for f in FuzzValidateRedirect FuzzCanAccessApp FuzzBuildGroupsKeepsRoleFirst; do
+          for f in FuzzValidateRedirect FuzzBuildGroupsKeepsRoleFirst; do
             go test ./internal/authz/ -run '^$' -fuzz "^$f\$" -fuzztime 30s
           done
-          go test ./internal/server/ -run '^$' -fuzz '^FuzzParsePolicy$' -fuzztime 30s
           go test ./internal/passkey/ -run '^$' -fuzz '^FuzzVerifyNeverAcceptsWithoutTheKey$' -fuzztime 30s
 
   e2e:

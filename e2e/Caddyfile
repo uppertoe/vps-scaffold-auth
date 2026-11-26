@@ -10,36 +10,22 @@
 
 import /etc/caddy/auth.caddy
 
-# Any signed-in user. Also sets an app cookie of its own, so the test can
-# prove that the gateway's renewed cookie is ADDED beside it, not swapped.
+# Staff: the User role of the e2e-app app, which the test gives to a domain
+# group. Also sets an app cookie of its own, so the test can prove that the
+# gateway's renewed cookie is ADDED beside it, not swapped.
 app.{$DOMAIN} {
 	header +Set-Cookie "app_own=set-by-app; Path=/"
-	import protected whoami:80
+	import role "e2e-app" "user" whoami:80
 }
 
-# The one app open to the public: guests admitted.
+# The one app open to the public: its User role is given to guests.
 open.{$DOMAIN} {
-	import protected_open whoami:80
+	import role "e2e-open" "user" whoami:80
 }
 
-# Staff at one domain.
-staff.{$DOMAIN} {
-	import protected_domains "example.org" whoami:80
-}
-
-# Members of a group.
+# Members of a list.
 reports.{$DOMAIN} {
-	import protected_groups "reports" whoami:80
-}
-
-# Administrators only.
-admin.{$DOMAIN} {
-	import protected_admin whoami:80
-}
-
-# A domain OR a group.
-either.{$DOMAIN} {
-	import protected_access "example.net" "reports" whoami:80
+	import role "e2e-reports" "user" whoami:80
 }
 
 # A role guard: the Manager role of the e2e app, which the test gives to one
@@ -66,11 +52,22 @@ go.{$DOMAIN} {
 	import role_redir "e2e" "manager" "https://example.org{uri}"
 }
 
-# A hand-rolled guard with a misspelt rule: must close, not open.
+# A hand-rolled guard with a misspelt header: it names no app, so the
+# gateway refuses it. It must close, not open.
 broken.{$DOMAIN} {
 	route {
 		import strip_client_identity
-		import auth_gate "gruops=admin"
+		reverse_proxy auth:8080 {
+			method GET
+			rewrite /verify
+			header_up X-Forwarded-Method {method}
+			header_up X-Forwarded-Uri {uri}
+			header_up X-Auth-Ap "e2e-app"
+			@allowed status 2xx
+			handle_response @allowed {
+				request_header Remote-User {http.reverse_proxy.header.Remote-User}
+			}
+		}
 		reverse_proxy whoami:80 {
 			import strip_auth_cookie
 		}
@@ -94,6 +91,6 @@ mixed.{$DOMAIN} {
 		}
 	}
 	handle {
-		import protected_domains "example.org" whoami:80
+		import role "e2e-app" "user" whoami:80
 	}
 }

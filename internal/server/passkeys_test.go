@@ -100,8 +100,8 @@ func postAssertion(c *client, id, cd, ad, sig, handle []byte) *httptest.Response
 	}, phone)
 }
 
-func verifyAny(c *client) *httptest.ResponseRecorder {
-	return c.get("/verify", map[string]string{"X-Auth-Policy": "any"})
+func verifyAny(t *testing.T, srv *Server, c *client) *httptest.ResponseRecorder {
+	return c.get("/verify", anyGuard(t, srv))
 }
 
 func readSession(t *testing.T, srv *Server, c *client) *session.Identity {
@@ -131,7 +131,7 @@ func TestPasskeyOfferRegisterAndSignIn(t *testing.T) {
 	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self'") {
 		t.Fatalf("offer page CSP does not allow passkey.js: %q", csp)
 	}
-	if verifyAny(c).Code != http.StatusOK {
+	if verifyAny(t, srv, c).Code != http.StatusOK {
 		t.Fatal("the session is not issued alongside the offer")
 	}
 	a := passkeytest.New()
@@ -153,7 +153,7 @@ func TestPasskeyOfferRegisterAndSignIn(t *testing.T) {
 	if id.Email != "user@example.com" || id.PK != list[0].ID || id.TOTP {
 		t.Fatalf("session after passkey sign-in: %+v", id)
 	}
-	if verifyAny(c2).Code != http.StatusOK {
+	if verifyAny(t, srv, c2).Code != http.StatusOK {
 		t.Fatal("passkey session refused at /verify")
 	}
 }
@@ -259,14 +259,14 @@ func TestRemovingAPasskeyEndsItsSessions(t *testing.T) {
 				}
 			}
 			// The passkey's session ends at once, not at its renewal.
-			if rec := verifyAny(viaPasskey); rec.Code != http.StatusFound {
+			if rec := verifyAny(t, srv, viaPasskey); rec.Code != http.StatusFound {
 				t.Fatalf("a removed passkey's session still works: %d", rec.Code)
 			}
 			srv.now = func() time.Time { return start.Add(31 * time.Minute) }
-			if rec := verifyAny(viaPasskey); rec.Code != http.StatusFound {
+			if rec := verifyAny(t, srv, viaPasskey); rec.Code != http.StatusFound {
 				t.Fatalf("a removed passkey's session renewed: %d", rec.Code)
 			}
-			if rec := verifyAny(owner); rec.Code != http.StatusOK {
+			if rec := verifyAny(t, srv, owner); rec.Code != http.StatusOK {
 				t.Fatalf("the email-code session ended with the passkey: %d", rec.Code)
 			}
 			if signInWith(t, newClient(t, srv.Handler()), a).Code != http.StatusUnauthorized {

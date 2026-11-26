@@ -64,7 +64,6 @@ type Server struct {
 	branding          brandingCache  // public branding snapshot (see logo_cache.go)
 	appRoles          roles.Manifest // each app's roles (APP_ROLES_FILE, see app_roles.go)
 	roleCache         roleCache      // role assignments as /verify reads them
-	olderGuards       olderGuardWarning
 }
 
 // New constructs a Server from its dependencies.
@@ -130,13 +129,12 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	s.totpReplay = newTOTPReplay(func() time.Time { return s.now() })
 	s.passkeyChallenges = newChallengeGuard(st, func() time.Time { return s.now() })
 	if s.policy.OpenRegistration() {
-		log.Printf("authz: OPEN REGISTRATION enabled (ALLOWED_EMAIL_DOMAINS contains %q): any email verified by one-time code is admitted as a user. Private apps behind this auth must gate by group or domain, not a bare `import protected`. On a shared server prefer OPEN_REGISTRATION_HOSTS, which opens one app only.", authz.Wildcard)
+		log.Printf("authz: OPEN REGISTRATION enabled (ALLOWED_EMAIL_DOMAINS contains %q): any email verified by one-time code is admitted as a user. On a shared server prefer OPEN_REGISTRATION_HOSTS, which opens one app only.", authz.Wildcard)
 	}
 	if len(cfg.OpenRegistrationHosts) > 0 {
-		log.Printf("authz: guest sign-in open for %s: an OTP-verified address that is not known (the allow-list, or without one a domain group) and holds no app role becomes a guest, admitted only by guards that set guests=allow (protected_open).", strings.Join(cfg.OpenRegistrationHosts, ", "))
+		log.Printf("authz: guest sign-in open for %s: an OTP-verified address that is not known (the allow-list, or without one a domain group) and holds no app role becomes a guest, admitted only by app roles held by guests.", strings.Join(cfg.OpenRegistrationHosts, ", "))
 	}
 	s.logWhoSignsIn(context.Background())
-	s.warnOlderGuards()
 	s.logDomainGroupReads(context.Background())
 	s.clearStaleReaderApprovals(context.Background())
 	s.handler = s.routes()

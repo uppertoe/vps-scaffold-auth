@@ -92,7 +92,7 @@ func TestSignInCompletesForEveryBrowserProfile(t *testing.T) {
 			if rec.Code != http.StatusFound || c.cookies[session.SessionCookie] == nil {
 				t.Fatalf("/verify-code = %d, session=%v; want 302 with a session", rec.Code, c.cookies[session.SessionCookie] != nil)
 			}
-			if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
+			if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
 				t.Fatalf("/verify after sign-in = %d, want 200", rec.Code)
 			}
 			if rec := c.postWith("/logout", nil, p.headers); rec.Code != http.StatusFound {
