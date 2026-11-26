@@ -141,7 +141,7 @@ func TestComputerPasskeyRegisterAndSignIn(t *testing.T) {
 	if id.Email != "user@example.com" || id.PK != list[0].ID {
 		t.Fatalf("session after a computer's passkey sign-in: %+v", id)
 	}
-	if verifyAny(b).Code != http.StatusOK {
+	if verifyAny(t, srv, b).Code != http.StatusOK {
 		t.Fatal("the computer's passkey session refused at /verify")
 	}
 	// The passkeys page names the row, with the kind of device.
@@ -357,7 +357,7 @@ func TestComputerPasskeyRemoval(t *testing.T) {
 	if rec := b.postWith("/passkeys/"+strconv.FormatInt(pcID, 10)+"/remove", url.Values{"csrf": {csrf}}, computer); rec.Code != http.StatusFound {
 		t.Fatalf("remove: %d", rec.Code)
 	}
-	if verifyAny(b).Code != http.StatusFound {
+	if verifyAny(t, srv, b).Code != http.StatusFound {
 		t.Fatal("the removed passkey's session still works")
 	}
 	// The removal drops the passkey from this browser's list at once. It

@@ -65,56 +65,6 @@ func browserView(s string) string {
 	return strings.ReplaceAll(s, `\`, "/")
 }
 
-// FuzzCanAccessApp checks the access decision's three containment rules on
-// arbitrary inputs:
-//   - a break-glass session is admitted only through a group it carries;
-//   - a guest is admitted only where guests are allowed, or through a group;
-//   - with a non-empty rule, anyone else is admitted only by a listed domain
-//     or a listed group.
-func FuzzCanAccessApp(f *testing.F) {
-	f.Add("ops@rch.org.au", "bg_lab", true, false, "rch.org.au", "", false)
-	f.Add("breakglass:ops@rch.org.au", "user", true, false, "rch.org.au", "user", false)
-	f.Add("a@stranger.net", "guest", false, true, "stranger.net", "", false)
-	f.Add("a@stranger.net", "guest,reports", false, true, "", "reports", false)
-	f.Add("a@rch.org.au", "user", false, false, "", "", false)
-	f.Add("a@rch.org.au", "user,x", false, false, "mcri.edu.au", "x,admin", true)
-	f.Add("a@RCH.org.au", "user", false, false, "rch.org.au", "", false)
-	f.Fuzz(func(t *testing.T, email, groups string, bg, guest bool, doms, grps string, allowGuests bool) {
-		if !CanAccessApp(email, groups, bg, guest, doms, grps, allowGuests) {
-			return
-		}
-		viaGroup := false
-		for _, g := range splitList(grps) {
-			if HasGroup(groups, g) {
-				viaGroup = true
-			}
-		}
-		viaDomain := false
-		if d := DomainOf(email); d != "" {
-			for _, want := range splitList(doms) {
-				if d == want {
-					viaDomain = true
-				}
-			}
-		}
-		emptyRule := strings.TrimSpace(doms) == "" && strings.TrimSpace(grps) == ""
-		switch {
-		case guest:
-			if !allowGuests && !viaGroup {
-				t.Fatalf("guest %q admitted without guests=allow or a group (doms %q, grps %q)", email, doms, grps)
-			}
-		case bg:
-			if !viaGroup {
-				t.Fatalf("break-glass %q (groups %q) admitted without a listed group (doms %q, grps %q)", email, groups, doms, grps)
-			}
-		case !emptyRule:
-			if !viaDomain && !viaGroup {
-				t.Fatalf("%q (groups %q) admitted by neither a listed domain nor group (doms %q, grps %q)", email, groups, doms, grps)
-			}
-		}
-	})
-}
-
 // FuzzBuildGroupsKeepsRoleFirst: the role is always the first entry of the
 // groups header, and no group name that passes ValidGroupName can add a
 // reserved role to the set.

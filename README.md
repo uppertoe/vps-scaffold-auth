@@ -24,8 +24,8 @@ federation protocol, just a one-time code and an HMAC-signed cookie.
 
 ```
 browser ──▶ Caddy (app.example.com)
-               │  import protected  ─▶  forward_auth GET auth:8080/verify
-               │                          ├─ valid session → 200 + Remote-User/Email/Groups → upstream app
+               │  import role "app" "user" ─▶ GET auth:8080/verify
+               │                          ├─ holds the role → 200 + Remote-User/Email/Roles → upstream app
                │                          └─ no session    → 302 to auth.example.com/login
                ▼
             auth.example.com  ── login page → email → one-time code → signed-cookie session
@@ -36,8 +36,9 @@ browser ──▶ Caddy (app.example.com)
 3. User enters email → a one-time code (`OTP_LENGTH` digits, six by default) is emailed (single-use, ~10 min).
 4. User types the code → an HMAC-signed session cookie is set on `.example.com`
    (shared across all app subdomains).
-5. `/verify` now returns 200 plus `Remote-User`, `Remote-Email`, and
-   `Remote-Groups`, which Caddy forwards to the app.
+5. `/verify` now returns 200 when the person holds the role the guard names,
+   plus `Remote-User`, `Remote-Email`, `Remote-Roles` and `Remote-Groups`,
+   which Caddy forwards to the app.
 
 `Remote-Groups` is a **comma-separated set**: the base role (`admin`, `user`, or
 `guest` for a stranger admitted by [open registration for one
@@ -75,21 +76,27 @@ The `server-instance-template` ships the wiring under `apps/auth/`
 
 ### Protecting an app
 
-Add one `import` line to the app's Caddy snippet — the last argument is the
-app's upstream address. The guard runs the auth gate (the expanded form of
-`forward_auth`) **and** proxies to the upstream, so there's no separate
+Each app declares its roles in its Caddy snippet, and the gateway's admin pages
+decide who holds them: domain groups, lists, named people, break-glass cards, a
+network or guests. The scaffold renders the declarations into the app-roles
+manifest (`.generated/caddy/app-roles.tsv`), which the gateway reads from
+`APP_ROLES_FILE`; scaffold docs/07 "Protecting an app with roles" describes the
+markers. Add one `import` line to the app's Caddy snippet, naming the app and
+the role the path needs. The last argument is the app's upstream address. The
+guard runs the auth gate and proxies to the upstream, so there is no separate
 `reverse_proxy` line:
 
 ```caddyfile
 # apps/dashboard/dashboard.caddy
+# scaffold-app: dashboard
 dashboard.{$DOMAIN} {
-    import protected dashboard:3000
+    import role "dashboard" "user" dashboard:3000
 }
 ```
 
-The app then reads identity from the `Remote-User`, `Remote-Email`, and
-`Remote-Groups` request headers and does its own per-feature authorization off
-them.
+The app reads identity from the `Remote-User` and `Remote-Email` request
+headers, and the roles the person holds in that app from `Remote-Roles`, and
+does its own per-feature authorization from them.
 
 > **Trust model:** apps trust these headers because **only Caddy can reach
 > them** — they publish no host ports, and Caddy strips any client-supplied
@@ -100,7 +107,7 @@ them.
 > shortened sample, not that layout.
 >
 > **The session cookie never reaches the app.** It's scoped to `.<domain>`, so
-> the browser sends it to every app subdomain, and `forward_auth` would otherwise
+> the browser sends it to every app subdomain, and the gate would otherwise
 > pass it through to the backend. Since the cookie is an estate-wide bearer
 > credential (ended only by signing out on every device), an app that received it
 > could replay it against every other app. Each guard therefore strips
@@ -112,153 +119,83 @@ them.
 
 #### Per-app access
 
-`import protected` lets in **any** signed-in user. To restrict an app to
-particular people, the access rule lives in **that app's own `.caddy` snippet**
-(the scaffold's per-app folder), and the gateway enforces it. Authentication
-stays global (`ALLOWED_EMAIL_DOMAINS`, or without it the domain groups that
-hold a role, is the superset of who can sign in *at all*); each app then narrows to its own subset (the upstream is the last arg):
-
-> **Opening one app to the public.** An app that strangers must be able to sign
-> in to (an application form, say) does not need the allow-list widened. List its
-> host in `OPEN_REGISTRATION_HOSTS` and guard it with `protected_open`; see
-> [Open registration for one app](#open-registration-for-one-app).
+Any role in an app admits that app's ordinary paths, and a path may need one
+role in particular, with no hierarchy between roles. Put a guard inside a
+`handle` block to give a path its own role:
 
 ```caddyfile
-# only @rch.org.au may open this one
-clinical.{$DOMAIN}  { import protected_domains "rch.org.au" clinical:3000 }
-# two domains may open this one
-shared.{$DOMAIN}    { import protected_domains "rch.org.au partner.com" shared:3000 }
-# members of a group (manage membership in /admin/groups)
-reports.{$DOMAIN}   { import protected_groups  "reports_team" reports:3000 }
-# in a domain OR a group (here: all RCH staff, plus named external guests)
-dash.{$DOMAIN}      { import protected_access   "rch.org.au" "dash_guests" dash:3000 }
-```
-
-In a scaffold server repo, the route renderer also writes
-`.generated/caddy/route-groups.tsv`, which lists every group a guard requires.
-Mount it read-only and set `ROUTE_GROUPS_FILE`, and the admin Groups page lists
-the groups the routes use, offers to create any that are missing, and marks
-groups that no route uses, so group names are picked rather than typed. The
-renderer also writes `route-access.tsv` (`ROUTE_ACCESS_FILE`), each site's
-access rules, which the overview shows as a "who can reach what" table and
-which tells the gateway which groups are an app's own roles (see
-[Break-the-glass QR codes](#break-the-glass-qr-codes)).
-
-Guard summary (domains/groups are space- or comma-separated; `<up>` is the app's
-upstream `host:port`, always the **last** argument):
-
-| Snippet | Grants access to | Login hint + early decline? |
-|---|---|---|
-| `import protected <up>` | any signed-in user (**not** break-glass, **not** guests) | no |
-| `import protected_open <up>` | any signed-in user **and** guests from an open-registration host | no |
-| `import protected_domains "<domains>" <up>` | signed-in users at a listed email domain | **yes** |
-| `import protected_domains_labeled "<domains>" "<label>" <up>` | same, but the hint/decline shows `<label>` instead of listing the domains | **yes** |
-| `import protected_domains_alt "<domains>" "<url>" "<label>" <up>` | same, plus a "sign in another way" link to `<url>` for non-domain users | **yes** |
-| `import protected_groups "<groups>" <up>` | members of a listed group, or a break-glass card whose target group is listed | no |
-| `import protected_admin <up>` | admins only (= `protected_groups "admin"`); for a separate admin entrance | no |
-| `import protected_access "<domains>" "<groups>" <up>` | in a listed domain **OR** a listed group | yes (by domain) |
-
-A signed-in user who isn't allowed on an app is **not** bounced to login (they
-*are* authenticated); they get a "no access to this page" page with a sign-in
-link, and their session is left intact so apps they *can* reach keep working.
-Always use these snippets rather than hand-rolling `forward_auth`: each one
-declares its requirement in a single `X-Auth-Policy` header set with `header_up`,
-which **replaces** any client-sent value — so a client can't inject or widen it,
-and there's no per-guard "delete the rest" list to keep in sync as features are
-added. The gateway parses the policy strictly: a guard that omits
-`X-Auth-Policy`, sends an empty allow-list (`domains=`), misspells a field
-(`gruops=admin`) or combines `any` with a list is refused, and the gateway sends
-every signed-in user to the "no access" page rather than guessing. It logs the
-refused value, and warns if the guard still sends the old `X-Auth-Require-*`
-headers, so an unmigrated or mistyped guard is caught loudly rather than
-silently failing open. Each guard also owns the `reverse_proxy` to
-the upstream and strips the session cookie there (see the trust-model note
-above), so neither is something an app author can forget; an app that genuinely
-needs custom proxy options imports `auth_gate "<policy>"` (or the labeled or
-alt variant) inside its own `route`, then its own `reverse_proxy` with
-`import strip_auth_cookie`. The gate is written out in full rather than as
-`forward_auth` because of one thing `forward_auth` cannot do: when `/verify`
-renews the session it answers 2xx with a `Set-Cookie`, and `forward_auth`'s
-`copy_headers` only copies into the upstream request, so the renewed cookie
-never reached the browser and every session ran out at its original expiry.
-The gate adds the gateway's own cookie (matched by name) to the response the
-browser receives, alongside any cookie the app sets.
-
-**Early hint + decline (any route with a domain).** Whenever a route declares a
-required domain (`protected_domains`, or the domain side of `protected_access`),
-the login page shows the expected domain ("This page is for `rch.org.au` email
-addresses") and an address whose domain can't qualify is declined *before* a
-code is sent — so a wrong-domain user isn't emailed a code only to hit a wall
-after logging in. A **group-only route** (`protected_admin` / `protected_groups`)
-declares no domain, so it neither hints nor declines — that's the door for people
-who legitimately don't match the domain. This is a UX courtesy, **not** the
-security boundary: the requirement rides in the (client-modifiable) login URL, so
-the authoritative check always happens at `/verify` with Caddy's trusted header.
-
-When a route allows several domains, enumerating them gets unwieldy — use
-`protected_domains_labeled "<domains>" "<label>"` to show a phrase instead:
-*"This page is for **an approved Victorian health service** email address."* The
-full domain list still drives the actual hint/decline; only the wording changes.
-
-**Admins (and other non-domain users) get their own door.** Admins are **not**
-auto-allowed. The domain door declines any address that doesn't match its
-domain — admins included — so don't expect an off-domain admin to come through
-the main gate. Give them a separate group-gated entrance with
-`import protected_admin` (no domain → no hint, no decline). Admins whose email
-already matches the app's domain don't need it — they pass the gate.
-
-A path-based admin entrance on the same host (admin features live under `/admin`).
-The staff door uses `protected_domains_alt` so a declined non-domain user is
-pointed at the admin door instead of being stranded:
-
-```caddyfile
-app.{$DOMAIN} {
-    @admin path /admin*
-    handle @admin {
-        import protected_admin app:3000     # admins only; no hint, no early decline
+# scaffold-app: enquiries
+# scaffold-roles: admin "Administrator"
+enquiries.{$DOMAIN} {
+    handle /admin* {
+        import role "enquiries" "admin" enquiries:8080
     }
     handle {
-        import protected_domains_alt "rch.org.au" "https://app.{$DOMAIN}/admin" "Administrators sign in here" app:3000
+        import role "enquiries" "user" enquiries:8080
     }
 }
 ```
 
-The "Administrators sign in here" link appears as small text on the login and
-decline pages. Its URL is **re-validated server-side to be within your domain**
-before it's ever rendered, so a tampered login URL can't turn it into an
-off-site (phishing) link. If an off-domain admin needs the *whole* app (not just
-`/admin`), point a second host at the same backend instead:
-`admin.app.{$DOMAIN} { import protected_admin app:3000 }`.
+Guard summary (`<up>` is the app's upstream `host:port`, always the **last**
+argument):
 
-Per-route is just per-route Caddy: put a guard inside a `handle @path { … }`
-block so one app can have, say, a staff entrance and a separate emergency one
-(see the worked example in [`deploy/standalone/Caddyfile`](deploy/standalone/Caddyfile)).
+| Snippet | Grants access to |
+|---|---|
+| `import role "<app>" "<role>" <up>` | a person who holds the role in the app; `user` is also admitted by any other role in the app |
+| `import role_gate "<app>" "<role>"` | the same, for a site with no upstream, such as a static `file_server` |
+| `import role_redir "<app>" "<role>" "<url>"` | the same, for a site that only redirects |
+
+The app and role must be declared in the manifest, and the guard's host must be
+one of the app's hosts there; otherwise every request is refused. A guard that
+names no app, such as a hand-rolled `forward_auth`, is refused as well: the
+gateway sends every signed-in person to the "no access" page. A signed-in person
+who holds no role in an app is **not** bounced to login (they *are*
+authenticated); they see a "no access to this page" page with a sign-in link, and
+their session is left intact, so the apps they can reach keep working.
+
+Always use these snippets rather than hand-rolling the gate. Each one names its
+app and role in `X-Auth-App` and `X-Auth-Role`, set with `header_up`, which
+**replaces** any client-sent value, so a client cannot choose the app or role it
+is judged by. Each guard also owns the `reverse_proxy` to the upstream and strips
+the session cookie there (see the trust-model note above). The gate is written
+out in full rather than as `forward_auth` because of one thing `forward_auth`
+cannot do: when `/verify` renews the session it answers 2xx with a `Set-Cookie`,
+and `forward_auth`'s `copy_headers` only copies into the upstream request, so
+the renewed cookie would never reach the browser and every session would run
+out at its original expiry. The gate adds the gateway's own cookie (matched by
+name) to the response the browser receives, alongside any cookie the app sets.
+
+**Early hint and decline.** When a role is held only by domain groups, the
+login page shows their domains ("This page is for `rch.org.au` email
+addresses"), and an address at none of them is declined *before* a code is
+sent. When anyone else can hold the role, the page neither hints nor declines.
+This is a courtesy, **not** the security boundary: the hint rides in the
+(client-modifiable) login URL, and the authoritative check always happens at
+`/verify`.
+
+The renderer also writes `route-access.tsv` (`ROUTE_ACCESS_FILE`), each site's
+paths that are open by design and the roles that guard the rest, which the
+overview shows as a "who can reach what" table.
 
 ##### Open registration for one app
 
 Some apps are meant for people the department does not yet know, such as an
-applicant portal. Set `OPEN_REGISTRATION_HOSTS` to that app's host and guard the
-app with `protected_open`:
+applicant portal. Set `OPEN_REGISTRATION_HOSTS` to that app's host, and give the
+app's User role to guests on its admin page:
 
 ```caddyfile
 # .env:  OPEN_REGISTRATION_HOSTS=apply.example.com
-apply.{$DOMAIN} { import protected_open apply:3000 }
+apply.{$DOMAIN} { import role "apply" "user" apply:3000 }
 ```
 
 When someone signs in on the way to a listed host and their address is not
-staff, the gateway sends them a code as usual and, once they enter it,
-signs them in as a **guest**. Their `Remote-Groups` begins with `guest`, followed
-by any groups an admin has placed them in, so the app can tell a stranger from a
-member of staff. A member of staff, or an admin,
-signs in with their usual role on the open host as anywhere else.
+staff, the gateway sends them a code as usual and, once they enter it, signs
+them in as a **guest**. A member of staff, or an admin, signs in with their usual
+role on the open host as anywhere else.
 
-A guest is admitted only where a route opts in. `protected_open` (policy
-`any;guests=allow`) admits guests, and a group guard admits a guest whom an admin
-has placed in one of its groups. Every other guard keeps guests out: the bare
-`import protected`, every domain guard (even one naming the guest's own domain),
-and every group guard whose groups the guest is not in. This is deliberate. If an
-app elsewhere on the server is left with a bare `import protected`, it stays
-closed to strangers. A guest is never an admin and never sees the TOTP step.
+A guest holds only the roles given to guests, and those given to a list an
+admin has placed the guest in. A role held by guests is the User role only, and
+a guest is never an admin and never sees the TOTP step.
 
 Guest sessions renew like ordinary ones, keeping their guest kind, but a guest
 never receives the remember-me lifetime: sessions are stateless, so a stranger
@@ -271,49 +208,47 @@ appear as `guest` in the admin access log.
 The host check decides only where the gateway offers a guest sign-in; it is not
 the boundary. The destination rides in the login URL, so anyone who can receive
 mail can obtain a guest session once any host is listed. What keeps guests
-contained is that only routes which opt in will admit them.
+contained is that only roles given to guests, or to a list a guest is in, admit
+them.
 
-Listing a host also gives effect to group memberships that were previously
-inert. A membership for an address that is not staff used to do
-nothing, because that address could never sign in. Once any host is open, the
-same address can sign in as a guest, and the membership admits it to every app
-guarded by that group. Before listing a host, review the admin groups page,
-which marks each member who is not staff, and remove any
-membership that should have ended with the person's access. Removing a domain
-from `ALLOWED_EMAIL_DOMAINS`, or from a domain group, does not remove group
-memberships.
+Listing a host also gives effect to list memberships that were previously
+inert. A membership for an address that is not staff used to do nothing,
+because that address could never sign in. Once any host is open, the same
+address can sign in as a guest and hold every role given to that list. Before
+listing a host, review the admin groups page, which marks each member who is
+not staff, and remove any membership that should have ended with the person's
+access. Removing a domain from `ALLOWED_EMAIL_DOMAINS`, or from a domain group,
+does not remove list memberships.
 
 `OPEN_REGISTRATION_HOSTS` takes a comma-separated list of bare hostnames, each
 either `DOMAIN` or a subdomain of it. The gateway refuses to start if an entry is
 anything else, such as a URL, a host with a port, or a sibling domain.
 
-**The global form, `ALLOWED_EMAIL_DOMAINS=*`.** This older switch still works: any
-email verified by a one-time code becomes an ordinary `user`, on every host. Login
-is still email-verified, but every bare `import protected` app then admits any
-signed-in stranger, so each private app must gate itself with
-`protected_groups` or `protected_domains`. We discourage it on a shared server,
-where one app that forgets to gate itself is open to everyone; use
-`OPEN_REGISTRATION_HOSTS` instead. Admin stays an exact `ADMIN_EMAILS` allow-list
-either way.
+**The global form, `ALLOWED_EMAIL_DOMAINS=*`.** This older switch still works:
+any email verified by a one-time code signs in as staff, on every host. Each
+app's roles still decide what such a person reaches. Admin stays an exact
+`ADMIN_EMAILS` allow-list either way.
 
 #### Mixing public and protected routes
 
 Not every route needs a login. A webhook receiver, a health check, or a public
-landing page can sit on the same host as a protected app — give the public paths
-a plain `reverse_proxy` (no guard) and let a fallback `handle` protect the rest:
+landing page can sit on the same host as a protected app. Give the public paths
+a plain `reverse_proxy` (no guard), mark them as open by design for the
+renderer, and let a fallback `handle` protect the rest:
 
 ```caddyfile
 app.{$DOMAIN} {
-    # Public — no login, no session (e.g. a webhook receiver + health check).
+    # Public: no login, no session (e.g. a webhook receiver and health check).
     @public path /webhooks/* /healthz
     handle @public {
+        # scaffold-lint: open-path -- /webhooks/* /healthz: the sender signs each webhook delivery
         reverse_proxy app:3000 {
             import strip_public   # no login, but strip the cookie and forged identity
         }
     }
-    # Everything else requires a signed-in user at the domain.
+    # Everything else needs the app's User role.
     handle {
-        import protected_domains "rch.org.au" app:3000
+        import role "app" "user" app:3000
     }
 }
 ```
@@ -371,20 +306,13 @@ and the lists closed to outsiders are kept in their sessions. Anyone else signs 
 as a member when they hold a role through a list, by name or by an invitation, or
 as a guest on an open host. While `ALLOWED_EMAIL_DOMAINS` is set, it alone decides
 who is staff, and a domain group adds no one. Without it, giving a domain group
-its first role admits everyone at its domains to every plain `import protected`
-app, as adding the domains to the allow-list did. Taking the group's last role
+its first role lets everyone at its domains sign in, and they reach the apps
+where the group holds a role, and no other. Taking the group's last role
 away, or removing a domain, signs those people out at their next request, or makes
 them members if they still hold a role. If the gateway has not been able to read
 its domain groups since it started, it answers sign-in and session checks with a
 503 and ends no session until it can.
 
-Remove the allow-list only once no site uses an older guard (`protected`,
-`protected_domains`, `protected_groups` or `protected_open`). An older guard admits
-staff by `any` or by domain, so while one remains, a domain group that holds a
-role in any app opens that site to everyone at its domains. The gateway logs a
-warning naming such sites at start, and again whenever they change. Once every
-site uses a role guard, everyone at a domain group's domains can sign in to the
-apps where the group holds a role, and to no other.
 At start, a gateway without the allow-list logs who can sign in.
 
 
@@ -546,33 +474,19 @@ For physical, emergency access — laminated QR cards left in known locations (a
 angiography lab, a resus bay) so that someone who **cannot otherwise log in** can
 still reach an app during a time-critical event (e.g. a code stroke).
 
-- Each code has a unique **label** (e.g. "Angiography Lab 1"), a note, and a
-  **target group** (e.g. `code_stroke_break_glass`) that the granted session
-  carries.
-- **The target group scopes the card to specific apps/routes.** A break-glass
-  session is *deny-by-default*: it reaches only an app (or route) whose Caddy
-  guard lists that group — `import protected_groups "code_stroke_break_glass"`.
-  A plain `import protected` app rejects it, and a domain-gated app rejects it
-  (the card has no email domain). So a card opens exactly the location(s) you
-  opt in, not the whole estate. Use a dedicated group per card for the tightest
-  scope. A holder who reaches a non-covered app gets the "no access" page (with
-  a sign-in link), and their card keeps working everywhere it *is* allowed.
-- **A card cannot target a group an app reads as one of its own roles.** Some
-  groups are not doors into an app but roles inside it: air-db reads
-  `airdb_admin` as its editor, Planka maps `planka-admins` to its own
-  administrator. A card targeting such a group would admit a stranger as an
-  application administrator, so the gateway refuses it, and likewise refuses
-  to add an address that is not staff (a guest) as a member of one. It
-  learns these groups from three places: every group a site's rule lists
-  together with `admin` (`import protected_groups "airdb_admin admin"`, read
-  from `ROUTE_ACCESS_FILE`, which keeps each rule's group set whole); every
-  group an app declares it reads itself (a `# scaffold-groups:` marker, which
-  the renderer flags `declared` in `ROUTE_GROUPS_FILE`); and
-  `BREAKGLASS_REFUSED_GROUPS`, for deployments without the manifests. A group
-  filled from a feed is refused as well. The codes page shows these groups as
-  not selectable, with the reason beside them, and marks any existing card
-  whose group has since become a role. A group a rule lists *without* `admin`,
-  such as `planka-users`, stays an ordinary target unless marked.
+- Each code has a unique **label** (e.g. "Angiography Lab 1"), a note, and the
+  **app** it opens, with the page a scan lands on.
+- **A card opens one app's User role and nothing else.** A break-glass session
+  is *deny-by-default*: no domain group, list, network or guests assignment
+  admits it, so a card opens exactly the app it names, not the whole estate. A
+  holder who reaches another app gets the "no access" page (with a sign-in
+  link), and the card keeps working on its own app.
+- **Cards made before app roles named a group.** A role guard admits no such
+  card, so a group card opens nothing; the card's page offers to move it to an
+  app, keeping its printed token. The gateway still refuses a group card whose
+  group an app reads as one of its own roles (`BREAKGLASS_REFUSED_GROUPS`, and
+  the groups the route manifests name), and refuses to add an address that is
+  not staff (a guest) as a member of such a group.
 - **Scanning is an instant grant**: the token in the QR URL is the only
   credential, by design. The scan is rate-limited, **logged synchronously**
   (label, client IP, user-agent, time), and **notifies admins** out of band via
@@ -590,7 +504,7 @@ still reach an app during a time-critical event (e.g. a code stroke).
   draws shapes, not fonts).
 
 > **Accepted risk:** a break-glass QR is a bearer secret left in the open. Anyone
-> who photographs a card gets temporary, group-scoped access with no second
+> who photographs a card gets temporary access to one app with no second
 > factor. That is the point — the mitigations are the short TTL, the mandatory
 > audit log, the admin notification on every use, and instant revocation.
 

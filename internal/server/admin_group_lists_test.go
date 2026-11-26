@@ -103,7 +103,7 @@ func TestIncludedGroupAdmitsThroughGate(t *testing.T) {
 	// The user signs in afterwards and reaches a route that needs planka-users.
 	u := newClient(t, srv.Handler())
 	loginAs(t, u, srv.sender.(*captureSender), "user@example.com", nil)
-	rec := u.get("/verify", requireGroups("planka-users"))
+	rec := u.get("/verify", groupGuard(t, srv, "planka-users"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("member of an included group = %d, want 200", rec.Code)
 	}

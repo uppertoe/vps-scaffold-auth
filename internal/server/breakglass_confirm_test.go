@@ -29,10 +29,11 @@ func TestBreakGlassScanAsksBeforeGranting(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"<h1>Emergency access</h1>",
-		"This card gives emergency access without signing in. Each use is recorded, and the administrators are notified.",
+		"This card opens g-g.",
+		"Each use is recorded, and the administrators are notified.",
 		`<form method="post" action="/break">`,
 		`name="token" value="` + token + `"`,
-		"Continue with emergency access",
+		"Continue to g-g",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("confirmation page missing %q", want)
@@ -50,7 +51,7 @@ func TestBreakGlassScanAsksBeforeGranting(t *testing.T) {
 	if rec.Code != http.StatusFound || c.cookies[session.SessionCookie] == nil {
 		t.Fatalf("POST = %d, want a grant", rec.Code)
 	}
-	if rec := c.get("/verify", requireGroups("g")); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", groupGuard(t, srv, "g")); rec.Code != http.StatusOK {
 		t.Errorf("/verify after the button = %d, want 200", rec.Code)
 	}
 }
@@ -90,7 +91,7 @@ func TestBreakGlassCardRefusedOnceTargetIsAppRole(t *testing.T) {
 	srv, sender := testServerWith(t, func(c *config.Config) {
 		c.BreakGlassNotifyEmails = []string{"admin@example.com"}
 	})
-	token := mintCode(t, srv, "Lab 1", "airdb_admin")
+	token := mintGroupCode(t, srv, "Lab 1", "airdb_admin")
 	srv.cfg.BreakGlassRefusedGroups = []string{"airdb_admin"}
 
 	c := newClient(t, srv.Handler())

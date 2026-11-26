@@ -2,10 +2,10 @@ package server
 
 import (
 	"context"
-	"github.com/uppertoe/vps-scaffold-auth/internal/email"
-	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 )
 
 // A direct visit (no route requirement) hints the configured allow-list and
@@ -21,44 +21,6 @@ func TestDirectVisitHintsConfiguredDomain(t *testing.T) {
 	}
 	if !strings.Contains(body, `placeholder="you@monashhealth.org"`) {
 		t.Errorf("email placeholder not derived from the configured domain:\n%s", body)
-	}
-}
-
-// The admin door (group-gated) must not presume the configured domain: no hint
-// line and a generic placeholder, even though a domain is configured. This is
-// the door for people who can't match the domain.
-func TestAdminDoorNoDomainPresumption(t *testing.T) {
-	srv, _ := testServer(t)
-	srv.cfg.AllowedDomains = []string{"monashhealth.org"}
-	c := newClient(t, srv.Handler())
-	body := c.get("/login?rd=&rqg=admin", nil).Body.String()
-	if strings.Contains(body, "This page is for") {
-		t.Errorf("admin door presumed a domain hint:\n%s", body)
-	}
-	if strings.Contains(body, "you@monashhealth.org") {
-		t.Errorf("admin door presumed the configured domain in the placeholder:\n%s", body)
-	}
-	if !strings.Contains(body, `placeholder="you@example.com"`) {
-		t.Errorf("admin door should show the generic placeholder:\n%s", body)
-	}
-}
-
-// /verify on a group-only route carries the group flag into the login URL so the
-// login page suppresses the configured-domain fallback (the door is deliberately
-// domain-agnostic).
-func TestVerifyCarriesGroupOnlyFlag(t *testing.T) {
-	srv, _ := testServer(t)
-	c := newClient(t, srv.Handler())
-	rec := c.get("/verify", map[string]string{
-		"X-Forwarded-Host": "app.example.com",
-		"X-Forwarded-Uri":  "/x",
-		"X-Auth-Policy":    "groups=admin",
-	})
-	if rec.Code != http.StatusFound {
-		t.Fatalf("status = %d, want 302", rec.Code)
-	}
-	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "rqg=admin") {
-		t.Errorf("group-only login redirect missing rqg flag: %q", loc)
 	}
 }
 

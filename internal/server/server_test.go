@@ -240,7 +240,7 @@ func TestFullLoginCycle(t *testing.T) {
 	}
 
 	// 3. now /verify grants and emits identity headers
-	rec = c.get("/verify", protectedAny())
+	rec = c.get("/verify", anyGuard(t, srv))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/verify status = %d, want 200", rec.Code)
 	}
@@ -257,7 +257,7 @@ func TestAdminGetsAdminGroup(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
 	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
-	rec := c.get("/verify", protectedAny())
+	rec := c.get("/verify", anyGuard(t, srv))
 	if got := rec.Header().Get("Remote-Groups"); got != "admin" {
 		t.Errorf("Remote-Groups = %q, want admin", got)
 	}
@@ -639,7 +639,7 @@ func TestLogoutGetConfirmsThenPostSignsOut(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `action="/logout"`) || !strings.Contains(rec.Body.String(), "Sign out") {
 		t.Errorf("confirm page missing POST sign-out form: %q", rec.Body.String())
 	}
-	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
 		t.Errorf("GET /logout must not end the session; /verify = %d", rec.Code)
 	}
 
@@ -962,7 +962,7 @@ func TestStateCookieCannotBecomeSession(t *testing.T) {
 	// Past the renewal threshold, where a decoded identity with iat=0 would be
 	// re-derived from policy.
 	srv.now = func() time.Time { return time.Now().Add(2 * time.Hour) }
-	if rec := c.get("/verify", map[string]string{"X-Auth-Policy": "any"}); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
 		t.Fatalf("/verify with a state token as session = %d %q, want 302 to login", rec.Code, rec.Header().Get("Location"))
 	}
 	srv.now = time.Now
@@ -1163,7 +1163,7 @@ func TestVerifyClearsUnreadableSessionCookie(t *testing.T) {
 	srv, _ := testServer(t)
 	c := newClient(t, srv.Handler())
 	c.cookies[session.SessionCookie] = &http.Cookie{Name: session.SessionCookie, Value: "stale.garbage"}
-	rec := c.get("/verify", protectedAny())
+	rec := c.get("/verify", anyGuard(t, srv))
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
 		t.Fatalf("/verify with a stale cookie = %d %q, want 302 to login", rec.Code, rec.Header().Get("Location"))
 	}
@@ -1178,7 +1178,7 @@ func TestVerifyClearsUnreadableSessionCookie(t *testing.T) {
 	}
 	// No cookie at all: nothing to clear, no Set-Cookie emitted.
 	c2 := newClient(t, srv.Handler())
-	if sc := c2.get("/verify", protectedAny()).Header()["Set-Cookie"]; len(sc) != 0 {
+	if sc := c2.get("/verify", anyGuard(t, srv)).Header()["Set-Cookie"]; len(sc) != 0 {
 		t.Errorf("Set-Cookie emitted with no cookie present: %v", sc)
 	}
 }
@@ -1192,7 +1192,9 @@ func TestVerifyDoesNotClearAmbiguousSessionCookies(t *testing.T) {
 	loginAs(t, c, sender, "user@example.com", nil)
 	real := c.cookies[session.SessionCookie]
 	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
-	req.Header.Set("X-Auth-Policy", "any")
+	for k, v := range anyGuard(t, srv) {
+		req.Header.Set(k, v)
+	}
 	req.AddCookie(&http.Cookie{Name: session.SessionCookie, Value: "planted.garbage"})
 	req.AddCookie(real)
 	rec := httptest.NewRecorder()

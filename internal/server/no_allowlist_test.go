@@ -159,7 +159,7 @@ func TestDomainGroupsNeedTheRolesModel(t *testing.T) {
 }
 
 // A member of staff signs in as an ordinary session (not a member), reaches
-// a plain `protected` app, and is suggested the staff domain; a stranger on
+// a role guard, and is suggested the staff domain; a stranger on
 // the open host is still a guest. Without the allow-list, removing the domain
 // group's last role ends the staff session at its next request.
 func TestSignInWithAndWithoutAllowList(t *testing.T) {
@@ -174,8 +174,8 @@ func TestSignInWithAndWithoutAllowList(t *testing.T) {
 		if id := sessionOf(t, srv, c); id.Kind != "" || !strings.HasPrefix(id.Groups, authz.RoleUser) {
 			t.Fatalf("staff session = kind %q groups %q, want an ordinary user session", id.Kind, id.Groups)
 		}
-		if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
-			t.Errorf("staff on a plain protected app = %d, want 200", rec.Code)
+		if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
+			t.Errorf("staff on a role guard = %d, want 200", rec.Code)
 		}
 
 		g := newClient(t, srv.Handler())
@@ -183,7 +183,6 @@ func TestSignInWithAndWithoutAllowList(t *testing.T) {
 		if id := sessionOf(t, srv, g); id.Kind != session.KindGuest || !strings.HasPrefix(id.Groups, authz.RoleGuest) {
 			t.Errorf("stranger session = kind %q groups %q, want a guest", id.Kind, id.Groups)
 		}
-		wantDenied(t, "a guest on a plain protected app", g.get("/verify", protectedAny()))
 
 		if allowList {
 			return
@@ -192,7 +191,7 @@ func TestSignInWithAndWithoutAllowList(t *testing.T) {
 			t.Fatal(err)
 		}
 		srv.forgetRoles()
-		rec := c.get("/verify", protectedAny())
+		rec := c.get("/verify", anyGuard(t, srv))
 		if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
 			t.Errorf("after the domain group's last role is removed: %d to %q, want sign-in", rec.Code, rec.Header().Get("Location"))
 		}
@@ -333,19 +332,19 @@ func TestDomainGroupChangesTheTierAtTheNextRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.forgetRoles()
-	m.get("/verify", protectedAny())
+	m.get("/verify", anyGuard(t, srv))
 	if id := sessionOf(t, srv, m); id.Kind != "" || !strings.HasPrefix(id.Groups, authz.RoleUser) {
 		t.Errorf("after its domain joined a domain group: kind %q groups %q, want an ordinary session", id.Kind, id.Groups)
 	}
-	s.get("/verify", protectedAny())
+	s.get("/verify", anyGuard(t, srv))
 	if id := sessionOf(t, srv, s); id.Kind != session.KindMember || !strings.HasPrefix(id.Groups, authz.RoleGuest) {
 		t.Errorf("after its domain left every domain group: kind %q groups %q, want a member", id.Kind, id.Groups)
 	}
 }
 
 // A guest session stays a stranger's: when the guest's domain later becomes
-// a staff domain, the session still loses the lists closed to outsiders, and
-// is still kept off a plain protected app, until its person signs in again.
+// a staff domain, the session still loses the lists closed to outsiders until its person
+// signs in again.
 func TestGuestStaysAGuestWhenItsDomainBecomesStaff(t *testing.T) {
 	bothWays(t, func(t *testing.T, allowList bool) {
 		srv, sender := staffServer(t, allowList, "")
@@ -372,11 +371,10 @@ func TestGuestStaysAGuestWhenItsDomainBecomesStaff(t *testing.T) {
 		if !srv.known(ctx, addr) {
 			t.Fatal("the address should now be staff")
 		}
-		wantDenied(t, "a guest on a list closed to outsiders", c.get("/verify", requireGroups("prototypes")))
-		if rec := c.get("/verify", requireGroups("planka-users")); rec.Code != http.StatusOK {
+		wantDenied(t, "a guest on a list closed to outsiders", c.get("/verify", groupGuard(t, srv, "prototypes")))
+		if rec := c.get("/verify", groupGuard(t, srv, "planka-users")); rec.Code != http.StatusOK {
 			t.Errorf("a guest on an ordinary list it is in = %d, want 200", rec.Code)
 		}
-		wantDenied(t, "a guest on a plain protected app", c.get("/verify", protectedAny()))
 		if id := sessionOf(t, srv, c); id.Kind != session.KindGuest {
 			t.Errorf("session kind = %q, want guest", id.Kind)
 		}
@@ -548,7 +546,7 @@ func TestRoleDataNeverLoaded(t *testing.T) {
 	srv.roleCache.ok, srv.roleCache.have, srv.roleCache.state = false, false, roleState{}
 	srv.roleCache.mu.Unlock()
 
-	rec := c.get("/verify", protectedAny())
+	rec := c.get("/verify", anyGuard(t, srv))
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Set-Cookie") != "" {
 		t.Errorf("verify = %d, cookie %q; want 503 and the session kept", rec.Code, rec.Header().Get("Set-Cookie"))
 	}
@@ -586,7 +584,7 @@ func TestRoleDataNeverLoaded(t *testing.T) {
 
 	srv.store = good
 	srv.forgetRoles()
-	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
 		t.Errorf("verify once the data can be read = %d, want 200", rec.Code)
 	}
 }
@@ -616,43 +614,5 @@ func TestUndeclaredAssignmentMakesNobodyStaff(t *testing.T) {
 	partnerRole(t, srv, true)
 	if !srv.known(ctx, "x@partner.org") {
 		t.Error("a declared role does not make the domain staff")
-	}
-}
-
-// Without the allow-list, a site that still uses an older guard is warned
-// about at start and whenever the route files change, once for each change;
-// with the allow-list set there is no warning.
-func TestOlderGuardsWarnedWithoutAllowList(t *testing.T) {
-	capture := func(f func()) string {
-		var buf bytes.Buffer
-		log.SetOutput(&buf)
-		defer log.SetOutput(os.Stderr)
-		f()
-		return buf.String()
-	}
-	srv, _ := staffServer(t, false, "")
-	srv.olderGuards = olderGuardWarning{}
-	out := capture(srv.warnOlderGuards)
-	if !strings.Contains(out, "warning: authz: ALLOWED_EMAIL_DOMAINS is not set and") || !strings.Contains(out, "db.example.com") {
-		t.Errorf("start log = %q", out)
-	}
-	if out := capture(func() { srv.appRoleGroups() }); strings.Contains(out, "older guard") {
-		t.Errorf("the same sites were warned about again: %q", out)
-	}
-	// Only role guards and public sites left: no warning.
-	if err := os.WriteFile(srv.cfg.RouteGroupsFile, []byte("# none\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(srv.cfg.RouteAccessFile, []byte("db.{$DOMAIN}\troles\tcaffeine user\nwww.{$DOMAIN}\tpublic\twebsite\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if out := capture(func() { srv.appRoleGroups() }); strings.Contains(out, "older guard") {
-		t.Errorf("warned with no older guard left: %q", out)
-	}
-
-	set, _ := staffServer(t, true, "")
-	set.olderGuards = olderGuardWarning{}
-	if out := capture(set.warnOlderGuards); strings.Contains(out, "older guard") {
-		t.Errorf("warned with the allow-list set: %q", out)
 	}
 }

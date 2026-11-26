@@ -32,7 +32,7 @@ func TestReviewPromotedAdminWithTOTPOffAtAdminPages(t *testing.T) {
 		t.Errorf("with TOTP off a promoted admin is asked for an authenticator they cannot have")
 	}
 	// A /verify request repairs it.
-	c.get("/verify", protectedAny())
+	c.get("/verify", anyGuard(t, srv))
 	t.Logf("/admin/ after a /verify = %d", c.get("/admin/", nil).Code)
 }
 
@@ -99,7 +99,7 @@ func TestReviewGuestFilterFailsOpenOnUnreadableManifest(t *testing.T) {
 		t.Errorf("guest groups = %q: the leading guest role was dropped", id.Groups)
 	}
 	// The per-request filter keeps the leading guest role that apps read.
-	rec := g.get("/verify", map[string]string{"X-Auth-Policy": "any;guests=allow"})
+	rec := g.get("/verify", anyGuard(t, srv))
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Remote-Groups"), "guest") {
 		t.Errorf("guest at an open app = %d groups=%q, want the leading guest role", rec.Code, rec.Header().Get("Remote-Groups"))
 	}
@@ -126,7 +126,8 @@ func TestReviewBreakGlassChargesTwice(t *testing.T) {
 }
 
 // P1: an administrator's app-level admin roles (a DB group an app reads as
-// its administrator) ride on the email code alone; no second step is asked.
+// its administrator) do not ride on the email code alone: they are held only
+// after the admin second step.
 func TestReviewAppAdminRoleWithoutSecondStep(t *testing.T) {
 	srv, sender := appRoleServer(t, nil)
 	srv.cfg.TOTPEnabled = true
@@ -140,23 +141,15 @@ func TestReviewAppAdminRoleWithoutSecondStep(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil) // inbox only
-	rec := c.get("/verify", map[string]string{"X-Auth-Policy": "groups=airdb_admin admin"})
-	t.Logf("route 'airdb_admin admin' with email code only: %d groups=%q loc=%q",
-		rec.Code, rec.Header().Get("Remote-Groups"), rec.Header().Get("Location"))
-	if rec.Code == http.StatusOK && strings.Contains(rec.Header().Get("Remote-Groups"), "airdb_admin") {
-		t.Errorf("inbox-only sign-in of an administrator reaches the app's admin role")
-	}
-	if !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
-		t.Errorf("admin role route sent the administrator to %q, want the admin door", rec.Header().Get("Location"))
-	}
-	// A route naming the app's admin role alone sends them to the door too.
-	if rec := c.get("/verify", map[string]string{"X-Auth-Policy": "groups=airdb_admin"}); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
-		t.Errorf("airdb_admin-only route: %d %q, want the admin door", rec.Code, rec.Header().Get("Location"))
+	guard := groupGuard(t, srv, "airdb_admin")
+	rec := c.get("/verify", guard)
+	if rec.Code == http.StatusOK || strings.Contains(rec.Header().Get("Remote-Groups"), "airdb_admin") {
+		t.Errorf("inbox-only sign-in of an administrator reaches the app's admin role: %d groups=%q", rec.Code, rec.Header().Get("Remote-Groups"))
 	}
 	// After the door, the role is held.
 	page := c.get("/totp", nil).Body.String()
 	c.postForm("/totp", url.Values{"code": {totpNow(t, secret, time.Now())}, "csrf": {extractCSRF(t, page)}})
-	if rec := c.get("/verify", map[string]string{"X-Auth-Policy": "groups=airdb_admin admin"}); rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Remote-Groups"), "airdb_admin") {
+	if rec := c.get("/verify", guard); rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Remote-Groups"), "airdb_admin") {
 		t.Errorf("after the door: %d groups=%q, want airdb_admin", rec.Code, rec.Header().Get("Remote-Groups"))
 	}
 	// Staff in the same group are unaffected: they have no second factor.
@@ -165,7 +158,7 @@ func TestReviewAppAdminRoleWithoutSecondStep(t *testing.T) {
 	}
 	st := newClient(t, srv.Handler())
 	loginAs(t, st, sender, "staff@example.com", nil)
-	if rec := st.get("/verify", map[string]string{"X-Auth-Policy": "groups=airdb_admin admin"}); rec.Code != http.StatusOK {
+	if rec := st.get("/verify", guard); rec.Code != http.StatusOK {
 		t.Errorf("staff member of airdb_admin = %d, want 200", rec.Code)
 	}
 }

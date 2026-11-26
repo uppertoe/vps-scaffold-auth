@@ -38,16 +38,16 @@ func TestSignOutEverywhere(t *testing.T) {
 	if rec := phone.postForm("/logout", url.Values{"everywhere": {"1"}}); rec.Code != http.StatusFound {
 		t.Fatalf("sign out everywhere = %d", rec.Code)
 	}
-	if rec := verifyAny(laptop); rec.Code != http.StatusFound {
+	if rec := verifyAny(t, srv, laptop); rec.Code != http.StatusFound {
 		t.Errorf("the laptop's session survived: %d", rec.Code)
 	}
-	if rec := verifyAny(other); rec.Code != http.StatusOK {
+	if rec := verifyAny(t, srv, other); rec.Code != http.StatusOK {
 		t.Errorf("another person's session ended: %d", rec.Code)
 	}
 	srv.now = func() time.Time { return time.Now().Add(2 * time.Second) }
 	again := newClient(t, srv.Handler())
 	loginAs(t, again, sender, "amy@example.com", nil)
-	if rec := verifyAny(again); rec.Code != http.StatusOK {
+	if rec := verifyAny(t, srv, again); rec.Code != http.StatusOK {
 		t.Errorf("signing in again after signing out everywhere = %d", rec.Code)
 	}
 	events, _ := srv.store.ListAuthEvents(context.Background(), "amy@example.com", 20, 0)
@@ -63,7 +63,7 @@ func TestSignOutEverywhere(t *testing.T) {
 	second := newClient(t, srv.Handler())
 	loginAs(t, second, sender, "amy@example.com", nil)
 	again.postForm("/logout", url.Values{})
-	if rec := verifyAny(second); rec.Code != http.StatusOK {
+	if rec := verifyAny(t, srv, second); rec.Code != http.StatusOK {
 		t.Errorf("a plain sign-out ended another device: %d", rec.Code)
 	}
 }
@@ -88,10 +88,10 @@ func TestAdminSignsAPersonOutEverywhere(t *testing.T) {
 	for k, v := range user.cookies {
 		stolen[k] = v
 	}
-	if rec := verifyAny(user); rec.Code != http.StatusFound {
+	if rec := verifyAny(t, srv, user); rec.Code != http.StatusFound {
 		t.Errorf("amy's session survived: %d", rec.Code)
 	}
-	if rec := verifyAny(admin); rec.Code != http.StatusOK {
+	if rec := verifyAny(t, srv, admin); rec.Code != http.StatusOK {
 		t.Errorf("the administrator's own session ended: %d", rec.Code)
 	}
 	events, _ := srv.store.ListAdminEvents(context.Background(), 10, 0)
@@ -108,7 +108,7 @@ func TestAdminSignsAPersonOutEverywhere(t *testing.T) {
 	}
 	restarted.now = srv.now
 	rc := &client{t: t, h: restarted.Handler(), cookies: stolen}
-	if rec := verifyAny(rc); rec.Code != http.StatusFound {
+	if rec := verifyAny(t, srv, rc); rec.Code != http.StatusFound {
 		t.Errorf("after a restart amy's old session works again: %d", rec.Code)
 	}
 }
@@ -128,14 +128,14 @@ func TestSessionMaxAge(t *testing.T) {
 		at = at.Add(step)
 		now := at
 		srv.now = func() time.Time { return now }
-		if rec := verifyAny(c); rec.Code != http.StatusOK {
+		if rec := verifyAny(t, srv, c); rec.Code != http.StatusOK {
 			t.Fatalf("at %s: %d", now.Sub(start), rec.Code)
 		}
 	}
 	// The session is still live (renewed under a minute and a renewal
 	// period ago), but it is past its maximum age.
 	srv.now = func() time.Time { return start.Add(48*time.Hour + time.Second) }
-	if rec := verifyAny(c); rec.Code != http.StatusFound {
+	if rec := verifyAny(t, srv, c); rec.Code != http.StatusFound {
 		t.Fatalf("a session renewed past its maximum age: %d", rec.Code)
 	}
 }
@@ -150,7 +150,7 @@ func TestGroupRemovalTakesEffectAtOnce(t *testing.T) {
 	user, admin := newClient(t, srv.Handler()), newClient(t, srv.Handler())
 	loginAs(t, user, sender, "amy@example.com", nil)
 	loginAs(t, admin, sender, "admin@example.com", nil)
-	if rec := user.get("/verify", requireGroups("team")); rec.Code != http.StatusOK {
+	if rec := user.get("/verify", groupGuard(t, srv, "team")); rec.Code != http.StatusOK {
 		t.Fatalf("before removal = %d", rec.Code)
 	}
 	srv.now = func() time.Time { return time.Now().Add(time.Second) }
@@ -158,10 +158,10 @@ func TestGroupRemovalTakesEffectAtOnce(t *testing.T) {
 	if rec := admin.postForm("/admin/groups/team/members/delete", url.Values{"csrf": {csrf}, "email": {"amy@example.com"}}); rec.Code != http.StatusFound {
 		t.Fatalf("remove member = %d", rec.Code)
 	}
-	if rec := user.get("/verify", requireGroups("team")); rec.Code == http.StatusOK {
+	if rec := user.get("/verify", groupGuard(t, srv, "team")); rec.Code == http.StatusOK {
 		t.Fatal("a removed member still reaches the group's app")
 	}
-	if rec := verifyAny(user); rec.Code != http.StatusOK {
+	if rec := verifyAny(t, srv, user); rec.Code != http.StatusOK {
 		t.Errorf("removal from a group ended the whole session: %d", rec.Code)
 	}
 }
@@ -177,7 +177,7 @@ func TestRevokingACardEndsItsSessions(t *testing.T) {
 			a, b := newClient(t, srv.Handler()), newClient(t, srv.Handler())
 			a.scan(tokA)
 			b.scan(tokB)
-			if a.get("/verify", requireGroups("ward_a")).Code != http.StatusOK || b.get("/verify", requireGroups("ward_b")).Code != http.StatusOK {
+			if a.get("/verify", groupGuard(t, srv, "ward_a")).Code != http.StatusOK || b.get("/verify", groupGuard(t, srv, "ward_b")).Code != http.StatusOK {
 				t.Fatal("the cards did not grant sessions")
 			}
 			codes, _ := srv.store.ListBreakGlassCodes(ctx)
@@ -194,10 +194,10 @@ func TestRevokingACardEndsItsSessions(t *testing.T) {
 			if rec := admin.postForm(path+"/"+action, url.Values{"csrf": {adminCSRF(t, admin, path)}}); rec.Code != http.StatusFound {
 				t.Fatalf("%s = %d", action, rec.Code)
 			}
-			if rec := a.get("/verify", requireGroups("ward_a")); rec.Code == http.StatusOK {
+			if rec := a.get("/verify", groupGuard(t, srv, "ward_a")); rec.Code == http.StatusOK {
 				t.Errorf("the card's session survived %s", action)
 			}
-			if rec := b.get("/verify", requireGroups("ward_b")); rec.Code != http.StatusOK {
+			if rec := b.get("/verify", groupGuard(t, srv, "ward_b")); rec.Code != http.StatusOK {
 				t.Errorf("another card's session ended: %d", rec.Code)
 			}
 		})
@@ -221,14 +221,14 @@ func TestReplacingAnAuthenticatorEndsSessions(t *testing.T) {
 	if rec := admin.postForm("/admin/totp/generate", url.Values{"csrf": {adminCSRF(t, admin, "/admin/totp")}, "email": {"admin@example.com"}}); rec.Code != http.StatusOK {
 		t.Fatalf("first secret = %d", rec.Code)
 	}
-	if rec := verifyAny(elsewhere); rec.Code != http.StatusOK {
+	if rec := verifyAny(t, srv, elsewhere); rec.Code != http.StatusOK {
 		t.Fatalf("a first secret ended a session: %d", rec.Code)
 	}
 	tick()
 	if rec := admin.postForm("/admin/totp/generate", url.Values{"csrf": {adminCSRF(t, admin, "/admin/totp")}, "email": {"admin@example.com"}}); rec.Code != http.StatusOK {
 		t.Fatalf("replacing the secret = %d", rec.Code)
 	}
-	if rec := verifyAny(elsewhere); rec.Code != http.StatusFound {
+	if rec := verifyAny(t, srv, elsewhere); rec.Code != http.StatusFound {
 		t.Fatalf("replacing the secret left a session running: %d", rec.Code)
 	}
 	tick()
@@ -238,7 +238,7 @@ func TestReplacingAnAuthenticatorEndsSessions(t *testing.T) {
 	if rec := other.postForm("/admin/totp/remove", url.Values{"csrf": {adminCSRF(t, other, "/admin/totp")}, "email": {"admin@example.com"}}); rec.Code != http.StatusFound {
 		t.Fatalf("remove = %d", rec.Code)
 	}
-	if rec := verifyAny(other); rec.Code != http.StatusFound {
+	if rec := verifyAny(t, srv, other); rec.Code != http.StatusFound {
 		t.Fatalf("removing the secret left a session running: %d", rec.Code)
 	}
 }
@@ -289,7 +289,7 @@ func TestGroupRemovalSurvivesRestartAndSameSecond(t *testing.T) {
 			user, admin := newClient(t, srv.Handler()), newClient(t, srv.Handler())
 			loginAs(t, user, sender, "amy@example.com", nil)
 			loginAs(t, admin, sender, "admin@example.com", nil)
-			if rec := user.get("/verify", requireGroups("team")); rec.Code != http.StatusOK {
+			if rec := user.get("/verify", groupGuard(t, srv, "team")); rec.Code != http.StatusOK {
 				t.Fatalf("before removal = %d", rec.Code)
 			}
 			if tc == "restart" {
@@ -309,7 +309,7 @@ func TestGroupRemovalSurvivesRestartAndSameSecond(t *testing.T) {
 				h = restarted.Handler()
 			}
 			rc := &client{t: t, h: h, cookies: user.cookies}
-			if rec := rc.get("/verify", requireGroups("team")); rec.Code == http.StatusOK {
+			if rec := rc.get("/verify", groupGuard(t, srv, "team")); rec.Code == http.StatusOK {
 				t.Fatal("a removed member still reaches the group's app")
 			}
 		})
@@ -386,7 +386,7 @@ func TestCodeRequestDuringAFloodCannotBeSeen(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	loginAs(t, c, sender, "amy@example.com", nil)
-	if rec := verifyAny(c); rec.Code != http.StatusOK {
+	if rec := verifyAny(t, srv, c); rec.Code != http.StatusOK {
 		t.Fatalf("signing in after the flood = %d", rec.Code)
 	}
 }

@@ -325,7 +325,7 @@ func TestGuestCannotReachAppRoleThroughInclude(t *testing.T) {
 	if _, err := srv.store.AddGroupMembers(ctx, "collaborators", []string{strangerAddr, "staff@example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	policy := map[string]string{"X-Auth-Policy": "groups=airdb_admin admin"}
+	policy := groupGuard(t, srv, "airdb_admin")
 	// Signed in before the include exists: the refusal at the guard re-reads
 	// the groups, and the re-read must drop the role as well.
 	early := newClient(t, srv.Handler())

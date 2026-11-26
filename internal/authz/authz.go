@@ -17,13 +17,13 @@ const (
 	// RoleGuest is the base role of a guest session: an address the allow-list
 	// does not permit, signed in through a host listed in OPEN_REGISTRATION_HOSTS.
 	// It is never returned by Role (which answers "is this address permitted?");
-	// LoginRole confers it, and only a route whose policy says guests=allow (or
-	// names a DB group the guest was explicitly placed in) admits it.
+	// LoginRole confers it, and only an app role held by guests (or by a list
+	// the guest was explicitly placed in) admits it.
 	RoleGuest = "guest"
 	// RoleMember is the base role of an address the allow-list does not
 	// permit but that holds an app role (or has accepted an invitation). It
 	// is never sent to an app: such a session's groups carry the guest tier
-	// token, and an older guard admits it only where it would admit a guest.
+	// token, and a role guard decides it by its roles.
 	RoleMember = "member"
 )
 
@@ -33,9 +33,8 @@ const (
 // user. Safe only because login is email-verified (OTP) — the code proves the
 // visitor controls that mailbox — so a wildcard grants no access to an address
 // the visitor cannot actually receive mail at. Admin remains an exact allow-list
-// regardless, and per-app gates (CanAccessApp / protected_groups) are unchanged:
-// with a wildcard, a plain `import protected` route admits any verified email,
-// so private apps behind the same auth must gate by group or domain.
+// regardless, and app roles are unchanged: with a wildcard, a role held by a
+// domain group still admits only that group's domains.
 const Wildcard = "*"
 
 // Policy captures the access rules. Domains and emails are stored lowercased.
@@ -109,8 +108,8 @@ func (p *Policy) Role(email string) string {
 // GuestEligible reports whether email may be signed in as a guest: it has a
 // local part and its domain passes validPublicDomain. This is the same sanity
 // gate as the wildcard path — not a trust decision. What makes a guest safe is
-// that OTP proves mailbox control and CanAccessApp admits a guest only where a
-// route has opted in.
+// that OTP proves mailbox control and a role guard admits a guest only where
+// an app role is held by guests.
 func GuestEligible(email string) bool {
 	email = strings.ToLower(strings.TrimSpace(email))
 	at := strings.LastIndex(email, "@")
@@ -245,17 +244,6 @@ func ValidGroupName(name string) bool {
 	return true
 }
 
-// ListNames reports whether a policy list (such as a route's groups=) names
-// want, split exactly as CanAccessApp splits it.
-func ListNames(list, want string) bool {
-	for _, g := range splitList(list) {
-		if g == want {
-			return true
-		}
-	}
-	return false
-}
-
 // HasGroup reports whether the comma-separated groups string contains target.
 func HasGroup(groups, target string) bool {
 	for _, g := range strings.Split(groups, ",") {
@@ -278,9 +266,23 @@ func DomainOf(email string) string {
 	return email[at+1:]
 }
 
+// DomainIn reports whether email's domain is in list, a comma/space-separated
+// list of domains. An address with no domain never is.
+func DomainIn(email, list string) bool {
+	d := DomainOf(email)
+	if d == "" {
+		return false
+	}
+	for _, want := range splitList(list) {
+		if d == want {
+			return true
+		}
+	}
+	return false
+}
+
 // splitList parses a comma/space/semicolon/newline-separated list, lowercased,
-// trimmed, with blanks dropped. Used for the per-app requirement headers and
-// matches how group names and domains are stored (lowercased).
+// trimmed, with blanks dropped, matching how domains are stored (lowercased).
 func splitList(s string) []string {
 	var out []string
 	for _, f := range strings.FieldsFunc(s, func(r rune) bool {
@@ -289,69 +291,6 @@ func splitList(s string) []string {
 		out = append(out, strings.ToLower(f))
 	}
 	return out
-}
-
-// CanAccessApp decides whether a principal may reach a specific app, given that
-// app's declared requirements (the comma/space-separated allow-lists a Caddy
-// snippet passes in the single X-Auth-Policy header, parsed by the server into
-// reqDomains/reqGroups/allowGuests). email and groups come from the validated
-// session; breakGlass marks an emergency QR session and guest an open-
-// registration guest session.
-//
-//   - No requirement declared: a normal session is allowed (status quo), but a
-//     break-glass session is DENIED — emergency access must be explicitly opted
-//     into by group, so it can never reach a plain `import protected` app.
-//   - Requirement declared: allowed when the email's domain is in reqDomains OR
-//     the session's groups intersect reqGroups (an OR across the two lists).
-//   - Guests are deny-by-default, like break-glass: a guest passes only when the
-//     route says guests=allow, or when reqGroups names a group the guest has
-//     been placed in. A guest never satisfies a domain requirement (its address
-//     is by definition one the allow-list does not cover). This is the fail-safe
-//     property of per-host open registration: a forgotten bare `import protected`
-//     on any other app stays closed to strangers, because "any" does not carry
-//     guests=allow.
-//
-// allowGuests affects guest sessions only; it never widens or narrows what a
-// normal or break-glass session may reach.
-func CanAccessApp(email, groups string, breakGlass, guest bool, reqDomains, reqGroups string, allowGuests bool) bool {
-	if guest {
-		if allowGuests {
-			return true
-		}
-		// Explicit opt-in by group only, mirroring break-glass. No domain check:
-		// a guest's address could otherwise match a route's domain list only if
-		// the allow-list changed under a live session, and even then the session
-		// was minted as a stranger and should sign in again to be treated as one
-		// of the department.
-		for _, want := range splitList(reqGroups) {
-			if HasGroup(groups, want) {
-				return true
-			}
-		}
-		return false
-	}
-	if strings.TrimSpace(reqDomains) == "" && strings.TrimSpace(reqGroups) == "" {
-		return !breakGlass
-	}
-	// A break-glass session must NEVER satisfy a domain requirement — emergency
-	// access is opt-in by group only. The principal is "breakglass:<label>" with
-	// an admin-supplied label, and DomainOf would otherwise parse a domain out of
-	// a label that happens to contain an "@" (e.g. "ops@rch.org.au"), letting a
-	// card reach domain-restricted apps it was never scoped to. Gating on
-	// !breakGlass enforces the invariant regardless of the label's content.
-	if d := DomainOf(email); d != "" && !breakGlass {
-		for _, want := range splitList(reqDomains) {
-			if d == want {
-				return true
-			}
-		}
-	}
-	for _, want := range splitList(reqGroups) {
-		if HasGroup(groups, want) {
-			return true
-		}
-	}
-	return false
 }
 
 // ValidateRedirect returns a safe post-login redirect target. It accepts only

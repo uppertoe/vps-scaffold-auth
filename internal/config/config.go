@@ -36,9 +36,9 @@ type Config struct {
 	// OpenRegistrationHosts lists the hosts (DOMAIN or a subdomain of it) whose
 	// login admits strangers as guests: an OTP-verified address the allow-list
 	// does not permit is signed in with kind "guest" when the post-login
-	// destination is on one of these hosts. Guests reach only routes whose
-	// policy says guests=allow (the protected_open guard), so openness is a
-	// property of the one app that needs it rather than of the whole server.
+	// destination is on one of these hosts. Guests reach only app roles held
+	// by guests, so openness is a property of the one app that needs it
+	// rather than of the whole server.
 	OpenRegistrationHosts []string
 
 	// AllowApexRedirect permits the bare server domain as a post-login

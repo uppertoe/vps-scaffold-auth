@@ -33,7 +33,7 @@ func TestBreakGlassScanWithSessionRedirectsNotGrants(t *testing.T) {
 	}
 	// Their normal identity is intact: /verify on a route their domain satisfies
 	// returns their email (a break-glass downgrade would fail the domain gate).
-	if rec := c.get("/verify", requireDomains("example.com")); rec.Header().Get("Remote-Email") != "user@example.com" {
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Header().Get("Remote-Email") != "user@example.com" {
 		t.Errorf("identity after scan = %q, want the normal user", rec.Header().Get("Remote-Email"))
 	}
 	// Offer cookie set for the one-tap grant.
@@ -80,9 +80,9 @@ func TestBreakGlassActivateGrants(t *testing.T) {
 	if c.cookies[session.OfferCookie] != nil {
 		t.Error("offer cookie not cleared after activation")
 	}
-	rec = c.get("/verify", requireGroups("g"))
-	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "g" {
-		t.Fatalf("/verify after activate = %d groups=%q, want 200 g", rec.Code, rec.Header().Get("Remote-Groups"))
+	rec = c.get("/verify", groupGuard(t, srv, "g"))
+	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Roles") != "user" {
+		t.Fatalf("/verify after activate = %d roles=%q, want 200 user", rec.Code, rec.Header().Get("Remote-Roles"))
 	}
 	events, _ := withoutViews(srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0))
 	if len(events) != 2 || events[0].Outcome != store.OutcomeGranted {
@@ -103,7 +103,7 @@ func TestBreakGlassActivateRejectsForgedCSRF(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("forged-csrf activate = %d, want 403", rec.Code)
 	}
-	if rec := c.get("/verify", requireGroups("g")); rec.Code == http.StatusOK {
+	if rec := c.get("/verify", groupGuard(t, srv, "g")); rec.Code == http.StatusOK {
 		t.Error("forged-csrf activation granted access")
 	}
 	if c.cookies[session.OfferCookie] == nil {
@@ -126,7 +126,7 @@ func TestBreakGlassActivateWithoutOffer(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302 to login", rec.Code)
 	}
-	if rec := c.get("/verify", requireGroups("g")); rec.Code == http.StatusOK {
+	if rec := c.get("/verify", groupGuard(t, srv, "g")); rec.Code == http.StatusOK {
 		t.Error("activation without an offer granted access")
 	}
 }
@@ -176,7 +176,7 @@ func TestBreakGlassActivateRevokedCode(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("activate revoked = %d, want 404", rec.Code)
 	}
-	if rec := c.get("/verify", requireGroups("g")); rec.Code == http.StatusOK {
+	if rec := c.get("/verify", groupGuard(t, srv, "g")); rec.Code == http.StatusOK {
 		t.Error("activation of a revoked card granted access")
 	}
 }
@@ -198,7 +198,7 @@ func TestBreakGlassScanOverBreakGlassGrantsFresh(t *testing.T) {
 		t.Error("scan over a break-glass session should not defer to an offer")
 	}
 	// The latest grant governs: the session now reaches g2.
-	if rec := c.get("/verify", requireGroups("g2")); rec.Code != http.StatusOK {
+	if rec := c.get("/verify", groupGuard(t, srv, "g2")); rec.Code != http.StatusOK {
 		t.Fatalf("/verify g2 after re-scan = %d, want 200", rec.Code)
 	}
 	events, _ := withoutViews(srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0))
@@ -246,7 +246,7 @@ func TestBreakGlassActivateRefusedAfterRemint(t *testing.T) {
 	if rec := c.postForm("/break/activate", url.Values{"csrf": {denialCSRF(t, c)}}); rec.Code == http.StatusFound {
 		t.Fatal("an offer from before the re-mint was activated")
 	}
-	if rec := c.get("/verify", requireGroups("g")); rec.Code == http.StatusOK {
+	if rec := c.get("/verify", groupGuard(t, srv, "g")); rec.Code == http.StatusOK {
 		t.Fatal("the re-minted card granted a session")
 	}
 }

@@ -59,7 +59,7 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 		groups = &g
 	}
 	// id.Kind is passed through, so a guest stays a guest across renewals (and
-	// so stays confined to guests=allow routes). The one change is between a
+	// so stays confined to roles held by guests). The one change is between a
 	// person's own kinds: an address that now holds a role but is off the
 	// allow-list becomes a member, and a member the allow-list now admits
 	// becomes an ordinary session. The passkey and the time of sign-in pass
@@ -116,9 +116,9 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		// Fail closed on a kind this build does not know. The kind is inside the
 		// signed envelope, so only this service can mint one, but a cookie left by
 		// a newer build (a rollback, or two versions sharing SESSION_SECRET) must
-		// not be read as a normal session and waved through a bare `protected`:
-		// CanAccessApp treats anything that is neither break-glass nor guest as
-		// a department login. Such a session is cleared and sent to sign in.
+		// not be read as a normal session: anything that is neither break-glass
+		// nor guest would pass for a department login. Such a session is
+		// cleared and sent to sign in.
 		if !knownSessionKind(id.Kind) {
 			s.sessions.ClearSession(w)
 			s.redirectToLogin(w, r)
@@ -145,100 +145,18 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			}
 			renewed = true
 		}
-		// Per-app authorization. The app's Caddy snippet declares who may reach it
-		// in a single X-Auth-Policy header set with header_up (replace semantics),
-		// so a client can't inject or widen it; the gateway enforces the union. An
-		// authenticated-but-unallowed principal is sent to a denial page, NOT back
-		// to login — they are already signed in; logging in again wouldn't help and
-		// would clobber a working (e.g. break-glass) session. Their cookie is left
-		// untouched, so access to apps they *are* allowed on keeps working.
-		// A guard that names an app is decided by app roles (app_roles.go).
-		if wantsRoles(r) {
-			s.verifyByRole(w, r, id, now, renewed)
-			return
-		}
-		policy := r.Header.Get(headerPolicy)
-		s.warnLegacyPolicy(r)
-		reqDomains, reqGroups, allowGuests, ok := parsePolicy(policy)
-		if !ok {
-			// Fail closed: every shipped guard declares a policy in the exact
-			// grammar (the plain `protected` door sends the explicit "any"
-			// sentinel). A /verify with no X-Auth-Policy, an empty allow-list or
-			// a misspelled field is a misconfigured or hand-rolled guard. Denying
-			// is the only safe reading: "domains=" or "gruops=admin" must never
-			// collapse into "any signed-in user".
-			log.Printf("warning: refusing malformed X-Auth-Policy %q for %q", policy, r.Header.Get("X-Forwarded-Host"))
+		// Per-app authorization, by app roles (app_roles.go). Every guard names
+		// its app in X-Auth-App; a request that names none is refused, since
+		// it comes from a hand-rolled or misconfigured guard. An authenticated
+		// but unallowed principal is sent to a denial page, not back to login:
+		// they are already signed in, and their cookie is left untouched, so
+		// access to the apps they are allowed on keeps working.
+		if !wantsRoles(r) {
+			log.Printf("warning: refusing a guard that names no app for %q", r.Header.Get("X-Forwarded-Host"))
 			s.redirectToDenied(w, r)
 			return
 		}
-		// A guest's groups are filtered again on each request, so a group
-		// that has become an application role since sign-in is not honoured.
-		// A member (signed in by an app role) is no more than a guest here:
-		// it is admitted only where guests are, or by a group it is in.
-		if id.Kind == session.KindGuest || id.Kind == session.KindMember {
-			id.Groups = s.guestGroupsNow(r.Context(), id)
-		}
-		allowed := func(id *session.Identity) bool {
-			return authz.CanAccessApp(id.Email, id.Groups, id.Kind == session.KindBreakGlass,
-				id.Kind == session.KindGuest || id.Kind == session.KindMember,
-				reqDomains, reqGroups, allowGuests)
-		}
-		if !allowed(id) && s.wantsAdminStep(id, reqGroups) {
-			// An administrator without a recent second step, on a route that
-			// would admit the admin tier: the admin door, not the denial page.
-			s.redirectToStepUp(w, r)
-			return
-		}
-		if !allowed(id) {
-			// A group rule refused the session. Its groups are a snapshot taken
-			// when the cookie was last issued, so someone an administrator has
-			// just added to a group would otherwise wait for the next renewal.
-			// Read the current groups; if they changed, renew the session now
-			// (with the same checks as a scheduled renewal) and decide again.
-			// Unchanged groups issue no cookie, so a person repeatedly refused
-			// does not slide their session forward, and the "unchanged" result
-			// is remembered briefly (groupRecheck) so repeated refusals stay in
-			// memory.
-			// Only normal, member and guest sessions are re-read: any other
-			// kind (break-glass, or one a later build adds) stays refused, so
-			// the exclusion does not hang on a single check.
-			if renewed || (!personSession(id) && id.Kind != session.KindGuest) || strings.TrimSpace(reqGroups) == "" ||
-				s.groupRecheck.fresh(id.Email, id.Groups, now) {
-				s.redirectToDenied(w, r)
-				return
-			}
-			gen := s.groupRecheck.generation()
-			current, ok := s.currentGroups(r, id)
-			if !ok {
-				s.redirectToDenied(w, r)
-				return
-			}
-			if current == id.Groups {
-				s.groupRecheck.confirm(id.Email, id.Groups, now, gen)
-				s.redirectToDenied(w, r)
-				return
-			}
-			var groups *string
-			if current != "" {
-				groups = &current
-			}
-			if !s.renewSessionWith(w, r, id, now, groups) {
-				return
-			}
-			if !allowed(id) {
-				s.redirectToDenied(w, r)
-				return
-			}
-		}
-		// Audit that this principal reached this app, deduplicated to one row per
-		// hour so the per-request hot path stays a memory lookup (see accessAudit).
-		s.access.record(r.Context(), id.Email, r.Header.Get("X-Forwarded-Host"), id.Kind, now)
-		// These headers are the identity passed to the upstream app. Caddy
-		// strips any client-supplied copies before re-adding ours.
-		w.Header().Set("Remote-User", id.Email)
-		w.Header().Set("Remote-Email", id.Email)
-		w.Header().Set("Remote-Groups", id.Groups)
-		w.WriteHeader(http.StatusOK)
+		s.verifyByRole(w, r, id, now, renewed)
 		return
 	}
 
@@ -275,38 +193,10 @@ func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	orig := s.reconstructOriginalURL(r)
 	rd := authz.SafeRedirect(orig, s.cfg.Domain, s.cfg.DefaultRedirect)
 	loginURL := s.cfg.PublicURL + "/login?rd=" + url.QueryEscape(rd)
-	// Carry the app's required domain(s) (from the X-Auth-Policy header its Caddy
-	// snippet set on this /verify subrequest) into the login URL, so the login
-	// page can hint the expected domain and /request can decline a non-matching
-	// address early. UX only — see the note in handleRequest; enforcement remains
-	// in handleVerify. A group-only route (admin/collaborator door) declares no
-	// domain, so nothing is carried and it neither hints nor declines.
-	reqDomains, reqGroups, _, _ := parsePolicy(r.Header.Get(headerPolicy))
+	// A role guard's hint comes from who holds the role (roleLoginHint).
+	// UX only; /verify decides.
 	if wantsRoles(r) {
-		// A role guard sends no X-Auth-Policy; its hint comes from who
-		// holds the role (roleLoginHint).
 		loginURL += s.roleLoginHint(r)
-	} else if v := clampHint(reqDomains); v != "" {
-		loginURL += "&rqd=" + url.QueryEscape(v)
-		// Optional friendly label to display instead of enumerating domains.
-		if lbl := clampHint(r.Header.Get(headerDomainLabel)); lbl != "" {
-			loginURL += "&dlabel=" + url.QueryEscape(lbl)
-		}
-	} else if g := clampHint(reqGroups); g != "" {
-		// Group-only route (admin/collaborator door): no domain to hint, but carry
-		// that this IS a gated route so the login page suppresses the configured-
-		// domain fallback hint/placeholder — this door is deliberately for people
-		// who can't match the domain.
-		loginURL += "&rqg=" + url.QueryEscape(g)
-	}
-	// Optional alternate-entrance link (set by the app's snippet). Validated to
-	// be within the server domain before it is carried, so it can't become an
-	// off-domain link on the login page.
-	if alt, ok := authz.ValidateRedirect(clampHint(r.Header.Get(headerAltLogin)), s.cfg.Domain); ok {
-		loginURL += "&alt=" + url.QueryEscape(alt)
-		if label := clampHint(r.Header.Get(headerAltLabel)); label != "" {
-			loginURL += "&altlabel=" + url.QueryEscape(label)
-		}
 	}
 	http.Redirect(w, r, loginURL, http.StatusFound)
 }
@@ -393,24 +283,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// stay empty so completeLogin can land on the auth-host signed-in page rather
 	// than bouncing to a default that may be unservable (see loginRedirect).
 	rd := authz.SafeRedirect(r.URL.Query().Get("rd"), s.cfg.Domain, "")
-	data := pageData{Redirect: rd, RequireGroups: clampHint(r.URL.Query().Get("rqg"))}
-	applyAccessHint(&data, r.URL.Query().Get("rqd"), r.URL.Query().Get("dlabel"))
+	data := pageData{Redirect: rd}
+	applyAccessHint(&data, r.URL.Query().Get("rqd"))
 	applyRoleHint(&data, r.URL.Query().Get("rqr"), r.URL.Query().Get("rhd"))
-	s.applyAltLogin(&data, r.URL.Query().Get("alt"), r.URL.Query().Get("altlabel"))
 	s.renderLogin(w, r, http.StatusOK, data)
 }
 
-// applyAccessHint records the app's required domain(s) and optional display
-// label (carried from the /verify redirect) on the page so they survive to
-// /request as hidden fields, and sets the human hint string. It fires whenever a
-// domain is declared — a group-only route (admin/collaborator door) carries
-// none, so it gets no hint and no early decline.
-func applyAccessHint(d *pageData, rqd, label string) {
-	rqd, label = clampHint(rqd), clampHint(label)
+// applyAccessHint records the domains a role guard carries as rqd (see
+// roleLoginHint) on the page, so they survive to /request as a hidden field,
+// and sets the human hint string.
+func applyAccessHint(d *pageData, rqd string) {
+	rqd = clampHint(rqd)
 	d.RequireDomains = rqd
-	d.RequireDomainLabel = label
 	if rqd != "" {
-		d.HintDomains = domainLabel(rqd, label)
+		d.HintDomains = formatDomains(rqd)
 	}
 }
 
@@ -441,12 +327,7 @@ func applyRoleHint(d *pageData, rqr, rhd string) {
 //     present, else the first allow-list domain — so the example matches who may
 //     sign in. Left empty (→ generic placeholder) when no domain is configured.
 func (s *Server) applyLoginBranding(ctx context.Context, d *pageData) {
-	// A group-gated door declares no domain on purpose (it's the entrance for
-	// people who can't match one), so never presume the allow-list here.
-	if d.RequireGroups != "" {
-		return
-	}
-	// Nor at a role guard, where the allow-list says nothing about who holds
+	// Not at a role guard, where the allow-list says nothing about who holds
 	// the role; only the domains of its domain groups are suggested.
 	if d.RoleGuard {
 		if dom := firstDomain(d.RoleHintDomains); dom != "" && d.EmailPlaceholder == "" {
@@ -494,17 +375,6 @@ func firstDomain(s string) string {
 	return strings.ToLower(fields[0])
 }
 
-// domainLabel is the human display of a route's domain requirement: the
-// app-supplied label when set (e.g. "an approved Victorian health service"),
-// otherwise the enumerated domain list. Keeps the long-list case readable while
-// the precise list still governs the actual hint/decline logic.
-func domainLabel(rqd, label string) string {
-	if label != "" {
-		return label
-	}
-	return formatDomains(rqd)
-}
-
 // clampHint trims and bounds a UX hint value carried in the login URL.
 func clampHint(s string) string {
 	s = strings.TrimSpace(s)
@@ -512,25 +382,6 @@ func clampHint(s string) string {
 		return ""
 	}
 	return s
-}
-
-// applyAltLogin sets an optional "sign in another way" link on the page — for
-// users who can't match the domain (e.g. admins routed to a separate door). The
-// URL is carried in the (client-modifiable) login URL, so it is validated to be
-// an https URL within the server domain before rendering; an external or
-// malformed value is dropped, so this can never become a phishing link on the
-// trusted login page. The label is shown verbatim (auto-escaped by the
-// template) with a neutral default.
-func (s *Server) applyAltLogin(d *pageData, rawURL, rawLabel string) {
-	u, ok := authz.ValidateRedirect(clampHint(rawURL), s.cfg.Domain)
-	if !ok {
-		return
-	}
-	d.AltLoginURL = u
-	d.AltLoginLabel = clampHint(rawLabel)
-	if d.AltLoginLabel == "" {
-		d.AltLoginLabel = "Sign in another way"
-	}
 }
 
 // formatDomains renders a space/comma-separated domain list for display.
@@ -647,35 +498,28 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	remember := r.PostFormValue("remember") != ""
 
 	rqd := clampHint(r.PostFormValue("rqd"))
-	dlabel := clampHint(r.PostFormValue("dlabel"))
-	rqg := clampHint(r.PostFormValue("rqg"))
 	rqr, rhd := r.PostFormValue("rqr"), r.PostFormValue("rhd")
-	alt, altLabel := r.PostFormValue("alt"), r.PostFormValue("altlabel")
 
 	if !validEmail(emailAddr) {
-		data := pageData{Error: "Please enter a valid email address.", Redirect: rd, Remember: remember, RequireGroups: rqg}
-		applyAccessHint(&data, rqd, dlabel)
+		data := pageData{Error: "Please enter a valid email address.", Redirect: rd, Remember: remember}
+		applyAccessHint(&data, rqd)
 		applyRoleHint(&data, rqr, rhd)
-		s.applyAltLogin(&data, alt, altLabel)
 		s.renderLogin(w, r, http.StatusBadRequest, data)
 		return
 	}
 
-	// UX-only early decline: when the route declares a required domain, an
-	// address whose domain isn't accepted can never get in here, so say so now
-	// instead of emailing a code that would be rejected after login. Users who
-	// legitimately don't match the domain (admins, collaborators) belong on a
-	// separate group-only route, which declares no domain and so never declines.
-	// This is a courtesy, NOT a security boundary: rqd rides in the
-	// (client-modifiable) login URL, so the authoritative check stays in
-	// handleVerify with Caddy's trusted header_up.
-	if rqd != "" && !authz.CanAccessApp(emailAddr, "", false, false, rqd, "", false) {
+	// UX-only early decline: when a role is held only by domain groups (the
+	// guard carries their domains as rqd), an address at none of them can
+	// never get in here, so say so now instead of emailing a code that would
+	// be refused after sign-in. This is a courtesy, NOT a security boundary:
+	// rqd rides in the (client-modifiable) login URL, so the authoritative
+	// check stays in handleVerify.
+	if rqd != "" && !authz.DomainIn(emailAddr, rqd) {
 		data := pageData{
-			Error:    fmt.Sprintf(msgDeclineDomain, domainLabel(rqd, dlabel), withArticle(domainLabel(rqd, dlabel))),
-			Redirect: rd, Remember: remember, RequireGroups: rqg,
+			Error:    fmt.Sprintf(msgDeclineDomain, formatDomains(rqd), withArticle(formatDomains(rqd))),
+			Redirect: rd, Remember: remember,
 		}
-		applyAccessHint(&data, rqd, dlabel)
-		s.applyAltLogin(&data, alt, altLabel)
+		applyAccessHint(&data, rqd)
 		s.renderLogin(w, r, http.StatusForbidden, data)
 		return
 	}
@@ -1023,8 +867,8 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		// Re-derive "open host" from the destination exactly as /request did. rd
 		// is client-influenced (the posted copy wins), so this is not what keeps
 		// strangers out: a guest session is the same whichever host minted it,
-		// and the boundary is CanAccessApp admitting guests only on routes that
-		// opt in. The host check only decides where a guest login is offered.
+		// and the boundary is a role guard admitting guests only where an app
+		// role is held by guests. The host check only decides where a guest login is offered.
 		role := s.loginRole(r.Context(), st.Email, s.isOpenHost(rd))
 		if role == authz.RoleDeny {
 			s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeDenied)
@@ -1476,34 +1320,6 @@ func (s *Server) policyWithdrawn(id *session.Identity) bool {
 		return false
 	}
 	return s.renewalRole(id) == authz.RoleDeny
-}
-
-// wantsAdminStep reports whether a refused session would be admitted with the
-// admin tier: a normal session of a current administrator whose second step
-// is not recent, on a route whose group list names admin.
-func (s *Server) wantsAdminStep(id *session.Identity, reqGroups string) bool {
-	if id.Kind != "" || s.adminStepFresh(id) || s.renewalRole(id) != authz.RoleAdmin {
-		return false
-	}
-	if authz.ListNames(reqGroups, authz.RoleAdmin) {
-		return true
-	}
-	// A route naming an application's admin role alone: an administrator
-	// holds that role only with the admin tier (withoutAdminPairedGroups).
-	for g := range s.adminPairedGroups() {
-		if authz.ListNames(reqGroups, g) {
-			return true
-		}
-	}
-	return false
-}
-
-// redirectToStepUp sends an administrator without a recent second step to the
-// admin door, which returns them to the page they asked for.
-func (s *Server) redirectToStepUp(w http.ResponseWriter, r *http.Request) {
-	orig := s.reconstructOriginalURL(r)
-	rd := authz.SafeRedirect(orig, s.cfg.Domain, s.cfg.DefaultRedirect)
-	http.Redirect(w, r, s.stepUpURL(rd), http.StatusFound)
 }
 
 func (s *Server) stepUpURL(rd string) string {
@@ -2037,94 +1853,6 @@ func (s *Server) reconstructOriginalURL(r *http.Request) string {
 		return s.cfg.DefaultRedirect
 	}
 	return proto + "://" + host + uri
-}
-
-// Headers Caddy's guard snippets set on the /verify subrequest. The per-app
-// authorization requirement rides in a SINGLE header, X-Auth-Policy, which every
-// guard sets via `header_up` (replace semantics) so a client can neither inject
-// nor widen it. Carrying it in one always-set header — rather than a set of
-// headers each guard must remember to delete — removes the fail-open risk of a
-// forgotten strip, and lets new policy fields be added without touching every
-// guard. The UX hints below are not a privilege boundary (the alt link is
-// re-validated server-side to be within the domain; the label is cosmetic), so
-// they stay as separate plain headers.
-const (
-	headerPolicy      = "X-Auth-Policy"
-	headerDomainLabel = "X-Auth-Domain-Label"
-	headerAltLogin    = "X-Auth-Alt-Login"
-	headerAltLabel    = "X-Auth-Alt-Label"
-)
-
-// parsePolicy parses the X-Auth-Policy header against its exact grammar and
-// reports whether the value is well formed. The value is a ";"-separated set
-// of fields: the bare sentinel "any" (a plain `protected` guard: any signed-in
-// user), "domains=<list>" and "groups=<list>" each holding a non-empty
-// space/comma-separated allow-list (both safe charsets, so no escaping is
-// needed), and "guests=allow", which admits open-registration guest sessions.
-//
-// Anything else makes the whole value invalid and ok is false: an empty or
-// absent header, an empty allow-list ("domains="), a misspelled or unknown
-// field ("gruops=admin", "mode=any"), a guests value other than exactly
-// "allow", or "any" combined with an allow-list. The caller denies on !ok.
-// This is deliberate: a lenient parser that skipped what it did not
-// understand would turn a typo in a guard into "any signed-in user", which
-// is the one outcome a per-app policy exists to prevent.
-func parsePolicy(h string) (domains, groups string, allowGuests, ok bool) {
-	sawAny := false
-	for _, field := range strings.Split(h, ";") {
-		field = strings.TrimSpace(field)
-		if field == "" {
-			continue
-		}
-		if field == "any" {
-			sawAny = true
-			continue
-		}
-		k, v, found := strings.Cut(field, "=")
-		if !found {
-			return "", "", false, false
-		}
-		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
-		switch k {
-		case "domains":
-			if v == "" {
-				return "", "", false, false
-			}
-			domains = v
-		case "groups":
-			if v == "" {
-				return "", "", false, false
-			}
-			groups = v
-		case "guests":
-			if v != "allow" {
-				return "", "", false, false
-			}
-			allowGuests = true
-		default:
-			return "", "", false, false
-		}
-	}
-	hasList := domains != "" || groups != ""
-	if sawAny == hasList { // neither, or both
-		return "", "", false, false
-	}
-	return domains, groups, allowGuests, true
-}
-
-// warnLegacyPolicy flags a guard that still sends the old X-Auth-Require-*
-// headers but no X-Auth-Policy: its per-app narrowing is now ignored (the app
-// falls back to "any signed-in user"), so the Caddy snippet must be migrated.
-// Logged so an unmigrated custom guard is caught loudly rather than silently
-// failing open.
-func (s *Server) warnLegacyPolicy(r *http.Request) {
-	if r.Header.Get(headerPolicy) != "" {
-		return
-	}
-	if r.Header.Get("X-Auth-Require-Domains") != "" || r.Header.Get("X-Auth-Require-Groups") != "" {
-		log.Printf("warning: legacy X-Auth-Require-* ignored for %q; migrate its Caddy guard to set X-Auth-Policy",
-			r.Header.Get("X-Forwarded-Host"))
-	}
 }
 
 // clientIP returns the connecting client's IP, used as a rate-limit key. Caddy

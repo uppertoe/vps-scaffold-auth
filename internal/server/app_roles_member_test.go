@@ -14,28 +14,8 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
-// wantMemberOnOlderGuards checks that a session is no more than a guest on
-// the older guards: refused by "any" and by a domain policy (even one naming
-// its own domain), admitted where guests are, and by a group it is in.
-func wantMemberOnOlderGuards(t *testing.T, who string, c *client, domain, group string) {
-	t.Helper()
-	wantDenied(t, who+` on X-Auth-Policy "any"`, c.get("/verify", protectedAny()))
-	wantDenied(t, who+" on a domain policy", c.get("/verify", requireDomains(domain)))
-	wantDenied(t, who+" on a group policy it is not in", c.get("/verify", requireGroups("nobody-here")))
-	rec := c.get("/verify", map[string]string{"X-Auth-Policy": "any;guests=allow"})
-	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Remote-Groups"), authz.RoleGuest) {
-		t.Errorf("%s where guests are allowed = %d, groups %q; want 200 and the guest tier", who, rec.Code, rec.Header().Get("Remote-Groups"))
-	}
-	if group != "" {
-		if rec := c.get("/verify", requireGroups(group)); rec.Code != http.StatusOK {
-			t.Errorf("%s on a policy naming its group = %d, want 200", who, rec.Code)
-		}
-	}
-}
-
-// A person who may sign in only because of an app role is a member: their
-// role guard decides by their roles, and every older guard treats them as it
-// would a guest. An allow-listed person is unaffected.
+// A person who may sign in only because of an app role is a member, decided
+// by their roles. An allow-listed person is unaffected.
 func TestRoleOnlyPersonIsAMember(t *testing.T) {
 	srv, sender := rolesServer(t, "")
 	ctx := context.Background()
@@ -60,7 +40,6 @@ func TestRoleOnlyPersonIsAMember(t *testing.T) {
 	if g := rec.Header().Get("Remote-Groups"); g == authz.RoleUser || authz.HasGroup(g, authz.RoleUser) {
 		t.Errorf("role guard sent Remote-Groups %q to a member", g)
 	}
-	wantMemberOnOlderGuards(t, "a role-only person", p, "partner.org", "fellows")
 
 	// The allow-listed person is exactly as before.
 	u := newClient(t, srv.Handler())
@@ -68,7 +47,7 @@ func TestRoleOnlyPersonIsAMember(t *testing.T) {
 	if id := sessionOf(t, srv, u); id.Kind != "" || id.Groups != authz.RoleUser {
 		t.Errorf("allow-listed session: kind %q, groups %q", id.Kind, id.Groups)
 	}
-	for _, h := range []map[string]string{protectedAny(), requireDomains("example.com"), withHost(roleGuard("enquiries", ""), "enquiries.example.com")} {
+	for _, h := range []map[string]string{withHost(roleGuard("enquiries", ""), "enquiries.example.com")} {
 		if rec := u.get("/verify", h); rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != authz.RoleUser {
 			t.Errorf("allow-listed person on %v = %d, groups %q", h, rec.Code, rec.Header().Get("Remote-Groups"))
 		}
@@ -96,7 +75,6 @@ func TestInviteeIsAMember(t *testing.T) {
 	if rec := p.get("/verify", withHost(roleGuard("enquiries", "admin"), "enquiries.example.com")); rec.Code != http.StatusOK {
 		t.Errorf("invitee on the role guard = %d, want 200", rec.Code)
 	}
-	wantMemberOnOlderGuards(t, "an invitee", p, "monash.org", "")
 }
 
 // Renewal keeps a member a member, turns a member whom the allow-list now
@@ -123,18 +101,17 @@ func TestMemberTierAtRenewal(t *testing.T) {
 	if id := sessionOf(t, srv, p); id.Iat == before || id.Kind != session.KindMember || !strings.HasPrefix(id.Groups, authz.RoleGuest) {
 		t.Errorf("renewed member: iat %d (was %d), kind %q, groups %q", id.Iat, before, id.Kind, id.Groups)
 	}
-	wantDenied(t, "a renewed member on any", p.get("/verify", protectedAny()))
 
 	// The allow-list changes: partner.org joins, example.com leaves.
 	srv.cfg.AllowedDomains = []string{"partner.org"}
 	srv.policy = newPolicyFor(srv.cfg)
-	if rec := p.get("/verify", protectedAny()); rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != authz.RoleUser {
+	if rec := p.get("/verify", roleGuard("enquiries", "")); rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != authz.RoleUser {
 		t.Errorf("member now on the allow-list = %d, groups %q; want 200, user", rec.Code, rec.Header().Get("Remote-Groups"))
 	}
 	if id := sessionOf(t, srv, p); id.Kind != "" {
 		t.Errorf("kind after joining the allow-list = %q, want ordinary", id.Kind)
 	}
-	wantDenied(t, "a person who left the allow-list but holds a role", a.get("/verify", protectedAny()))
+	a.get("/verify", roleGuard("enquiries", ""))
 	if id := sessionOf(t, srv, a); id.Kind != session.KindMember {
 		t.Errorf("kind after leaving the allow-list = %q, want member", id.Kind)
 	}

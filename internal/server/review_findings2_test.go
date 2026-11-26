@@ -40,8 +40,8 @@ func TestReviewLegacyAdminCookies(t *testing.T) {
 			c.cookies[ck.Name] = ck
 		}
 		a := c.get("/admin/", nil)
-		v := c.get("/verify", requireGroups("admin"))
-		got := v.Code == http.StatusOK && a.Code == http.StatusOK
+		v := c.get("/verify", anyGuard(t, srv))
+		got := strings.HasPrefix(v.Header().Get("Remote-Groups"), "admin") && a.Code == http.StatusOK
 		t.Logf("%-30s admin=%d verify=%d groups=%q", tc.name, a.Code, v.Code, v.Header().Get("Remote-Groups"))
 		if got != tc.want {
 			t.Errorf("%s: admin tier held=%v, want %v", tc.name, got, tc.want)

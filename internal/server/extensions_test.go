@@ -77,7 +77,7 @@ func TestDBGroupsSurfacedInHeader(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
-	rec := c.get("/verify", protectedAny())
+	rec := c.get("/verify", anyGuard(t, srv))
 	got := rec.Header().Get("Remote-Groups")
 	if got != "user,whitelisted" {
 		t.Errorf("Remote-Groups = %q, want user,whitelisted", got)
@@ -85,7 +85,9 @@ func TestDBGroupsSurfacedInHeader(t *testing.T) {
 }
 
 // mintCode inserts a break-glass code directly and returns its raw token.
-func mintCode(t *testing.T, srv *Server, label, group string) string {
+// mintGroupCode mints a card that still names a group, as cards did before
+// app roles; a role guard admits no such card.
+func mintGroupCode(t *testing.T, srv *Server, label, group string) string {
 	t.Helper()
 	token, err := breakglass.GenerateToken()
 	if err != nil {
@@ -103,6 +105,28 @@ func mintCode(t *testing.T, srv *Server, label, group string) string {
 	return token
 }
 
+// mintCode mints a card for the user role of the app groupGuard names for
+// group, so groupGuard(t, srv, group) is the guard the card opens.
+func mintCode(t *testing.T, srv *Server, label, group string) string {
+	t.Helper()
+	groupGuard(t, srv, group)
+	token, err := breakglass.GenerateToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := srv.secrets.Seal(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.CreateBreakGlassCode(context.Background(), store.BreakGlassCode{
+		Label: label, App: appForGroup(group), Role: "user", TokenEnc: enc, TokenHash: otp.Hash(token),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv.forgetRoles()
+	return token
+}
+
 func TestBreakGlassGrantsAndLogs(t *testing.T) {
 	srv, _ := testServer(t)
 	token := mintCode(t, srv, "Angiography Lab 1", "code_stroke_break_glass")
@@ -114,12 +138,12 @@ func TestBreakGlassGrantsAndLogs(t *testing.T) {
 	}
 	// Session granted, but only on a route that requires this code's group
 	// (break-glass is deny-by-default elsewhere).
-	rec = c.get("/verify", requireGroups("code_stroke_break_glass"))
+	rec = c.get("/verify", groupGuard(t, srv, "code_stroke_break_glass"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/verify after scan = %d, want 200", rec.Code)
 	}
-	if g := rec.Header().Get("Remote-Groups"); g != "code_stroke_break_glass" {
-		t.Errorf("Remote-Groups = %q", g)
+	if g := rec.Header().Get("Remote-Roles"); g != "user" {
+		t.Errorf("Remote-Roles = %q, want user", g)
 	}
 	// Audited.
 	events, err := withoutViews(srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0))
@@ -156,7 +180,7 @@ func TestBreakGlassSessionNotRenewed(t *testing.T) {
 	before := c.cookies[session.SessionCookie].Value
 	// Advance time beyond the renew window; a normal session would re-issue.
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
-	c.get("/verify", requireGroups("g"))
+	c.get("/verify", groupGuard(t, srv, "g"))
 	after := c.cookies[session.SessionCookie]
 	if after != nil && after.Value != before {
 		t.Error("break-glass session was renewed; it must expire at its short TTL")

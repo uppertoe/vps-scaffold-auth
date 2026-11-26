@@ -112,14 +112,10 @@ func TestRoleGuardRefusesMisconfiguredGuards(t *testing.T) {
 	wantDenied(t, "unknown app", c.get("/verify", roleGuard("nope", "")))
 	wantDenied(t, "undeclared role", c.get("/verify", roleGuard("caffeine", "editor")))
 	wantDenied(t, "app without a user role", c.get("/verify", roleGuard("orphan", "admin")))
-	both := roleGuard("caffeine", "")
-	both["X-Auth-Policy"] = "any"
-	wantDenied(t, "app and policy together", c.get("/verify", both))
-	wantDenied(t, "role and policy together", c.get("/verify", map[string]string{"X-Auth-Role": "user", "X-Auth-Policy": "any"}))
-	// The legacy guard is unchanged.
-	if rec := c.get("/verify", protectedAny()); rec.Code != http.StatusOK {
-		t.Errorf("legacy guard = %d, want 200", rec.Code)
-	}
+	wantDenied(t, "a role with no app", c.get("/verify", map[string]string{"X-Auth-Role": "user", "X-Forwarded-Host": "caffeine.example.com"}))
+	// A guard that names no app, as the older guards did, is refused.
+	wantDenied(t, "no app", c.get("/verify", map[string]string{"X-Auth-Policy": "any", "X-Forwarded-Host": "caffeine.example.com"}))
+	wantDenied(t, "no headers", c.get("/verify", nil))
 }
 
 func TestRoleGuardRefusedWhenModelOff(t *testing.T) {
@@ -269,7 +265,6 @@ func TestSignInByRole(t *testing.T) {
 			t.Fatalf("request %d: %d, roles %q; want 200, admin", i, rec.Code, rec.Header().Get("Remote-Roles"))
 		}
 	}
-	wantDenied(t, "a role-only person on a legacy domain guard", cl.get("/verify", requireDomains("example.com")))
 
 	// With the model off, a role does not let an address sign in.
 	off, _ := testServer(t)

@@ -72,9 +72,7 @@ func (s *Server) appRoleGroups() map[string]bool {
 			out[g] = true
 		}
 	}
-	sites := s.routeAccess()
-	s.noteOlderGuards(olderGuardSites(m, sites))
-	for _, site := range sites {
+	for _, site := range s.routeAccess() {
 		for _, rule := range site.Rules {
 			if rule.Kind != "groups" || !containsFold(rule.Values, authz.RoleAdmin) {
 				continue

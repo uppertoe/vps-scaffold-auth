@@ -181,9 +181,9 @@ func TestVerifyCodeGuestFromStateCookieRD(t *testing.T) {
 	}
 }
 
-// The fail-safe property: every guard that does not say guests=allow keeps a
-// guest out, including the bare `import protected` ("any").
-func TestVerifyGuestPolicies(t *testing.T) {
+// A role held by guests admits a guest, and so does a list the guest has
+// been placed in.
+func TestVerifyGuestRoles(t *testing.T) {
 	srv, sender := guestServer(t)
 	ctx := context.Background()
 	if err := srv.store.CreateGroup(ctx, "reviewers", ""); err != nil {
@@ -195,24 +195,9 @@ func TestVerifyGuestPolicies(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginGuest(t, c, sender, strangerAddr)
 
-	denied := []string{
-		"any",
-		"domains=example.com",
-		"domains=gmail.com", // even the guest's own domain
-		"groups=finance",
-		"groups=admin",
-		"any;guests=yes",
-	}
-	for _, p := range denied {
-		rec := c.get("/verify", map[string]string{"X-Auth-Policy": p})
-		if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/denied?rd=") {
-			t.Errorf("policy %q: guest got %d %q, want 302 to /denied", p, rec.Code, rec.Header().Get("Location"))
-		}
-	}
-
-	rec := c.get("/verify", map[string]string{"X-Auth-Policy": "any;guests=allow"})
+	rec := c.get("/verify", anyGuard(t, srv))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("any;guests=allow = %d, want 200", rec.Code)
+		t.Fatalf("a role held by guests = %d, want 200", rec.Code)
 	}
 	if g := rec.Header().Get("Remote-Groups"); g != "guest,reviewers" {
 		t.Errorf("Remote-Groups = %q, want guest,reviewers", g)
@@ -221,22 +206,22 @@ func TestVerifyGuestPolicies(t *testing.T) {
 		t.Errorf("Remote-Email = %q", e)
 	}
 
-	// Explicit opt-in by a DB group the guest was placed in.
-	if rec := c.get("/verify", requireGroups("reviewers")); rec.Code != http.StatusOK {
-		t.Errorf("groups=reviewers (member) = %d, want 200", rec.Code)
+	// A list the guest was placed in.
+	if rec := c.get("/verify", groupGuard(t, srv, "reviewers")); rec.Code != http.StatusOK {
+		t.Errorf("a role held by a list the guest is in = %d, want 200", rec.Code)
 	}
 }
 
-// guests=allow does not change what a department user may reach.
-func TestGuestsAllowStillAdmitsNormalUsers(t *testing.T) {
+// A role held by guests admits a department user as well.
+func TestGuestRoleAdmitsNormalUsers(t *testing.T) {
 	srv, sender := guestServer(t)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", url.Values{"rd": {openHostRD}})
 	if k := sessionOf(t, srv, c).Kind; k != "" {
 		t.Fatalf("allow-listed user on the open host got kind %q, want a normal session", k)
 	}
-	if rec := c.get("/verify", map[string]string{"X-Auth-Policy": "any;guests=allow"}); rec.Code != http.StatusOK {
-		t.Errorf("normal user on any;guests=allow = %d, want 200", rec.Code)
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
+		t.Errorf("normal user on a role held by guests = %d, want 200", rec.Code)
 	}
 }
 
@@ -256,7 +241,7 @@ func TestGuestSessionRenews(t *testing.T) {
 	}
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
 
-	rec := c.get("/verify", map[string]string{"X-Auth-Policy": "any;guests=allow"})
+	rec := c.get("/verify", anyGuard(t, srv))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("guest at renewal = %d, want 200", rec.Code)
 	}
@@ -295,7 +280,7 @@ func TestGuestNeverAdmin(t *testing.T) {
 	// not step up at renewal; it stays a guest.
 	srv.policy = authz.NewPolicy([]string{"example.com"}, []string{"admin@example.com", strangerAddr})
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
-	c.get("/verify", map[string]string{"X-Auth-Policy": "any;guests=allow"})
+	c.get("/verify", anyGuard(t, srv))
 	if id := sessionOf(t, srv, c); id.Kind != session.KindGuest || strings.Contains(id.Groups, "admin") {
 		t.Errorf("guest stepped up at renewal: kind=%q groups=%q", id.Kind, id.Groups)
 	}
@@ -371,7 +356,7 @@ func TestGuestAccessShownInAdminLog(t *testing.T) {
 	srv, sender := guestServer(t)
 	c := newClient(t, srv.Handler())
 	loginGuest(t, c, sender, strangerAddr)
-	c.get("/verify", map[string]string{"X-Auth-Policy": "any;guests=allow", "X-Forwarded-Host": "apply.example.com"})
+	c.get("/verify", anyGuard(t, srv))
 
 	ac := newClient(t, srv.Handler())
 	loginAs(t, ac, sender, "admin@example.com", nil)
@@ -409,7 +394,7 @@ func TestGuestSessionEndsWhenNoHostIsOpen(t *testing.T) {
 	loginGuest(t, c, sender, strangerAddr)
 
 	srv.cfg.OpenRegistrationHosts = nil
-	rec := c.get("/verify", map[string]string{"X-Auth-Policy": "any;guests=allow"})
+	rec := c.get("/verify", anyGuard(t, srv))
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
 		t.Fatalf("guest with no open host should be sent to login at once; got %d %q", rec.Code, rec.Header().Get("Location"))
 	}
@@ -492,9 +477,8 @@ func TestGroupPageMarksMemberNotOnAllowList(t *testing.T) {
 
 // A session whose kind this build does not know is refused at /verify rather
 // than read as a normal login. The kind rides inside the signed envelope, so
-// only a sibling build sharing SESSION_SECRET could mint one; CanAccessApp
-// would otherwise treat it as a department user and admit it to bare
-// `protected` routes.
+// only a sibling build sharing SESSION_SECRET could mint one, and it must
+// not be mistaken for a department user.
 func TestVerifyRefusesUnknownSessionKind(t *testing.T) {
 	srv, _ := guestServer(t)
 	c := newClient(t, srv.Handler())
@@ -505,7 +489,7 @@ func TestVerifyRefusesUnknownSessionKind(t *testing.T) {
 	for _, ck := range rec.Result().Cookies() {
 		c.cookies[ck.Name] = ck
 	}
-	res := c.get("/verify", map[string]string{"X-Auth-Policy": "any"})
+	res := c.get("/verify", anyGuard(t, srv))
 	if res.Code != http.StatusFound || !strings.Contains(res.Header().Get("Location"), "/login") {
 		t.Fatalf("unknown kind at /verify = %d %q, want 302 to login", res.Code, res.Header().Get("Location"))
 	}
