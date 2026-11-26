@@ -190,6 +190,15 @@ func TestGuardWithNoAppFailsClosed(t *testing.T) {
 	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
 		t.Fatalf("role guard = %d, want 200", rec.Code)
 	}
+	// An older guard sends a policy and does not delete a client's
+	// X-Auth-App, so a request naming an app beside a policy may carry the
+	// client's own choice of app: it is refused, signed in or not.
+	forged := anyGuard(t, srv)
+	forged["X-Auth-Policy"] = "groups=admin"
+	wantDenied(t, "an app beside a policy", c.get("/verify", forged))
+	if rec := newClient(t, srv.Handler()).get("/verify", forged); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login?") {
+		t.Errorf("an app beside a policy, no session = %d %q, want sign in", rec.Code, rec.Header().Get("Location"))
+	}
 }
 
 // A person added to a group after signing in is let through at once: the

@@ -232,6 +232,13 @@ func (s *Server) roleRequestProblem(r *http.Request) (app, role, problem string)
 		role = roles.UserRole
 	}
 	switch {
+	case r.Header.Get("X-Auth-Policy") != "":
+		// Only an older guard sends a policy, and an older guard does not
+		// delete a client's X-Auth-App or X-Auth-Role, so the app and role on
+		// such a request may be the client's own. Every server has retired the
+		// older guards; until their snippets are gone from the servers'
+		// auth.caddy copies, a request that still carries one is refused.
+		return app, role, "the guard sends X-Auth-Policy, which only an older guard sends"
 	case !s.appRoles.Has(app, role):
 		return app, role, "not in the app roles manifest"
 	case !s.appRoles.Apps[app].ServesHost(forwardedHost(r)):
