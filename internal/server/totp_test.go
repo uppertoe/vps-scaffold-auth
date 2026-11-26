@@ -58,8 +58,8 @@ func TestAdminSignsInWithoutTOTP(t *testing.T) {
 	loginAs(t, c, sender, "admin@example.com", url.Values{"rd": {"https://app.example.com/ward"}})
 
 	rec := c.get("/verify", anyGuard(t, srv))
-	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
-		t.Fatalf("staff route = %d groups=%q, want 200 user", rec.Code, rec.Header().Get("Remote-Groups"))
+	if rec.Code != http.StatusOK || sessionOf(t, srv, c).Groups != "user" {
+		t.Fatalf("staff route = %d groups=%q, want 200 user", rec.Code, sessionOf(t, srv, c).Groups)
 	}
 	rec = c.get("/admin/break", nil)
 	want := "https://auth.example.com/totp?rd=" + url.QueryEscape("https://auth.example.com/admin/break")
@@ -93,8 +93,8 @@ func TestAdminDoorGivesAdminTier(t *testing.T) {
 		t.Fatalf("/totp = %d loc=%q, want 302 to the page asked for", rec.Code, rec.Header().Get("Location"))
 	}
 	rec = c.get("/verify", anyGuard(t, srv))
-	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Remote-Groups"), "admin") {
-		t.Fatalf("staff route after the door = %d groups=%q", rec.Code, rec.Header().Get("Remote-Groups"))
+	if rec.Code != http.StatusOK || !strings.HasPrefix(sessionOf(t, srv, c).Groups, "admin") {
+		t.Fatalf("staff route after the door = %d groups=%q", rec.Code, sessionOf(t, srv, c).Groups)
 	}
 	if rec := c.get("/admin/break", nil); rec.Code != http.StatusOK {
 		t.Fatalf("/admin after the door = %d, want 200", rec.Code)
@@ -129,8 +129,8 @@ func TestAdminTierLapsesAfterTwelveHours(t *testing.T) {
 	}
 	srv.now = func() time.Time { return time.Now().Add(adminStepMaxAge + time.Minute) }
 	rec := c.get("/verify", anyGuard(t, srv))
-	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
-		t.Fatalf("staff route after the limit = %d groups=%q, want 200 user", rec.Code, rec.Header().Get("Remote-Groups"))
+	if rec.Code != http.StatusOK || sessionOf(t, srv, c).Groups != "user" {
+		t.Fatalf("staff route after the limit = %d groups=%q, want 200 user", rec.Code, sessionOf(t, srv, c).Groups)
 	}
 	if rec := c.get("/admin/break", nil); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
 		t.Fatalf("/admin after the limit: %d loc=%q, want the admin door", rec.Code, rec.Header().Get("Location"))
@@ -146,13 +146,13 @@ func TestDemotedAdminLosesAdminGroupAtNextRequest(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 	stepUp(t, c, totpNow(t, secret, time.Now()), "")
-	if rec := c.get("/verify", anyGuard(t, srv)); !strings.HasPrefix(rec.Header().Get("Remote-Groups"), "admin") {
-		t.Fatalf("before demotion: groups=%q, want admin", rec.Header().Get("Remote-Groups"))
+	if g := groupsAfter(t, srv, c, anyGuard(t, srv)); !strings.HasPrefix(g, "admin") {
+		t.Fatalf("before demotion: groups=%q, want admin", g)
 	}
 	srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
 	rec := c.get("/verify", anyGuard(t, srv))
-	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != "user" {
-		t.Fatalf("after demotion = %d groups=%q, want 200 user", rec.Code, rec.Header().Get("Remote-Groups"))
+	if rec.Code != http.StatusOK || sessionOf(t, srv, c).Groups != "user" {
+		t.Fatalf("after demotion = %d groups=%q, want 200 user", rec.Code, sessionOf(t, srv, c).Groups)
 	}
 }
 
@@ -229,16 +229,16 @@ func TestEnablingTOTPReChallengesExistingAdminSession(t *testing.T) {
 	srv, sender := testServer(t) // TOTP off: the email code alone gives the admin tier
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
-	if rec := c.get("/verify", anyGuard(t, srv)); !strings.HasPrefix(rec.Header().Get("Remote-Groups"), "admin") {
-		t.Fatalf("/verify before enabling TOTP: groups=%q, want admin", rec.Header().Get("Remote-Groups"))
+	if g := groupsAfter(t, srv, c, anyGuard(t, srv)); !strings.HasPrefix(g, "admin") {
+		t.Fatalf("/verify before enabling TOTP: groups=%q, want admin", g)
 	}
 	if rec := c.get("/admin/break", nil); rec.Code != http.StatusOK {
 		t.Fatalf("/admin before enabling TOTP = %d, want 200", rec.Code)
 	}
 	srv.cfg.TOTPEnabled = true
 	secret := provisionTOTP(t, srv, "admin@example.com")
-	if rec := c.get("/verify", anyGuard(t, srv)); rec.Header().Get("Remote-Groups") != "user" {
-		t.Fatalf("staff route after enabling TOTP: groups=%q, want user", rec.Header().Get("Remote-Groups"))
+	if g := groupsAfter(t, srv, c, anyGuard(t, srv)); g != "user" {
+		t.Fatalf("staff route after enabling TOTP: groups=%q, want user", g)
 	}
 	if rec := c.get("/admin/break", nil); !strings.Contains(rec.Header().Get("Location"), "/totp?rd=") {
 		t.Fatalf("/admin after enabling TOTP: loc=%q, want the admin door", rec.Header().Get("Location"))
@@ -246,8 +246,8 @@ func TestEnablingTOTPReChallengesExistingAdminSession(t *testing.T) {
 	if rec := stepUp(t, c, totpNow(t, secret, time.Now()), ""); rec.Code != http.StatusFound {
 		t.Fatalf("/totp = %d", rec.Code)
 	}
-	if rec := c.get("/verify", anyGuard(t, srv)); !strings.HasPrefix(rec.Header().Get("Remote-Groups"), "admin") {
-		t.Fatalf("/verify after the door: groups=%q, want admin", rec.Header().Get("Remote-Groups"))
+	if g := groupsAfter(t, srv, c, anyGuard(t, srv)); !strings.HasPrefix(g, "admin") {
+		t.Fatalf("/verify after the door: groups=%q, want admin", g)
 	}
 }
 
@@ -391,7 +391,7 @@ func TestTOTPRefusesWhenAttemptCannotBeRecorded(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/totp with a failing store = %d, want 503", rec.Code)
 	}
-	if got := c.get("/verify", anyGuard(t, srv)).Header().Get("Remote-Groups"); got != "user" {
+	if got := groupsAfter(t, srv, c, anyGuard(t, srv)); got != "user" {
 		t.Fatalf("groups = %q: the admin tier was given although the attempt could not be recorded", got)
 	}
 	if !strings.Contains(rec.Body.String(), "try again in a moment") {

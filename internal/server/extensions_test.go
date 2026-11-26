@@ -77,10 +77,9 @@ func TestDBGroupsSurfacedInHeader(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
-	rec := c.get("/verify", anyGuard(t, srv))
-	got := rec.Header().Get("Remote-Groups")
+	got := groupsAfter(t, srv, c, anyGuard(t, srv))
 	if got != "user,whitelisted" {
-		t.Errorf("Remote-Groups = %q, want user,whitelisted", got)
+		t.Errorf("groups = %q, want user,whitelisted", got)
 	}
 }
 

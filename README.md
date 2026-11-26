@@ -37,17 +37,17 @@ browser ──▶ Caddy (app.example.com)
 4. User types the code → an HMAC-signed session cookie is set on `.example.com`
    (shared across all app subdomains).
 5. `/verify` now returns 200 when the person holds the role the guard names,
-   plus `Remote-User`, `Remote-Email`, `Remote-Roles` and `Remote-Groups`,
-   which Caddy forwards to the app.
+   plus `Remote-User`, `Remote-Email` and `Remote-Roles`, which Caddy
+   forwards to the app.
 
-`Remote-Groups` is a **comma-separated set**: the base role (`admin`, `user`, or
-`guest` for a stranger admitted by [open registration for one
-app](#open-registration-for-one-app)) followed by any DB-managed groups the user
-belongs to (e.g. `user,whitelisted`). The role is always present, so existing role-equality
-matchers keep working — but matchers that want the richer groups should test for
-membership in the list. The group set is computed at login and re-computed when a
-session renews, and at a session's next request after any membership change, so a
-change (an addition or a removal) takes effect at the person's next request.
+`Remote-Roles` is a **comma-separated set** of the roles the person holds in
+that app (e.g. `user,admin`). The session carries the person's groups, which
+decide the roles held through lists; they are computed at login and again when
+a session renews, and at a session's next request after any membership change,
+so a change (an addition or a removal) takes effect at the person's next
+request. The gateway sends `Remote-Groups` empty: apps decide by `Remote-Roles`,
+and a server's older copy of `auth.caddy` that still copies the header passes
+the app an empty value.
 
 Sessions are **stateless signed cookies** — no session store. Persisted state
 (single-use OTP codes, admin TOTP secrets, DB-managed groups, and break-glass
@@ -441,7 +441,7 @@ and carried to the browser by the guard's auth gate; a hand-rolled
 Admins (anyone in the `admin` group) get a web UI on the `auth.<domain>` host:
 
 - **`/admin/groups`** — define named groups (e.g. `whitelisted`) and manage their
-  member emails. Memberships surface in `Remote-Groups` at next login/renewal.
+  member emails. A role given to a list reaches its members at their next request.
 - **`/admin/break`** — manage break-the-glass codes (below).
 - **`/admin/access`** — the access log: login attempts and outcomes, plus which
   apps each person has reached (deduplicated to one row per user/app/hour, not
@@ -511,7 +511,7 @@ still reach an app during a time-critical event (e.g. a code stroke).
 
 ### Group members for apps
 
-Apps learn a person's groups on every request through `Remote-Groups`. For
+Apps learn a person's roles on every request through `Remote-Roles`. For
 work an app does outside a request, such as a weekly email to a group, the
 gateway can tell the app who is in the group, so membership is kept in the
 gateway and nowhere else.
@@ -654,8 +654,8 @@ Authorization: Bearer <token>
 ```
 
 The members are the people the gateway applies now: the group's own members
-and, through includes, the members of every group it includes, as
-`Remote-Groups` gives them at sign-in. A held feed change is not included
+and, through includes, the members of every group it includes, as a session
+holds them at sign-in. A held feed change is not included
 until it is applied, and an address that is not staff is left
 out, so a guest member is never reported. Each read is recorded, one row per
 app, group, caller address and hour, and the App feeds page lists the

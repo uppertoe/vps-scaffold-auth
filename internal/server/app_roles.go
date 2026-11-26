@@ -347,9 +347,20 @@ func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *sessio
 	s.access.record(r.Context(), id.Email, r.Header.Get("X-Forwarded-Host"), id.Kind, now)
 	w.Header().Set("Remote-User", id.Email)
 	w.Header().Set("Remote-Email", id.Email)
-	w.Header().Set("Remote-Groups", id.Groups)
 	w.Header().Set(headerRoles, strings.Join(held, ","))
+	blankIdentity(w, "Remote-Groups")
 	w.WriteHeader(http.StatusOK)
+}
+
+// blankIdentity sends each named identity header with an empty value. Apps
+// decide by Remote-Roles, and the gateway sends no groups. A server's copy of
+// auth.caddy may still copy a header the gateway does not send, and Caddy
+// then hands the app its placeholder text, "{http.reverse_proxy.header.…}",
+// rather than nothing; an empty header makes the copy empty too.
+func blankIdentity(w http.ResponseWriter, names ...string) {
+	for _, n := range names {
+		w.Header()[n] = []string{""}
+	}
 }
 
 // verifyByNetwork admits a request with no session when its guard names an
@@ -374,6 +385,7 @@ func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
 	// No identity: the app sees an empty Remote-User and the roles the
 	// network holds.
 	w.Header().Set(headerRoles, strings.Join(held, ","))
+	blankIdentity(w, "Remote-User", "Remote-Email", "Remote-Groups")
 	w.WriteHeader(http.StatusOK)
 	return true
 }

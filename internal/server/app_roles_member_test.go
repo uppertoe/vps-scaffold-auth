@@ -37,8 +37,8 @@ func TestRoleOnlyPersonIsAMember(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Header().Get("Remote-Roles") != "admin" {
 		t.Fatalf("role guard = %d, roles %q; want 200, admin", rec.Code, rec.Header().Get("Remote-Roles"))
 	}
-	if g := rec.Header().Get("Remote-Groups"); g == authz.RoleUser || authz.HasGroup(g, authz.RoleUser) {
-		t.Errorf("role guard sent Remote-Groups %q to a member", g)
+	if g := sessionOf(t, srv, p).Groups; g == authz.RoleUser || authz.HasGroup(g, authz.RoleUser) {
+		t.Errorf("a member's session carries %q", g)
 	}
 
 	// The allow-listed person is exactly as before.
@@ -48,8 +48,8 @@ func TestRoleOnlyPersonIsAMember(t *testing.T) {
 		t.Errorf("allow-listed session: kind %q, groups %q", id.Kind, id.Groups)
 	}
 	for _, h := range []map[string]string{withHost(roleGuard("enquiries", ""), "enquiries.example.com")} {
-		if rec := u.get("/verify", h); rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != authz.RoleUser {
-			t.Errorf("allow-listed person on %v = %d, groups %q", h, rec.Code, rec.Header().Get("Remote-Groups"))
+		if rec := u.get("/verify", h); rec.Code != http.StatusOK || sessionOf(t, srv, u).Groups != authz.RoleUser {
+			t.Errorf("allow-listed person on %v = %d, groups %q", h, rec.Code, sessionOf(t, srv, u).Groups)
 		}
 	}
 }
@@ -105,8 +105,8 @@ func TestMemberTierAtRenewal(t *testing.T) {
 	// The allow-list changes: partner.org joins, example.com leaves.
 	srv.cfg.AllowedDomains = []string{"partner.org"}
 	srv.policy = newPolicyFor(srv.cfg)
-	if rec := p.get("/verify", roleGuard("enquiries", "")); rec.Code != http.StatusOK || rec.Header().Get("Remote-Groups") != authz.RoleUser {
-		t.Errorf("member now on the allow-list = %d, groups %q; want 200, user", rec.Code, rec.Header().Get("Remote-Groups"))
+	if rec := p.get("/verify", roleGuard("enquiries", "")); rec.Code != http.StatusOK || sessionOf(t, srv, p).Groups != authz.RoleUser {
+		t.Errorf("member now on the allow-list = %d, groups %q; want 200, user", rec.Code, sessionOf(t, srv, p).Groups)
 	}
 	if id := sessionOf(t, srv, p); id.Kind != "" {
 		t.Errorf("kind after joining the allow-list = %q, want ordinary", id.Kind)

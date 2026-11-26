@@ -29,8 +29,7 @@
 
 # The gate for a role guard: it names the app and the role in X-Auth-App and
 # X-Auth-Role, and copies Remote-Roles, the roles the person holds in the app,
-# to the upstream. Remote-Groups is still copied until no app reads it.
-# Args: app, role.
+# to the upstream. Args: app, role.
 (auth_gate_role) {
 	reverse_proxy auth:8080 {
 		method GET
@@ -46,7 +45,6 @@
 		handle_response @renewed {
 			request_header Remote-User {http.reverse_proxy.header.Remote-User}
 			request_header Remote-Email {http.reverse_proxy.header.Remote-Email}
-			request_header Remote-Groups {http.reverse_proxy.header.Remote-Groups}
 			request_header Remote-Roles {http.reverse_proxy.header.Remote-Roles}
 			header +Set-Cookie {http.reverse_proxy.header.Set-Cookie}
 		}
@@ -54,7 +52,6 @@
 		handle_response @allowed {
 			request_header Remote-User {http.reverse_proxy.header.Remote-User}
 			request_header Remote-Email {http.reverse_proxy.header.Remote-Email}
-			request_header Remote-Groups {http.reverse_proxy.header.Remote-Groups}
 			request_header Remote-Roles {http.reverse_proxy.header.Remote-Roles}
 		}
 	}

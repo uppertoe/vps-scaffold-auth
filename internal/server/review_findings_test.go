@@ -100,8 +100,8 @@ func TestReviewGuestFilterFailsOpenOnUnreadableManifest(t *testing.T) {
 	}
 	// The per-request filter keeps the leading guest role that apps read.
 	rec := g.get("/verify", anyGuard(t, srv))
-	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Remote-Groups"), "guest") {
-		t.Errorf("guest at an open app = %d groups=%q, want the leading guest role", rec.Code, rec.Header().Get("Remote-Groups"))
+	if rec.Code != http.StatusOK || !strings.HasPrefix(sessionOf(t, srv, g).Groups, "guest") {
+		t.Errorf("guest at an open app = %d groups=%q, want the leading guest role", rec.Code, sessionOf(t, srv, g).Groups)
 	}
 }
 
@@ -143,14 +143,14 @@ func TestReviewAppAdminRoleWithoutSecondStep(t *testing.T) {
 	loginAs(t, c, sender, "admin@example.com", nil) // inbox only
 	guard := groupGuard(t, srv, "airdb_admin")
 	rec := c.get("/verify", guard)
-	if rec.Code == http.StatusOK || strings.Contains(rec.Header().Get("Remote-Groups"), "airdb_admin") {
-		t.Errorf("inbox-only sign-in of an administrator reaches the app's admin role: %d groups=%q", rec.Code, rec.Header().Get("Remote-Groups"))
+	if rec.Code == http.StatusOK || strings.Contains(sessionOf(t, srv, c).Groups, "airdb_admin") {
+		t.Errorf("inbox-only sign-in of an administrator reaches the app's admin role: %d groups=%q", rec.Code, sessionOf(t, srv, c).Groups)
 	}
 	// After the door, the role is held.
 	page := c.get("/totp", nil).Body.String()
 	c.postForm("/totp", url.Values{"code": {totpNow(t, secret, time.Now())}, "csrf": {extractCSRF(t, page)}})
-	if rec := c.get("/verify", guard); rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Remote-Groups"), "airdb_admin") {
-		t.Errorf("after the door: %d groups=%q, want airdb_admin", rec.Code, rec.Header().Get("Remote-Groups"))
+	if rec := c.get("/verify", guard); rec.Code != http.StatusOK || !strings.Contains(sessionOf(t, srv, c).Groups, "airdb_admin") {
+		t.Errorf("after the door: %d groups=%q, want airdb_admin", rec.Code, sessionOf(t, srv, c).Groups)
 	}
 	// Staff in the same group are unaffected: they have no second factor.
 	if err := srv.store.AddGroupMember(ctx, "airdb_admin", "staff@example.com"); err != nil {

@@ -98,6 +98,10 @@ func TestRoleGuardDomainGroup(t *testing.T) {
 	if got := rec.Header().Get("Remote-Email"); got != "user@example.com" {
 		t.Errorf("Remote-Email = %q", got)
 	}
+	// Apps decide by Remote-Roles; the gateway sends the groups empty.
+	if got, sent := rec.Header()["Remote-Groups"]; !sent || len(got) != 1 || got[0] != "" {
+		t.Errorf("Remote-Groups = %q, want one empty value", got)
+	}
 	wantDenied(t, "admin role not held", c.get("/verify", roleGuard("caffeine", "admin")))
 	wantDenied(t, "another app", c.get("/verify", roleGuard("enquiries", "")))
 }
@@ -150,8 +154,12 @@ func TestRoleGuardNetworkWithoutSession(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("inside the network = %d, want 200", rec.Code)
 	}
-	if rec.Header().Get("Remote-User") != "" || rec.Header().Get("Remote-Email") != "" {
-		t.Errorf("identity sent for a request with no session: %v", rec.Header())
+	// Sent, but empty, so a guard's copy of each header is empty rather
+	// than Caddy's placeholder text.
+	for _, k := range []string{"Remote-User", "Remote-Email", "Remote-Groups"} {
+		if got, sent := rec.Header()[k]; !sent || len(got) != 1 || got[0] != "" {
+			t.Errorf("%s = %q for a request with no session, want one empty value", k, got)
+		}
 	}
 	if got := rec.Header().Get("Remote-Roles"); got != "user" {
 		t.Errorf("Remote-Roles = %q, want user", got)

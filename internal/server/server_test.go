@@ -247,8 +247,8 @@ func TestFullLoginCycle(t *testing.T) {
 	if got := rec.Header().Get("Remote-Email"); got != "user@example.com" {
 		t.Errorf("Remote-Email = %q", got)
 	}
-	if got := rec.Header().Get("Remote-Groups"); got != "user" {
-		t.Errorf("Remote-Groups = %q, want user", got)
+	if got := sessionOf(t, srv, c).Groups; got != "user" {
+		t.Errorf("groups = %q, want user", got)
 	}
 }
 
@@ -257,9 +257,8 @@ func TestAdminGetsAdminGroup(t *testing.T) {
 	c := newClient(t, srv.Handler())
 	c.postForm("/request", url.Values{"email": {"admin@example.com"}})
 	c.postForm("/verify-code", url.Values{"code": {sender.code()}})
-	rec := c.get("/verify", anyGuard(t, srv))
-	if got := rec.Header().Get("Remote-Groups"); got != "admin" {
-		t.Errorf("Remote-Groups = %q, want admin", got)
+	if got := groupsAfter(t, srv, c, anyGuard(t, srv)); got != "admin" {
+		t.Errorf("groups = %q, want admin", got)
 	}
 }
 

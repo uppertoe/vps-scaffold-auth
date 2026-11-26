@@ -107,8 +107,8 @@ func TestIncludedGroupAdmitsThroughGate(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("member of an included group = %d, want 200", rec.Code)
 	}
-	if g := rec.Header().Get("Remote-Groups"); !strings.Contains(g, "planka-users") || !strings.Contains(g, "rch-consultants") {
-		t.Errorf("Remote-Groups = %q", g)
+	if g := sessionOf(t, srv, u).Groups; !strings.Contains(g, "planka-users") || !strings.Contains(g, "rch-consultants") {
+		t.Errorf("groups = %q", g)
 	}
 	// A cycle is refused with a warning.
 	if rec := admin.postForm("/admin/groups/rch-consultants/includes", url.Values{"csrf": {tok}, "included": {"planka-users"}}); rec.Code != http.StatusFound {

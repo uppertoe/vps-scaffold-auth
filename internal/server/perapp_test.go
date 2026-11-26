@@ -218,8 +218,8 @@ func TestGroupGateAdmitsNewMemberWithoutRelogin(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("after joining = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Header().Get("Remote-Groups"), "planka-users") {
-		t.Errorf("Remote-Groups = %q, want planka-users", rec.Header().Get("Remote-Groups"))
+	if !strings.Contains(sessionOf(t, srv, c).Groups, "planka-users") {
+		t.Errorf("groups = %q, want planka-users", sessionOf(t, srv, c).Groups)
 	}
 	if !strings.Contains(rec.Header().Get("Set-Cookie"), session.SessionCookie+"=") {
 		t.Error("renewed session cookie not issued")
@@ -287,8 +287,8 @@ func TestGroupRecheckGivesNewAdminNoAdminTier(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := c.get("/verify", groupGuard(t, srv, "team"))
-	if rec.Code != http.StatusOK || authz.HasGroup(rec.Header().Get("Remote-Groups"), "admin") {
-		t.Fatalf("new admin on a group route = %d groups=%q, want 200 without admin", rec.Code, rec.Header().Get("Remote-Groups"))
+	if rec.Code != http.StatusOK || authz.HasGroup(sessionOf(t, srv, c).Groups, "admin") {
+		t.Fatalf("new admin on a group route = %d groups=%q, want 200 without admin", rec.Code, sessionOf(t, srv, c).Groups)
 	}
 }
 
