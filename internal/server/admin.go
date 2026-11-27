@@ -133,17 +133,19 @@ func (s *Server) handleAdminTOTPGenerate(w http.ResponseWriter, r *http.Request)
 		s.adminError(w, r)
 		return
 	}
-	if err := s.setTOTPSecret(r.Context(), emailAddr, en.Secret); err != nil {
+	// A secret is replaced when the old authenticator is lost or may be in
+	// someone else's hands: every session it passed ends first, and the
+	// secret is replaced only once they have (revokeAnd).
+	set := func() error { return s.setTOTPSecret(r.Context(), emailAddr, en.Secret) }
+	var err2 error
+	if replacing {
+		err2 = s.revokeAnd(r.Context(), []string{emailAddr}, sessionsForKey(emailAddr), s.now(), set)
+	} else {
+		err2 = set()
+	}
+	if err2 != nil {
 		s.adminError(w, r)
 		return
-	}
-	// A secret is replaced when the old authenticator is lost or may be in
-	// someone else's hands: every session it passed ends now.
-	if replacing {
-		if err := s.endSessions(r.Context(), emailAddr, s.now()); err != nil {
-			s.adminError(w, r)
-			return
-		}
 	}
 	s.auditAdmin(r, store.AdminActionTOTPGenerate, emailAddr, "")
 	// Render (not redirect) so the secret appears once and lands in no URL or
@@ -163,13 +165,12 @@ func (s *Server) handleAdminTOTPRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	emailAddr := normalizeEmail(r.PostFormValue("email"))
-	if err := s.store.DeleteTOTPSecret(r.Context(), emailAddr); err != nil {
-		s.adminError(w, r)
-		return
-	}
 	// The authenticator may be lost or in someone else's hands: every
-	// session it passed ends now.
-	if err := s.endSessions(r.Context(), emailAddr, s.now()); err != nil {
+	// session it passed ends first, and the secret is removed only once
+	// they have (revokeAnd).
+	if err := s.revokeAnd(r.Context(), []string{emailAddr}, sessionsForKey(emailAddr), s.now(), func() error {
+		return s.store.DeleteTOTPSecret(r.Context(), emailAddr)
+	}); err != nil {
 		s.adminError(w, r)
 		return
 	}

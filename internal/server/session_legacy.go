@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -38,14 +39,6 @@ func (s *Server) convertLegacy(r *http.Request, value, token string, now time.Ti
 	if !ok || !knownSessionKind(id.Kind) {
 		return nil, nil
 	}
-	cut, err := s.store.ListSessionCutoffs(r.Context())
-	if err != nil {
-		log.Printf("session conversion: %v", err)
-		return nil, errSessionsUnavailable
-	}
-	if legacyEnded(id, cut, s.cfg.SessionMaxAge, now) {
-		return nil, nil
-	}
 	ttl := s.sessions.SessionTTL(id)
 	x := store.Session{
 		Hash: session.TokenHash(token), Email: id.Email, Kind: id.Kind, Groups: id.Groups,
@@ -56,27 +49,52 @@ func (s *Server) convertLegacy(r *http.Request, value, token string, now time.Ti
 	if max := s.cfg.SessionMaxAge; max > 0 && x.Expires.After(x.SignedIn.Add(max)) {
 		x.Expires = x.SignedIn.Add(max)
 	}
+	// Everything from here runs under the lock every revocation takes
+	// (revokeAnd), so a revocation lands either before the cutoffs are
+	// read, and refuses the cookie, or after the row is made, and deletes
+	// it.
 	l := s.live
 	l.write.Lock()
 	defer l.write.Unlock()
 	// Another request with the same cookie may have converted it meanwhile.
 	l.mu.RLock()
 	got := l.byHash[string(x.Hash)]
+	var cp store.Session
+	if got != nil {
+		cp = *got
+	}
 	l.mu.RUnlock()
 	if got != nil {
-		cp := *got
 		return &cp, nil
 	}
-	x.ID, ok, err = s.store.CreateMigratedSession(r.Context(), x, exp)
+	cut, err := s.store.ListSessionCutoffs(r.Context())
+	if err != nil {
+		log.Printf("session conversion: %v", err)
+		return nil, errSessionsUnavailable
+	}
+	if legacyEnded(id, cut, s.cfg.SessionMaxAge, now) {
+		return nil, nil
+	}
+	// A passkey removed before its removal wrote a cutoff (early November
+	// 2026) ended its sessions only at renewal; its old cookies are refused
+	// here.
+	if err := s.grantStillValid(r.Context(), session.Identity{Email: id.Email, PK: id.PK}); errors.Is(err, errGrantGone) {
+		return nil, nil
+	} else if err != nil {
+		log.Printf("session conversion: %v", err)
+		return nil, errSessionsUnavailable
+	}
+	var ok2 bool
+	x.ID, ok2, err = s.store.CreateMigratedSession(r.Context(), x, exp)
 	if err != nil {
 		log.Printf("session conversion for %s: %v", id.Email, err)
 		return nil, errSessionsUnavailable
 	}
-	if !ok {
+	if !ok2 {
 		return nil, nil // converted before, and since ended
 	}
 	l.add(&x)
-	cp := x
+	cp = x
 	return &cp, nil
 }
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -57,6 +58,9 @@ const (
 	msgSessLineAll       = "Signed out every session except their own, %d in all"
 	msgAccessSessBefore  = "This person's sessions are listed on the "
 	msgAccessSessAfter   = " page."
+	// msgPkRemoveFailed is shown on the person's own passkeys page when the
+	// sessions a passkey started could not be ended, so it was kept.
+	msgPkRemoveFailed = "The passkey has not been removed, because the gateway could not end the sessions it started. Open Your passkeys and try again."
 )
 
 // sessionsView is the Sessions page.
@@ -253,6 +257,13 @@ func (s *Server) handleAdminEndAllSessions(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		s.adminError(w, r)
 		return
+	}
+	// The administrator's own session continues under a new token, so a
+	// copy of their cookie in anyone else's hands ends with the rest.
+	if id, ok := s.readSession(r, now); ok {
+		if err := s.startSession(w, r, *id, s.sessions.SessionTTL(id), now); err != nil {
+			log.Printf("new token for %s after signing everyone out: %v", id.Email, err)
+		}
 	}
 	s.auditAdmin(r, store.AdminActionSessionsEndAll, "", strconv.Itoa(n))
 	s.emailOtherAdmins(s.adminActor(r), msgSessSubjectAll, []string{fmt.Sprintf(msgSessLineAll, n)})

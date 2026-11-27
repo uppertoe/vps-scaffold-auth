@@ -941,12 +941,11 @@ func (s *Server) handleAdminBreakRevoke(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if err := s.store.RevokeBreakGlassCode(r.Context(), c.ID); err != nil {
-		s.adminError(w, r)
-		return
-	}
-	// Every session the card has granted ends with it.
-	if err := s.endSessions(r.Context(), cardKey(c.ID), s.now()); err != nil {
+	// Every session the card has granted ends first; the card is withdrawn
+	// only once they have (revokeAnd).
+	if err := s.revokeAnd(r.Context(), []string{cardKey(c.ID)}, sessionsForKey(cardKey(c.ID)), s.now(), func() error {
+		return s.store.RevokeBreakGlassCode(r.Context(), c.ID)
+	}); err != nil {
 		s.adminError(w, r)
 		return
 	}
@@ -976,16 +975,15 @@ func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) 
 		s.adminError(w, r)
 		return
 	}
-	if err := s.store.RemintBreakGlassCode(r.Context(), c.ID, tokenEnc, tokenHash); err != nil {
+	// The sessions the old card granted end first; the card is replaced only
+	// once they have (revokeAnd).
+	if err := s.revokeAnd(r.Context(), []string{cardKey(c.ID)}, sessionsForKey(cardKey(c.ID)), s.now(), func() error {
+		return s.store.RemintBreakGlassCode(r.Context(), c.ID, tokenEnc, tokenHash)
+	}); err != nil {
 		if errors.Is(err, store.ErrCardNotActive) {
 			s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(c.ID, 10), "card-remint-refused", "")
 			return
 		}
-		s.adminError(w, r)
-		return
-	}
-	// The old card stops working, and so do the sessions it granted.
-	if err := s.endSessions(r.Context(), cardKey(c.ID), s.now()); err != nil {
 		s.adminError(w, r)
 		return
 	}

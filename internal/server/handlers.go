@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -1683,7 +1684,11 @@ func (s *Server) grantBreakGlass(w http.ResponseWriter, r *http.Request, code st
 
 	groups := authz.BuildGroups(code.TargetGroup, nil)
 	principal := "breakglass:" + code.Label
-	if err := s.startSession(w, r, session.Identity{Email: principal, Groups: groups, Kind: session.KindBreakGlass, Card: code.ID}, ttl, now); err != nil {
+	if err := s.startSession(w, r, session.Identity{Email: principal, Groups: groups, Kind: session.KindBreakGlass, Card: code.ID, CardCode: code.TokenHash}, ttl, now); errors.Is(err, errGrantGone) {
+		// Withdrawn or replaced while this scan was under way.
+		s.cardNotAvailable(w)
+		return
+	} else if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}

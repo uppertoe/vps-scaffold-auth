@@ -30,13 +30,28 @@ func TestReviewLegacyAdminCookies(t *testing.T) {
 		{"TOTP=false Auth now", session.Identity{Email: "admin@example.com", Groups: "admin", Auth: now.Unix()}, false},
 	}
 	for _, tc := range cases {
-		c := mintSession(t, srv, tc.g, time.Hour)
-		a := c.get("/admin/", nil)
-		v := c.get("/verify", anyGuard(t, srv))
-		got := strings.HasPrefix(sessionOf(t, srv, c).Groups, "admin") && a.Code == http.StatusOK
-		t.Logf("%-30s admin=%d verify=%d groups=%q", tc.name, a.Code, v.Code, sessionOf(t, srv, c).Groups)
-		if got != tc.want {
-			t.Errorf("%s: admin tier held=%v, want %v", tc.name, got, tc.want)
+		// The same shapes as a session started now, and as an old-format
+		// cookie converted at the upgrade.
+		for _, kind := range []string{"row", "old cookie"} {
+			c := mintSession(t, srv, tc.g, time.Hour)
+			if kind == "old cookie" {
+				id := tc.g
+				id.Iat = now.Unix()
+				c = clientWith(t, srv, legacyCookie(t, srv, id, now.Add(time.Hour)))
+			}
+			a := c.get("/admin/", nil)
+			v := c.get("/verify", anyGuard(t, srv))
+			groups := ""
+			if ck := c.cookies[session.SessionCookie]; ck != nil {
+				if id, ok := readWith(srv, ck); ok {
+					groups = id.Groups
+				}
+			}
+			got := strings.HasPrefix(groups, "admin") && a.Code == http.StatusOK
+			t.Logf("%-30s %-10s admin=%d verify=%d groups=%q", tc.name, kind, a.Code, v.Code, groups)
+			if got != tc.want {
+				t.Errorf("%s (%s): admin tier held=%v, want %v", tc.name, kind, got, tc.want)
+			}
 		}
 	}
 }

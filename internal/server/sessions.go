@@ -144,8 +144,14 @@ func (s *Server) resolveSession(r *http.Request, now time.Time) (x *store.Sessio
 	if found == nil || !s.sessionLive(&cp, now) {
 		return nil, "", legacy, nil
 	}
-	if now.Sub(cp.LastSeen) >= seenEvery {
-		s.touchSession(r.Context(), cp.ID, now)
+	if now.Sub(cp.LastSeen) >= seenEvery && l.markSeen(cp.ID, now) {
+		// Outside the write lock: a request never waits behind a sign-in or
+		// a revocation for this. A failed write is not retried until the
+		// next interval, and a write to a row deleted meanwhile changes
+		// nothing.
+		if err := s.store.TouchSession(r.Context(), cp.ID, now); err != nil {
+			log.Printf("session last seen: %v", err)
+		}
 	}
 	return &cp, token, legacy, nil
 }
@@ -188,7 +194,13 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, id session
 	}
 	l := s.live
 	l.write.Lock()
-	x.ID, err = s.store.CreateSession(r.Context(), x)
+	// The passkey or card behind the session is checked again under the
+	// lock every revocation takes (revokeAnd), so a sign-in already under
+	// way when it is removed or withdrawn cannot start a session after.
+	err = s.grantStillValid(r.Context(), id)
+	if err == nil {
+		x.ID, err = s.store.CreateSession(r.Context(), x)
+	}
 	if err == nil {
 		l.add(&x)
 		// The replaced session is only one the browser can no longer name;
@@ -205,6 +217,34 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, id session
 	}
 	s.sessions.SetSession(w, token, x.Expires, now)
 	s.sweepSessions(r.Context(), now)
+	return nil
+}
+
+// errGrantGone means the passkey or card a sign-in used was removed or
+// withdrawn while the sign-in was under way.
+var errGrantGone = errors.New("the passkey or card has been removed")
+
+// grantStillValid reports whether the passkey or card a session is being
+// started with still stands. Called under l.write.
+func (s *Server) grantStillValid(ctx context.Context, id session.Identity) error {
+	if id.PK != 0 {
+		p, ok, err := s.store.GetPasskey(ctx, id.PK)
+		if err != nil {
+			return err
+		}
+		if !ok || p.Email != id.Email {
+			return errGrantGone
+		}
+	}
+	if id.Kind == session.KindBreakGlass && id.Card != 0 {
+		c, ok, err := s.store.GetBreakGlassCode(ctx, id.Card)
+		if err != nil {
+			return err
+		}
+		if !ok || c.Status != store.BreakGlassActive || (id.CardCode != "" && c.TokenHash != id.CardCode) {
+			return errGrantGone
+		}
+	}
 	return nil
 }
 
@@ -239,11 +279,14 @@ func (s *Server) renewSessionRow(w http.ResponseWriter, r *http.Request, id *ses
 	defer l.write.Unlock()
 	l.mu.RLock()
 	cur := l.byID[id.SID]
+	var next store.Session
+	if cur != nil {
+		next = *cur
+	}
 	l.mu.RUnlock()
 	if cur == nil {
 		return false // ended while this request was on its way
 	}
-	next := *cur
 	next.Kind, next.Groups, next.Renewed = kind, groups, now
 	next.Expires = s.expiry(next.SignedIn, now, next.TTL)
 	if err := s.store.UpdateSession(r.Context(), next); err != nil {
@@ -253,37 +296,35 @@ func (s *Server) renewSessionRow(w http.ResponseWriter, r *http.Request, id *ses
 		return true
 	}
 	l.mu.Lock()
-	*cur = next
+	cur.Kind, cur.Groups, cur.Renewed, cur.Expires = next.Kind, next.Groups, next.Renewed, next.Expires
 	l.mu.Unlock()
 	s.sessions.SetSession(w, token, next.Expires, now)
 	return true
 }
 
-// touchSession writes a session's last-seen time.
-func (s *Server) touchSession(ctx context.Context, id int64, now time.Time) {
-	l := s.live
-	l.write.Lock()
-	defer l.write.Unlock()
-	l.mu.RLock()
-	cur := l.byID[id]
-	l.mu.RUnlock()
-	if cur == nil {
-		return
-	}
-	if err := s.store.TouchSession(ctx, id, now); err != nil {
-		log.Printf("session last seen: %v", err)
-		return
-	}
+// markSeen moves a session's last-seen time to now in memory, and reports
+// whether it was due (seenEvery), so that only one request writes it.
+func (l *liveSessions) markSeen(id int64, now time.Time) bool {
 	l.mu.Lock()
+	defer l.mu.Unlock()
+	cur := l.byID[id]
+	if cur == nil || now.Sub(cur.LastSeen) < seenEvery {
+		return false
+	}
 	cur.LastSeen = now
-	l.mu.Unlock()
+	return true
 }
 
 // endSessionsWhere deletes every session match picks, and returns how many.
 func (s *Server) endSessionsWhere(ctx context.Context, match func(*store.Session) bool) (int, error) {
+	s.live.write.Lock()
+	defer s.live.write.Unlock()
+	return s.endSessionsLocked(ctx, match)
+}
+
+// endSessionsLocked is endSessionsWhere for a caller holding l.write.
+func (s *Server) endSessionsLocked(ctx context.Context, match func(*store.Session) bool) (int, error) {
 	l := s.live
-	l.write.Lock()
-	defer l.write.Unlock()
 	var ids []int64
 	l.mu.RLock()
 	for id, x := range l.byID {
@@ -306,11 +347,34 @@ func (s *Server) endSessionsWhere(ctx context.Context, match func(*store.Session
 // converted is refused when it is (session_legacy.go). The cutoff is written
 // first: if either write fails, the caller reports the failure.
 func (s *Server) endSessions(ctx context.Context, key string, now time.Time) error {
-	if err := s.store.EndSessionsBefore(ctx, key, now); err != nil {
+	return s.revokeAnd(ctx, []string{key}, sessionsForKey(key), now, nil)
+}
+
+// revokeAnd ends the sessions match picks, writing the cutoff for each key
+// first (session_legacy.go), and only then makes change: removing the
+// passkey, withdrawing the card, replacing the authenticator. If ending the
+// sessions fails, change is not made and the error is returned, so the
+// administrator or person sees the failure and can try again with nothing
+// lost. All of it runs under the lock a sign-in takes to start a session,
+// and a sign-in checks its passkey or card again under it
+// (grantStillValid), so no session started with the thing being changed can
+// begin in between.
+func (s *Server) revokeAnd(ctx context.Context, keys []string, match func(*store.Session) bool, now time.Time, change func() error) error {
+	l := s.live
+	l.write.Lock()
+	defer l.write.Unlock()
+	for _, k := range keys {
+		if err := s.store.EndSessionsBefore(ctx, k, now); err != nil {
+			return err
+		}
+	}
+	if _, err := s.endSessionsLocked(ctx, match); err != nil {
 		return err
 	}
-	_, err := s.endSessionsWhere(ctx, sessionsForKey(key))
-	return err
+	if change != nil {
+		return change()
+	}
+	return nil
 }
 
 func cardKey(id int64) string { return "card:" + strconv.FormatInt(id, 10) }

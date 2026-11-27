@@ -904,25 +904,31 @@ func (s *Server) handlePasskeyRemove(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	held, _, err := s.store.GetPasskey(r.Context(), pid)
+	held, found, err := s.store.GetPasskey(r.Context(), pid)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}
-	removed, err := s.store.DeletePasskey(r.Context(), id.Email, pid)
-	if err != nil {
-		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
-		return
+	removed := false
+	if found && held.Email == id.Email {
+		// The sessions the passkey started end first; the passkey is removed
+		// only once they have, so a failure leaves it listed to try again.
+		err = s.revokeAnd(r.Context(), []string{passkeyKey(pid)}, func(x *store.Session) bool { return x.Passkey == pid }, s.now(), func() error {
+			var err error
+			removed, err = s.store.DeletePasskey(r.Context(), id.Email, pid)
+			return err
+		})
+		if err != nil {
+			log.Printf("remove passkey %d: %v", pid, err)
+			s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Please try again", Message: msgPkRemoveFailed})
+			return
+		}
 	}
 	if removed {
 		// The person removed it on this device: the page this redirects to
 		// asks the browser to forget it.
 		s.forgetPasskeyHere(w, r, held.CredentialID)
 		s.setPasskeyForget(w, held.CredentialID)
-		// The sessions the passkey started end now, not at their renewal.
-		if err := s.endSessions(r.Context(), passkeyKey(pid), s.now()); err != nil {
-			log.Printf("end sessions of passkey %d: %v", pid, err)
-		}
 		s.recordAuth(r, id.Email, store.AuthEventPasskeyRemove, store.AuthOutcomeOK)
 		s.notifyPasskeyRemoved(r, id.Email, s.now())
 	}
@@ -940,20 +946,18 @@ func (s *Server) handleAdminRemovePasskeys(w http.ResponseWriter, r *http.Reques
 		s.adminError(w, r)
 		return
 	}
-	n, err := s.store.DeletePasskeys(r.Context(), emailAddr)
-	if err != nil {
-		s.adminError(w, r)
-		return
-	}
-	// The sessions those passkeys started end now, including those of a
-	// passkey added between the list and the delete.
+	// The sessions the passkeys started end first, those of a passkey added
+	// since the list included; the passkeys are removed only once they have.
+	cut := make([]string, 0, len(keys))
 	for _, k := range keys {
-		if err := s.endSessions(r.Context(), passkeyKey(k.ID), s.now()); err != nil {
-			s.adminError(w, r)
-			return
-		}
+		cut = append(cut, passkeyKey(k.ID))
 	}
-	if _, err := s.endSessionsWhere(r.Context(), func(x *store.Session) bool { return x.Email == emailAddr && x.Passkey != 0 }); err != nil {
+	var n int
+	if err := s.revokeAnd(r.Context(), cut, func(x *store.Session) bool { return x.Email == emailAddr && x.Passkey != 0 }, s.now(), func() error {
+		var err error
+		n, err = s.store.DeletePasskeys(r.Context(), emailAddr)
+		return err
+	}); err != nil {
 		s.adminError(w, r)
 		return
 	}

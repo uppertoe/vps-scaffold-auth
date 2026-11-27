@@ -160,6 +160,10 @@ type Identity struct {
 	Step int64 `json:"step,omitempty"`
 	// SID is the gateway's ID for the session. It is never in a cookie.
 	SID int64 `json:"-"`
+	// CardCode is, while a card's session is being started, the hash of the
+	// code that was scanned, so a card replaced meanwhile grants nothing. It
+	// is never stored or in a cookie.
+	CardCode string `json:"-"`
 }
 
 // PasskeyChallenge is the random challenge for one passkey ceremony. For

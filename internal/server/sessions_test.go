@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -95,7 +96,7 @@ func TestOldCookieIsConvertedWithoutSigningAnyoneOut(t *testing.T) {
 	cases := []session.Identity{
 		{Email: "amy@example.com", Groups: "user", Iat: now.Add(-10 * time.Minute).Unix(), Auth: now.Add(-3 * 24 * time.Hour).Unix(), TTL: 3600},
 		{Email: "remembered@example.com", Groups: "user", Iat: now.Add(-2 * time.Hour).Unix(), Auth: now.Add(-20 * 24 * time.Hour).Unix(), TTL: 30 * 24 * 3600},
-		{Email: "pk@example.com", Groups: "user", Iat: now.Add(-5 * time.Minute).Unix(), Auth: now.Add(-time.Hour).Unix(), PK: 7},
+		{Email: "pk@example.com", Groups: "user", Iat: now.Add(-5 * time.Minute).Unix(), Auth: now.Add(-time.Hour).Unix(), PK: storePasskey(t, srv, "pk@example.com")},
 		{Email: "admin@example.com", Groups: "admin", Iat: now.Add(-5 * time.Minute).Unix(), Auth: now.Add(-time.Hour).Unix(), TOTP: true, Step: now.Add(-time.Hour).Unix()},
 	}
 	for _, id := range cases {
@@ -421,5 +422,320 @@ func TestDatabaseUnavailable(t *testing.T) {
 	}
 	if old.cookies[session.SessionCookie] == nil {
 		t.Error("the old cookie was cleared while the database was unavailable")
+	}
+}
+
+// storePasskey stores a passkey for email and returns its ID.
+func storePasskey(t *testing.T, srv *Server, email string) int64 {
+	t.Helper()
+	id, err := srv.store.CreatePasskey(context.Background(), store.Passkey{
+		Email: email, CredentialID: []byte("cred-" + email + strconv.Itoa(int(time.Now().UnixNano()))), PublicKey: []byte("key"), UserHandle: []byte("h"), Label: "Phone",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func readWith(srv *Server, ck *http.Cookie) (*session.Identity, bool) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(ck)
+	return srv.readSession(req, srv.now())
+}
+
+// Every kind of old cookie converts with all it carried: guest, member,
+// break-glass (which still never renews), administrator with a passkey and
+// the admin step, and a plain staff session with the default lifetime.
+func TestOldCookieOfEveryKindConverts(t *testing.T) {
+	srv, _ := testServerWith(t, func(c *config.Config) { c.SessionMaxAge = 30 * 24 * time.Hour })
+	now := srv.now()
+	cases := []session.Identity{
+		{Email: "g@stranger.org", Groups: "guest", Kind: session.KindGuest, Iat: now.Add(-time.Minute).Unix(), Auth: now.Add(-time.Hour).Unix(), TTL: 3600},
+		{Email: "m@stranger.org", Groups: "user,list", Kind: session.KindMember, Iat: now.Add(-time.Minute).Unix(), Auth: now.Add(-time.Hour).Unix(), TTL: 7 * 24 * 3600},
+		{Email: "breakglass:Ward", Groups: "bg_ward", Kind: session.KindBreakGlass, Iat: now.Add(-time.Minute).Unix(), Auth: now.Add(-time.Minute).Unix(), TTL: 900, Card: 5},
+		{Email: "admin@example.com", Groups: "admin,user", Iat: now.Add(-time.Minute).Unix(), Auth: now.Add(-2 * time.Hour).Unix(), TOTP: true, Step: now.Add(-time.Hour).Unix(), PK: storePasskey(t, srv, "admin@example.com"), TTL: 3600},
+		{Email: "amy@example.com", Groups: "user", Iat: now.Add(-time.Minute).Unix(), Auth: now.Add(-2 * time.Hour).Unix()},
+	}
+	for _, id := range cases {
+		exp := time.Unix(id.Iat, 0).Add(srv.sessions.SessionTTL(&id))
+		if id.Kind == session.KindBreakGlass {
+			exp = time.Unix(id.Iat, 0).Add(15 * time.Minute)
+		}
+		got, ok := readWith(srv, legacyCookie(t, srv, id, exp))
+		if !ok {
+			t.Fatalf("%s: not converted", id.Email)
+		}
+		want := id
+		want.SID = got.SID
+		if want.TTL == 0 {
+			want.TTL = int64(srv.sessions.SessionTTL(&id).Seconds())
+		}
+		if *got != want {
+			t.Errorf("%s:\n got %+v\nwant %+v", id.Email, *got, want)
+		}
+		if rows := srv.liveSessionsNow(id.Email, srv.now()); len(rows) != 1 || rows[0].Expires.Unix() != exp.Unix() {
+			t.Errorf("%s: rows %+v, want expiry %v", id.Email, rows, exp)
+		}
+		if id.Kind == session.KindBreakGlass && srv.sessions.NeedsRenew(got, now.Add(time.Hour)) {
+			t.Error("a converted break-glass session renews")
+		}
+	}
+}
+
+// An old cookie is not converted when its passkey has been removed (by its
+// cutoff, or with no cutoff for a removal from before cutoffs were written
+// for passkeys), when its card has been withdrawn, when its kind is unknown
+// to this build, or when another secret signed it. One past SESSION_MAX_AGE
+// from sign-in is refused, and one converted is capped at it.
+func TestOldCookieRefusals(t *testing.T) {
+	srv, _ := testServerWith(t, func(c *config.Config) { c.SessionMaxAge = 7 * 24 * time.Hour })
+	other, _ := testServerWith(t, func(c *config.Config) { c.SessionSecret = []byte("ffffffffffffffffffffffffffffffff") })
+	now := srv.now()
+	ctx := context.Background()
+	srv.store.EndSessionsBefore(ctx, passkeyKey(7), now.Add(-time.Minute))
+	srv.store.EndSessionsBefore(ctx, cardKey(5), now.Add(-time.Minute))
+	old := func(m *Server, id session.Identity) *http.Cookie {
+		if id.Iat == 0 {
+			id.Iat, id.Auth = now.Unix(), now.Add(-time.Hour).Unix()
+		}
+		return legacyCookie(t, m, id, now.Add(time.Hour))
+	}
+	refused := map[string]*http.Cookie{
+		"passkey cutoff":       old(srv, session.Identity{Email: "pk@example.com", Groups: "user", PK: 7}),
+		"passkey gone":         old(srv, session.Identity{Email: "pk2@example.com", Groups: "user", PK: 4242}),
+		"another's passkey":    old(srv, session.Identity{Email: "pk3@example.com", Groups: "user", PK: storePasskey(t, srv, "someone@example.com")}),
+		"card withdrawn":       old(srv, session.Identity{Email: "breakglass:W", Groups: "bg", Kind: session.KindBreakGlass, Card: 5}),
+		"unknown kind":         old(srv, session.Identity{Email: "amy@example.com", Groups: "user", Kind: "future_kind"}),
+		"another secret":       old(other, session.Identity{Email: "bob@example.com", Groups: "user"}),
+		"past SESSION_MAX_AGE": old(srv, session.Identity{Email: "carol@example.com", Groups: "user", Iat: now.Unix(), Auth: now.Add(-8 * 24 * time.Hour).Unix()}),
+	}
+	for name, ck := range refused {
+		if _, ok := readWith(srv, ck); ok {
+			t.Errorf("%s: old cookie converted", name)
+		}
+	}
+	if n := len(srv.liveSessionsNow("", now)); n != 0 {
+		t.Errorf("%d rows made from refused cookies", n)
+	}
+	auth := now.Add(-7*24*time.Hour + time.Hour)
+	ck := legacyCookie(t, srv, session.Identity{Email: "dan@example.com", Groups: "user", Iat: now.Unix(), Auth: auth.Unix(), TTL: 30 * 24 * 3600}, now.Add(30*24*time.Hour))
+	if _, ok := readWith(srv, ck); !ok {
+		t.Fatal("refused")
+	}
+	if rows := srv.liveSessionsNow("dan@example.com", now); rows[0].Expires.Unix() != auth.Add(7*24*time.Hour).Unix() {
+		t.Errorf("expiry %v not capped at SESSION_MAX_AGE", rows[0].Expires)
+	}
+	srv.now = func() time.Time { return now.Add(2 * time.Hour) }
+	if _, ok := readWith(srv, ck); ok {
+		t.Error("old cookie honoured past SESSION_MAX_AGE")
+	}
+}
+
+// racingStore runs hook once, just after a conversion reads the cutoffs.
+type racingStore struct {
+	store.Store
+	hook func()
+}
+
+func (r *racingStore) ListSessionCutoffs(ctx context.Context) (map[string]int64, error) {
+	m, err := r.Store.ListSessionCutoffs(ctx)
+	if h := r.hook; h != nil {
+		r.hook = nil
+		h()
+	}
+	return m, err
+}
+
+// A sign-out everywhere that lands while an old cookie is being converted
+// ends the converted session: the revocation waits for the conversion, then
+// deletes its row. Before the fix, it ran in that moment, found no row, and
+// the conversion's row survived it.
+func TestConversionRacingARevocation(t *testing.T) {
+	srv, _ := testServer(t)
+	now := srv.now()
+	rs := &racingStore{Store: srv.store}
+	srv.store = rs
+	done := make(chan error, 1)
+	rs.hook = func() {
+		go func() { done <- srv.endSessions(context.Background(), "amy@example.com", now) }()
+		// Give the revocation every chance to finish now, as it would if it
+		// did not wait for the conversion.
+		select {
+		case err := <-done:
+			done <- err
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	ck := legacyCookie(t, srv, session.Identity{Email: "amy@example.com", Groups: "user", Iat: now.Unix(), Auth: now.Add(-time.Hour).Unix()}, now.Add(time.Hour))
+	readWith(srv, ck)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readWith(srv, ck); ok {
+		t.Error("an old cookie converted across a sign out everywhere survives it")
+	}
+	if n := liveCount(srv, "amy@example.com"); n != 0 {
+		t.Errorf("%d rows survive", n)
+	}
+}
+
+// failingStore fails the cutoff write while fail is set.
+type failingStore struct {
+	store.Store
+	fail bool
+}
+
+func (f *failingStore) EndSessionsBefore(ctx context.Context, key string, at time.Time) error {
+	if f.fail {
+		return context.DeadlineExceeded
+	}
+	return f.Store.EndSessionsBefore(ctx, key, at)
+}
+
+// When the sessions a passkey started cannot be ended, the person is told and
+// the passkey is kept, so removing it again works; nothing is lost.
+func TestPasskeyRemovalFailureIsNotLost(t *testing.T) {
+	srv, _ := pkServer(t, nil)
+	fs := &failingStore{Store: srv.store}
+	srv.store = fs
+	pk := storePasskey(t, srv, "user@example.com")
+	owner := mintSession(t, srv, session.Identity{Email: "user@example.com", Groups: "user"}, time.Hour)
+	thief := mintSession(t, srv, session.Identity{Email: "user@example.com", Groups: "user", PK: pk}, time.Hour)
+	remove := func() int {
+		csrf := extractCSRF(t, owner.get("/passkeys", phone).Body.String())
+		return owner.postWith("/passkeys/"+strconv.FormatInt(pk, 10)+"/remove", url.Values{"csrf": {csrf}}, phone).Code
+	}
+	fs.fail = true
+	if code := remove(); code != http.StatusInternalServerError {
+		t.Fatalf("a failed removal answered %d", code)
+	}
+	if _, ok, _ := srv.store.GetPasskey(context.Background(), pk); !ok {
+		t.Fatal("the passkey was removed although its sessions were not ended")
+	}
+	fs.fail = false
+	if code := remove(); code != http.StatusFound {
+		t.Fatalf("removing again: %d", code)
+	}
+	if verifyAny(t, srv, thief).Code != http.StatusFound {
+		t.Error("the passkey's session survived its removal")
+	}
+	if _, ok, _ := srv.store.GetPasskey(context.Background(), pk); ok {
+		t.Error("the passkey was not removed on the second try")
+	}
+}
+
+// A sign-in already under way when its passkey or card goes starts no
+// session.
+func TestSignInRacingARemovalStartsNothing(t *testing.T) {
+	srv, _ := testServer(t)
+	pk := storePasskey(t, srv, "amy@example.com")
+	srv.store.DeletePasskey(context.Background(), "amy@example.com", pk)
+	err := srv.startSession(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil), session.Identity{Email: "amy@example.com", Groups: "user", PK: pk}, time.Hour, srv.now())
+	if !errors.Is(err, errGrantGone) {
+		t.Errorf("a session started with a removed passkey: %v", err)
+	}
+	err = srv.startSession(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil), session.Identity{Email: "breakglass:X", Groups: "bg", Kind: session.KindBreakGlass, Card: 999}, time.Hour, srv.now())
+	if !errors.Is(err, errGrantGone) {
+		t.Errorf("a session started with a card that does not exist: %v", err)
+	}
+	if n := len(srv.liveSessionsNow("", srv.now())); n != 0 {
+		t.Errorf("%d sessions started", n)
+	}
+}
+
+// A session that has been ended stays ended after a restart.
+func TestRevocationSurvivesRestart(t *testing.T) {
+	srv, sender := testServer(t)
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "amy@example.com", nil)
+	if _, err := srv.endSessionsWhere(context.Background(), func(x *store.Session) bool { return x.Email == "amy@example.com" }); err != nil {
+		t.Fatal(err)
+	}
+	again, err := New(srv.cfg, srv.store, sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readWith(again, c.cookies[session.SessionCookie]); ok {
+		t.Error("an ended session came back after a restart")
+	}
+}
+
+// Signing everyone out gives the administrator's own session a new token, so
+// a copy of their cookie ends with everyone else's.
+func TestSignOutEveryoneRotatesTheAdministratorsToken(t *testing.T) {
+	srv, sender := testServer(t)
+	admin := newClient(t, srv.Handler())
+	loginAs(t, admin, sender, "admin@example.com", nil)
+	stolen := clientWith(t, srv, admin.cookies[session.SessionCookie])
+	csrf := adminCSRF(t, admin, sessionsPath+"?confirm=everyone")
+	if rec := admin.postForm("/admin/sessions/end-all", url.Values{"csrf": {csrf}}); rec.Code != http.StatusFound {
+		t.Fatalf("sign out everyone: %d", rec.Code)
+	}
+	if rec := stolen.get(sessionsPath, nil); rec.Code == http.StatusOK {
+		t.Error("a copy of the administrator's cookie survived sign out everyone")
+	}
+	if rec := admin.get(sessionsPath, nil); rec.Code != http.StatusOK {
+		t.Errorf("the administrator was signed out: %d", rec.Code)
+	}
+	if n := liveCount(srv, "admin@example.com"); n != 1 {
+		t.Errorf("%d administrator sessions, want 1", n)
+	}
+}
+
+// Passing the admin second step starts a new session under a new token and
+// deletes the one before, keeping the sign-in time.
+func TestAdminStepStartsANewSession(t *testing.T) {
+	srv, sender := testServerWith(t, func(c *config.Config) { c.TOTPEnabled = true })
+	codes := &doorCodes{secret: provisionTOTP(t, srv, "admin@example.com")}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	before := c.cookies[session.SessionCookie]
+	first, _ := readWith(srv, before)
+	door := c.get("/totp", nil).Body.String()
+	if rec := c.postForm("/totp", url.Values{"code": {codes.next(t)}, "csrf": {extractCSRF(t, door)}}); rec.Code != http.StatusFound {
+		t.Fatalf("admin door: %d", rec.Code)
+	}
+	after := c.cookies[session.SessionCookie]
+	if after.Value == before.Value {
+		t.Fatal("the admin step kept the old token")
+	}
+	if _, ok := readWith(srv, before); ok {
+		t.Error("the session before the admin step still works")
+	}
+	got, ok := readWith(srv, after)
+	if !ok || !got.TOTP || got.Auth != first.Auth || got.SID == first.SID {
+		t.Errorf("after the admin step: %+v (before %+v)", got, first)
+	}
+	if n := liveCount(srv, "admin@example.com"); n != 1 {
+		t.Errorf("%d sessions after the admin step, want 1", n)
+	}
+}
+
+// touchCounter counts last-seen writes, and fails them.
+type touchCounter struct {
+	store.Store
+	n int
+}
+
+func (c *touchCounter) TouchSession(ctx context.Context, id int64, at time.Time) error {
+	c.n++
+	return context.DeadlineExceeded
+}
+
+// A failed last-seen write is not tried again at every request.
+func TestFailedLastSeenIsNotRetriedEveryRequest(t *testing.T) {
+	srv, sender := testServer(t)
+	start := time.Now()
+	srv.now = func() time.Time { return start }
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "amy@example.com", nil)
+	tc := &touchCounter{Store: srv.store}
+	srv.store = tc
+	srv.now = func() time.Time { return start.Add(6 * time.Minute) }
+	for i := 0; i < 5; i++ {
+		readWith(srv, c.cookies[session.SessionCookie])
+	}
+	if tc.n != 1 {
+		t.Errorf("%d last-seen writes, want 1", tc.n)
 	}
 }
