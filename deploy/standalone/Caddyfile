@@ -119,6 +119,10 @@
 	request_header -Remote-User
 	request_header -Remote-Email
 	request_header -Remote-Groups
+	# The gateway never sends Remote-Name, but another sign-in service such as
+	# Authelia does, and an app behind it may read it: a client must not be
+	# able to send one past a guard either.
+	request_header -Remote-Name
 	# Every guard strips a client-sent Remote-Roles too, not only the role
 	# guard: an app that reads Remote-Roles must never believe one a client
 	# sent through an older guard.

@@ -454,7 +454,7 @@ func TestChain(t *testing.T) {
 		alice.setCookie("app."+domain, "app_own", "kept")
 		h := appSees(t, alice.get("https://app."+domain+"/after", map[string]string{
 			"Remote-User": "boss@admins.example", "Remote-Groups": "admin", "X-Auth-App": "e2e-reports",
-			"Remote-Roles": "admin",
+			"Remote-Roles": "admin", "Remote-Name": "Forged Name",
 		}))
 		if got := h.Get("Remote-User"); got != "alice@example.org" {
 			t.Errorf("app saw Remote-User %q", h["Remote-User"])
@@ -465,6 +465,9 @@ func TestChain(t *testing.T) {
 		}
 		if got := h.Get("Remote-Groups"); got != "" {
 			t.Errorf("app saw Remote-Groups %q, want none", got)
+		}
+		if got := h.Get("Remote-Name"); got != "" {
+			t.Errorf("app saw Remote-Name %q, want none", got)
 		}
 		cookies := strings.Join(h["Cookie"], "; ")
 		if strings.Contains(cookies, cookieKey) {
