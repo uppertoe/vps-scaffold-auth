@@ -2,7 +2,7 @@
 title: Security hardening
 summary: The defences in one place, from refusing to start on a bad setting to the limits that keep one visitor from taking every tool offline.
 weight: 7
-lastmod: 2026-11-19
+lastmod: 2026-11-27
 ---
 
 ## Failing closed
@@ -18,7 +18,8 @@ other defence on this page follows from that rule.
 | A guard names an app or role the manifest does not declare, or sits on a host that is not the app's | Shows every signed-in visitor the no-access page |
 | The manifest of app roles cannot be read | Refuses every guard that names an app |
 | The role assignments cannot be read | Keeps the last copy it read, or, with none, admits nobody through a role |
-| A session is of a kind this version does not know | Clears it and asks the person to sign in |
+| A session is of a kind this version does not know | Ends it and asks the person to sign in |
+| The database cannot be reached | Keeps existing sessions working from memory; a sign-in, or an ending of a session, fails and says so |
 | A second-factor attempt cannot be recorded | Does not check the code |
 | The check for a recent code fails | Treats the address as having one, so that a fresh code cannot reset the guess count |
 | A card's scan cannot be recorded | Grants no access |
@@ -29,9 +30,12 @@ of "true", would look healthy while protecting less than its settings claim.
 
 ## The session cookie
 
-The cookie is signed with HMAC-SHA256 and records the purpose it was made for,
-so no other cookie the gateway issues can be presented in its place. It is
-sent only over HTTPS and cannot be read by scripts in the page. The gateway
+The cookie carries a random token and nothing about the person, so it cannot
+be altered to claim more; the gateway stores only a hash of the token. The
+gateway's other cookies are signed with HMAC-SHA256 and record the purpose
+they were made for, so none can be presented in place of another. The
+session cookie is sent only over HTTPS and cannot be read by scripts in the
+page. The gateway
 also tells browsers to use HTTPS for every host on the domain.
 
 Because the cookie is shared across the domain, any tool on the domain could
@@ -137,8 +141,8 @@ change. Each server pins the image it runs by digest.
 
 - A person who controls a staff member's inbox can sign in as that staff
   member, because ordinary staff have no second factor.
-- A stolen session cookie works until it expires, or until the person may no
-  longer sign in.
+- A stolen session cookie works until it expires, until the person may no
+  longer sign in, or until the person or an administrator ends the session.
 - Anyone on the hospital network reaches, without signing in, the User role
   of each tool that gives that role to the network.
 - Anyone who photographs a break-glass card can use it within the limits

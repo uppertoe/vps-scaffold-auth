@@ -33,6 +33,7 @@ import (
 	"github.com/pquerna/otp/totp"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/passkey/passkeytest"
+	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 )
 
 const (
@@ -523,9 +524,39 @@ func TestChain(t *testing.T) {
 		if len(r.setCookies("app_own")) != 1 {
 			t.Errorf("the app's own Set-Cookie was lost on a renewal: %v", r.header.Values("Set-Cookie"))
 		}
-		if after := alice.cookie("app."+domain, cookieKey); after == before {
-			t.Error("the browser still holds the old session after renewal")
+		// The session keeps its token; the renewal sends the cookie again
+		// with a fresh lifetime, which the browser keeps.
+		if sc := r.setCookies(cookieKey)[0]; !strings.Contains(sc, "Max-Age=") || strings.Contains(sc, "Max-Age=0") {
+			t.Errorf("the renewed cookie carries no lifetime: %q", sc)
 		}
+		if after := alice.cookie("app."+domain, cookieKey); after == "" || after != before {
+			t.Errorf("the browser's session cookie changed or was lost at renewal")
+		}
+	})
+
+	t.Run("a session cookie from before the sessions table is converted, and the browser keeps the new one", func(t *testing.T) {
+		// The cookie every earlier release issued: the whole identity in a
+		// signed envelope. Upgrading must sign nobody out.
+		now := time.Now()
+		m := session.NewManager([]byte(os.Getenv("E2E_SESSION_SECRET")), 10*time.Minute, 3*time.Second, "."+domain, false)
+		old, err := m.EncodeLegacySession(session.Identity{Email: "alice@example.org", Groups: "user", Iat: now.Unix(), Auth: now.Add(-time.Hour).Unix(), TTL: 600}, now.Add(10*time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := newBrowser(t)
+		u, _ := url.Parse(authHost + "/")
+		b.jar.SetCookies(u, []*http.Cookie{{Name: cookieKey, Value: old, Path: "/", Domain: domain}})
+		r := b.get("https://app."+domain+"/", nil)
+		if h := appSees(t, r); h.Get("Remote-User") != "alice@example.org" {
+			t.Fatalf("the converted session reached the app as %q", h.Get("Remote-User"))
+		}
+		if sc := r.setCookies(cookieKey); len(sc) != 1 || strings.Contains(strings.SplitN(strings.TrimPrefix(sc[0], cookieKey+"="), ";", 2)[0], ".") {
+			t.Fatalf("the converted session's cookie did not reach the browser: %v", r.header.Values("Set-Cookie"))
+		}
+		if now := b.cookie("app."+domain, cookieKey); now == old || now == "" {
+			t.Fatal("the browser still holds the old cookie")
+		}
+		appSees(t, b.get("https://app."+domain+"/", nil))
 	})
 
 	t.Run("each guard admits and refuses as its rule says", func(t *testing.T) {

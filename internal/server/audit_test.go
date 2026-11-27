@@ -36,6 +36,10 @@ func TestRevokedPrincipalNotRenewed(t *testing.T) {
 	if ck := c.cookies[session.SessionCookie]; ck != nil {
 		t.Errorf("stale session cookie not cleared after revocation: %v", ck)
 	}
+	// The session itself has ended, not only the cookie.
+	if n := liveCount(srv, "user@example.com"); n != 0 {
+		t.Errorf("the withdrawn person's session is still live: %d", n)
+	}
 }
 
 // A demotion (admin -> user) should still work: the user keeps access but loses

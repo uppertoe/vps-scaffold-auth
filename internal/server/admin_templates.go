@@ -86,6 +86,10 @@ type adminData struct {
 	ReadersMenu    string
 	ReadersWaiting int
 	ReadersTitle   string
+	// Sessions page.
+	Sessions *sessionsView
+	// Access log, one person chosen: the link to their sessions.
+	SessionsLink *attentionLine
 	// NoticeInPage: the page shows the notice itself, so the shell does not.
 	NoticeInPage bool
 }
@@ -328,6 +332,8 @@ var adminActionLabels = map[string]string{
 	store.AdminActionTOTPGenerate:         "Two-factor secret issued",
 	store.AdminActionTOTPRemove:           "Two-factor removed",
 	store.AdminActionSessionsEnd:          "Signed out on every device",
+	store.AdminActionSessionEnd:           "Signed out one session",
+	store.AdminActionSessionsEndAll:       "Signed everyone out",
 	store.AdminActionSettingsUpdate:       "Settings changed",
 	store.AdminActionBrandingUpdate:       "Branding changed",
 	store.AdminActionRoleGive:             "App role given",
@@ -375,7 +381,7 @@ func loadAdminTemplates(loc *time.Location) (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_card_new", "admin_designs", "admin_design", "admin_settings", "admin_totp", "admin_access", "admin_audit", "admin_apps", "admin_app", "admin_group_new", "admin_app_feeds"} {
+	for _, name := range []string{"admin_home", "admin_message", "admin_groups", "admin_group", "admin_bulk_add", "admin_codes", "admin_code_detail", "admin_card_new", "admin_designs", "admin_design", "admin_settings", "admin_totp", "admin_access", "admin_audit", "admin_apps", "admin_app", "admin_group_new", "admin_app_feeds", "admin_sessions"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err

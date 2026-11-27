@@ -1,0 +1,82 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "head"}}{{template "roles_css"}}<style>
+  /* One row per session: the same cells on every row. A confirmation is
+     asked beside the strip, so confirming moves nothing in the list. */
+  .tbl.sessions .rrow { grid-template-columns: minmax(0, 1.4fr) 116px 164px 164px minmax(0, 1fr) 92px; }
+  .tbl.sessions .rrow.hit { background: var(--accent-soft); }
+  .tbl.sessions .missing { color: var(--faint); }
+  .tbl.sessions .act { display: flex; justify-content: flex-end; align-items: center; gap: 8px; height: 34px; overflow: visible; }
+  .tbl.sessions .act form { display: flex; margin: 0; }
+  .tbl.sessions .act .btnlink, .tbl.sessions .act button { height: 34px; margin: 0; padding: 0 14px; font-size: 13px; line-height: 1; white-space: nowrap; }
+  .tbl.sessions .act .mine { font-size: 13px; color: var(--muted); }
+  .sessacts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 16px; }
+  .sessacts form { display: flex; margin: 0; }
+  .sessacts button, .sessacts .btnlink { margin: 0; }
+  .tbl.sessions .lbl { display: none; }
+  @media (max-width: 900px) {
+    .tbl.sessions .rrow { grid-template-columns: minmax(0, 1fr); height: auto; padding-block: 10px; row-gap: 2px; }
+    .tbl.sessions .rrow.colhead { display: none; }
+    .tbl.sessions .rrow > div { white-space: normal; overflow-wrap: anywhere; }
+    .tbl.sessions .lbl { display: inline; color: var(--muted); }
+    .tbl.sessions .act { justify-content: flex-start; margin-top: 6px; }
+  }
+</style>{{end}}
+{{define "content"}}
+{{with .Sessions}}
+<h1>{{$.Title}}</h1>
+<p class="sub">{{.Lead}}</p>
+
+<div class="rstrip {{.StripTone}}" role="status"><i aria-hidden="true"></i><span>{{.Strip}}</span></div>
+
+<div class="sessacts">
+  {{- if eq .Asking "one"}}
+  <form method="post" action="/admin/sessions/end-one">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="id" value="{{.AskID}}">
+    <input type="hidden" name="email" value="{{.Person}}">
+    <button type="submit" class="danger">{{.Btn.One}}</button>
+  </form>
+  <a class="btnlink quiet" href="{{.CancelHref}}">{{.Btn.Cancel}}</a>
+  {{- else if eq .Asking "person"}}
+  <form method="post" action="/admin/sessions/end">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="email" value="{{.Person}}">
+    <input type="hidden" name="back" value="sessions">
+    <button type="submit" class="danger">{{.Btn.Person}}</button>
+  </form>
+  <a class="btnlink quiet" href="{{.CancelHref}}">{{.Btn.Cancel}}</a>
+  {{- else if eq .Asking "everyone"}}
+  <form method="post" action="/admin/sessions/end-all">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <button type="submit" class="danger">{{.Btn.All}}</button>
+  </form>
+  <a class="btnlink quiet" href="{{.CancelHref}}">{{.Btn.Cancel}}</a>
+  {{- else if .Person}}
+  {{if .Rows}}<a class="btnlink quiet" href="{{.AskHref}}">{{.Btn.Person}}</a>{{end}}
+  <a class="btnlink quiet" href="{{.AllHref}}">{{.Btn.ShowAll}}</a>
+  {{- else if .Rows}}
+  <a class="btnlink quiet" href="{{.AskHref}}">{{.Btn.All}}</a>
+  {{- end}}
+</div>
+
+<div class="rlist tbl sessions">
+  <div class="rrow colhead"><div>{{.Col.Person}}</div><div>{{.Col.Kind}}</div><div>{{.Col.SignedIn}}</div><div>{{.Col.LastSeen}}</div><div>{{.Col.Device}}</div><div></div></div>
+  {{range .Rows}}
+  <div class="rrow{{if .Confirming}} hit{{end}}">
+    <div>{{if .PersonHref}}<a href="{{.PersonHref}}">{{.Email}}</a>{{else}}{{.Email}}{{end}}</div>
+    <div><span class="lbl">{{$.Sessions.Col.Kind}}: </span>{{.Kind}}</div>
+    <div><span class="lbl">{{$.Sessions.Col.SignedIn}}: </span>{{.SignedIn}}</div>
+    <div><span class="lbl">{{$.Sessions.Col.LastSeen}}: </span>{{.LastSeen}}</div>
+    <div><span class="lbl">{{$.Sessions.Col.Device}}: </span><span{{if .DeviceMissing}} class="missing"{{end}}>{{.Device}}</span></div>
+    <div class="act">
+      {{- if .Mine}}
+      <span class="mine">{{$.Sessions.Btn.Mine}}</span>
+      {{- else}}
+      <a class="btnlink quiet" href="{{.AskHref}}">{{$.Sessions.Btn.One}}</a>
+      {{- end}}
+    </div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{end}}

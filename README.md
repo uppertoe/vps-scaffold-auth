@@ -18,7 +18,7 @@ user) or *"is on the admin whitelist"* (admin). No off-the-shelf tool fits that
 with a low footprint — the lightweight proxies don't do email login, and the
 ones that do are heavyweight identity providers whose OIDC we don't need. An
 email-code flow is a small, auditable surface: no password storage and no
-federation protocol, just a one-time code and an HMAC-signed cookie.
+federation protocol, just a one-time code and a session the gateway keeps.
 
 ## How it works
 
@@ -28,14 +28,14 @@ browser ──▶ Caddy (app.example.com)
                │                          ├─ holds the role → 200 + Remote-User/Email/Roles → upstream app
                │                          └─ no session    → 302 to auth.example.com/login
                ▼
-            auth.example.com  ── login page → email → one-time code → signed-cookie session
+            auth.example.com  ── login page → email → one-time code → session
 ```
 
 1. Caddy calls `GET /verify` on every request to a protected app.
 2. No/invalid session → `/verify` returns a 302 to the login page.
 3. User enters email → a one-time code (`OTP_LENGTH` digits, six by default) is emailed (single-use, ~10 min).
-4. User types the code → an HMAC-signed session cookie is set on `.example.com`
-   (shared across all app subdomains).
+4. User types the code → the gateway starts a session, and a cookie carrying
+   its random token is set on `.example.com` (shared across all app subdomains).
 5. `/verify` now returns 200 when the person holds the role the guard names,
    plus `Remote-User`, `Remote-Email` and `Remote-Roles`, which Caddy
    forwards to the app.
@@ -62,9 +62,10 @@ include. The rule is read from the role assignments, so a list becomes staff
 only as soon as it is given such a role. While the gateway cannot read the
 role data, it treats every list as staff only.
 
-Sessions are **stateless signed cookies** — no session store. Persisted state
-(single-use OTP codes, admin TOTP secrets, DB-managed groups, and break-glass
-codes + their audit log) lives in a small **SQLite** file. No Postgres, no Redis.
+Sessions are kept by the gateway: the cookie carries a random token, and the
+sessions table holds only the token's hash with the session itself. Persisted
+state (sessions, single-use OTP codes, admin TOTP secrets, DB-managed groups,
+and break-glass codes + their audit log) lives in a small **SQLite** file. No Postgres, no Redis.
 Reversible secrets in that file (break-glass tokens, TOTP seeds) are **encrypted
 at rest** with AES-256-GCM.
 
@@ -211,9 +212,8 @@ admin has placed the guest in. A role held by guests is the User role only, and
 a guest is never an admin and never sees the TOTP step.
 
 Guest sessions renew like ordinary ones, keeping their guest kind, but a guest
-never receives the remember-me lifetime: sessions are stateless, so a stranger
-is kept on the short lifetime to bound how long an unwanted guest can hold a
-cookie before renewal re-checks it. If a guest reaches a page they cannot open,
+never receives the remember-me lifetime, which bounds how long an unwanted guest
+holds a session that nobody has ended. If a guest reaches a page they cannot open,
 the "no access" page tells them they are signed in as a guest and offers to sign
 them out, so they can sign in again with an approved address. Guest visits
 appear as `guest` in the admin access log.
@@ -416,15 +416,18 @@ factor.
 ### Signing out
 
 `GET /logout` on the auth host shows a confirmation; `POST /logout` ends the
-session for every app on the domain. An app's "Sign out" link may add
+session for every app on the domain, on the gateway as well as in the browser. An app's "Sign out" link may add
 `?rd=<https URL on the domain>`; it is validated like the login page's `rd`,
 carried through the confirmation form, and handed to the login page, so the
 person returns to that app's sign-in rather than the bare login page.
 
 The confirmation page also offers **"Sign out on every device"**, which ends
 every session the person has, here and elsewhere, including one someone else
-may hold. An administrator can do the same for anyone from that person's view of
-the Access log. A session also ends early when:
+may hold. The admin **Sessions** page lists every live session (the person, its
+kind, when it signed in and was last seen, and the browser), and signs out one
+session, one person on every device, or everyone but the administrator doing
+it. Each is confirmed on the page, recorded in the admin audit and emailed to
+the other administrators. A session also ends at once when:
 
 - the person's administrator authenticator is replaced or removed;
 - the passkey it was started with is removed;
@@ -433,10 +436,21 @@ the Access log. A session also ends early when:
   of `SESSION_REMEMBER_TTL` and 7 days; it may not be shorter than
   `SESSION_REMEMBER_TTL`), however often the session has renewed.
 
-Sessions are still signed cookies. The gateway keeps, per person, per passkey and
-per card, only the time before which every session has ended, in SQLite and in
-memory, and checks it on every request. This needs one gateway process per
-database, as the SQLite store already does.
+Ending a session deletes its row. The rows are held in memory and written
+through to SQLite, so a request finds its session without a query, and the
+database being briefly unavailable leaves existing sessions working. This
+needs one gateway process per database, which the gateway enforces. Expired
+rows are deleted at most once an hour, and the last-seen time is written at
+most every five minutes.
+
+**Upgrading from signed-cookie sessions signs nobody out.** A valid cookie from
+an earlier release is checked as before (including any "sign out on every
+device", removed passkey or withdrawn card), then becomes a session row at its
+next request, keeping its sign-in time and lifetime, and `/verify` hands the
+browser the new cookie. The old format is accepted for `SESSION_MAX_AGE` after
+the upgrade, since no old cookie can outlive it; a later release removes it.
+Rolling back to an earlier release signs out everyone whose cookie has been
+converted.
 
 ### Staying signed in
 
@@ -726,10 +740,10 @@ as a second address.
   Admin state-changing actions require a signed CSRF token.
 - Reversible secrets (break-glass tokens, admin TOTP seeds) are encrypted at
   rest with AES-256-GCM; a stolen `auth.db` is inert without the key.
-- The session cookie is signed, not stored, so a single device's session can't be
-  ended on its own; **"Sign out on every device"** ends all of a person's
-  sessions at their next request (see "Signing out"), and no session outlives
-  `SESSION_MAX_AGE`. **Policy revocation takes effect at the next request**:
+- The gateway keeps each session, and the cookie carries only a random token
+  whose hash is stored; one session, one person's or everyone's can be ended at
+  once from the Sessions page, and **"Sign out on every device"** ends all of a
+  person's sessions (see "Signing out"). No session outlives `SESSION_MAX_AGE`. **Policy revocation takes effect at the next request**:
   once the gateway restarts with the new settings, a person removed from the
   admin list loses the admin tier, and a person whose domain is de-listed is
   refused and their cookie cleared, at their next `/verify`, as group changes
@@ -767,7 +781,7 @@ protected app, see the auth doc in the scaffold (`docs/07-auth.md`).
 main.go                 entrypoint + graceful shutdown + -healthcheck probe
 internal/config         env parsing + validation (fail fast)
 internal/server         routes, handlers, embedded HTML templates
-internal/session        HMAC-signed session / state / pending / CSRF cookies
+internal/session        session token cookie; signed state / pending / CSRF cookies
 internal/otp            one-time code generation + hashing
 internal/store          Store interface + CGO-free SQLite implementation
 internal/authz          domain/whitelist roles, group set, redirect validation

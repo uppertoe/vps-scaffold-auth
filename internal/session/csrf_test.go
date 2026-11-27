@@ -20,6 +20,12 @@ func reqWithCookies(recs ...*httptest.ResponseRecorder) *http.Request {
 
 func TestCSRFBindingAndExpiry(t *testing.T) {
 	m := NewManager(testSecret, time.Hour, 30*time.Minute, "", true)
+	m.Subject = func(r *http.Request, now time.Time) string {
+		if id, ok := m.ReadSession(r, now); ok {
+			return id.Email
+		}
+		return ""
+	}
 	now := time.Unix(1_700_000_000, 0)
 	const ttl = 10 * time.Minute
 

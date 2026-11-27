@@ -2,7 +2,7 @@
 title: Reviews
 summary: How the gateway has been reviewed since it was built in May 2026, what each review found, and what it changed.
 weight: 8
-lastmod: 2026-11-19
+lastmod: 2026-11-27
 ---
 
 ## How the gateway is reviewed
@@ -59,5 +59,5 @@ the page that describes it.
 - One administrator can act as another, because the person who issues a
   second-factor secret sees it once.
 - A stolen session works until it expires, the person's listing is removed,
-  or the person or an administrator signs them out on every device. One
-  device's session cannot be ended on its own.
+  or the session is ended: by the person signing out, or by an administrator
+  on the Sessions page.

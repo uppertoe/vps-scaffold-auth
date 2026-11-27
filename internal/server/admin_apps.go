@@ -955,10 +955,7 @@ func (s *Server) handleAdminAppSave(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
-	actor := ""
-	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
-		actor = id.Email
-	}
+	actor := s.adminActor(r)
 	var give, take []store.RoleAssignment
 	var events []store.AdminEvent
 	var lines []string

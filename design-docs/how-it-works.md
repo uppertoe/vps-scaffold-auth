@@ -2,7 +2,7 @@
 title: How it works
 summary: The path of a request through the reverse proxy and the gateway, what the session cookie carries, and what a tool is told about the person.
 weight: 1
-lastmod: 2026-11-19
+lastmod: 2026-11-27
 ---
 
 ## The path of a request
@@ -31,18 +31,18 @@ left intact, so the tools they may open keep working.
 
 ## The session
 
-After a successful sign-in, the gateway sets one cookie on the whole domain,
-so that one sign-in serves every tool. The cookie carries the person's email
-address, the kind of session, the lists they belong to, when it was issued and
-how long it lasts, all signed with a key that only the gateway holds. The
-cookie does not carry the person's roles, which the gateway works out on each
-request. The gateway keeps no list of sessions. A cookie is accepted because
-its signature is valid and it has not expired.
+After a successful sign-in, the gateway starts a session and sets one cookie
+on the whole domain, so that one sign-in serves every tool. The cookie carries
+only a random token. The gateway keeps the session itself: the person's email
+address, the kind of session, the lists they belong to, when they signed in,
+when the session was last used and when it expires. The gateway works out the
+person's roles on each request. It stores only a hash of each token, so a copy
+of its database cannot be used as anyone's session.
 
-The design keeps the check fast and the gateway small, which matters because
-every request to every tool passes through it. It also has a cost: one
-person's session cannot be ended on its own. The
-[front page](_index.md) lists this among the open decisions.
+The gateway holds its sessions in memory as well as in the database, so the
+check on each request stays fast. Because the gateway keeps each session, an
+administrator can end one session, all of one person's sessions, or everyone's,
+on the Sessions page, and the ending takes effect at once on every tool.
 
 The gateway issues four other short-lived cookies, each limited to the
 gateway's own host: one carries a sign-in in progress, one carries
@@ -84,5 +84,5 @@ control an email address at an allowed domain. No existing product matched
 that rule with a small footprint. The lightweight proxies do not sign people in
 by email, and the products that do are full identity providers, with password
 stores and federation protocols the department does not need. An emailed code
-and a signed cookie give a surface small enough for one person to read from
+and a session the gateway keeps give a surface small enough for one person to read from
 end to end.

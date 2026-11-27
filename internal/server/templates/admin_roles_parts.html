@@ -141,6 +141,19 @@
   .tbl.people .rrow { grid-template-columns: minmax(0, 1.1fr) 120px minmax(0, 1.5fr) 132px 80px; }
   .tbl.ghere .rrow { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) 120px 96px; }
   .tbl.orphans .rrow { grid-template-columns: 160px minmax(0, 1fr) 80px; }
+  /* The strip above a list keeps one height for every message: the result of
+     the last action, the confirmation being asked for, or a count. */
+  .rstrip { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 16px; margin: 0 0 16px; border-radius: 8px; border: 1px solid transparent; font-size: 14px; line-height: 20px; }
+  .rstrip i { width: 8px; height: 8px; border-radius: 50%; flex: none; background: currentColor; }
+  .rstrip span { min-width: 0; overflow-wrap: anywhere; }
+  .rstrip.none { color: var(--muted); border: 1px dashed var(--border); }
+  .rstrip.none i { background: var(--faint); }
+  .rstrip.waiting { background: var(--wide-bg); color: var(--wide-fg); border-color: var(--wide-line); }
+  .rstrip.ask { background: var(--accent-soft); color: var(--text); border-color: var(--accent-line); }
+  .rstrip.ask i { background: var(--accent); }
+  .rstrip.ok { background: var(--ok-bg); color: var(--ok-fg); border-color: var(--ok-line); }
+  .rstrip.warn { background: var(--off-bg); color: var(--off-fg); border-color: var(--off-line); }
+  @media (max-width: 720px) { .rstrip { min-height: 64px; } }
   .tbl .num { font-variant-numeric: tabular-nums; }
   .tbl .ended { color: var(--faint); }
   .tbl .none { color: var(--muted); }

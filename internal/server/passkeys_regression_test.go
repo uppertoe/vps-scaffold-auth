@@ -38,8 +38,8 @@ func TestPasskeyAddedWhileTOTPOffIsNotAdminGrade(t *testing.T) {
 }
 
 // Found in review: the admin pages never renew, so a session started with a
-// removed passkey kept them until the cookie expired. They now check the
-// passkey on every request, as does /passkeys.
+// removed passkey kept them until the cookie expired. Removing the passkey
+// now deletes the sessions it started.
 func TestRemovedPasskeyLosesAdminPagesAtOnce(t *testing.T) {
 	srv, sender := pkServer(t, nil)
 	start := time.Now()
@@ -52,9 +52,7 @@ func TestRemovedPasskeyLosesAdminPagesAtOnce(t *testing.T) {
 	if signInWith(t, thief, a).Code != http.StatusFound {
 		t.Fatal("passkey sign-in failed")
 	}
-	if n, _ := srv.store.DeletePasskeys(context.Background(), "admin@example.com"); n != 1 {
-		t.Fatal("not removed")
-	}
+	adminRemovesPasskeys(t, srv, sender, "admin@example.com")
 	srv.now = func() time.Time { return start.Add(59 * time.Minute) } // > SessionRenew (30m), < SessionTTL (1h)
 	if rec := thief.get("/admin/", nil); rec.Code == http.StatusOK {
 		t.Errorf("removed passkey's session still opens /admin/ 29 minutes after renewal was due")
@@ -90,7 +88,7 @@ func TestAPasskeySessionCannotAddAnotherPasskey(t *testing.T) {
 	thief.cookies[session.PasskeyRegCookie] = owner.cookies[session.PasskeyRegCookie]
 	register(t, thief, passkeytest.New(), offer, nil)
 	// After the removal, the session cannot even open the page.
-	srv.store.DeletePasskeys(context.Background(), "user@example.com")
+	adminRemovesPasskeys(t, srv, sender, "user@example.com")
 	if rec := thief.get("/passkeys", phone); rec.Code == http.StatusOK {
 		t.Fatal("a removed passkey's session opened /passkeys")
 	}

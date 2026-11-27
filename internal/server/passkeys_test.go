@@ -112,7 +112,7 @@ func readSession(t *testing.T, srv *Server, c *client) *session.Identity {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(ck)
-	id, ok := srv.sessions.ReadSession(req, srv.now())
+	id, ok := srv.readSession(req, srv.now())
 	if !ok {
 		t.Fatal("session cookie does not read")
 	}
@@ -520,26 +520,6 @@ func TestRegistrationChallengeIsBoundToItsAccount(t *testing.T) {
 
 func newPolicyFor(c *config.Config) *authz.Policy {
 	return authz.NewPolicy(c.AllowedDomains, c.AdminEmails)
-}
-
-// A session from before the sign-in time was recorded must not look like a
-// recent sign-in after it renews, or it could add a passkey.
-func TestRenewalKeepsAnOldSessionStale(t *testing.T) {
-	srv, _ := pkServer(t, nil)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
-	id := &session.Identity{Email: "user@example.com", Groups: "user", Iat: srv.now().Add(-time.Hour).Unix()}
-	if !srv.renewSessionWith(rec, req, id, srv.now(), nil) {
-		t.Fatal("renewal refused")
-	}
-	c := newClient(t, srv.Handler())
-	for _, ck := range rec.Result().Cookies() {
-		c.cookies[ck.Name] = ck
-	}
-	renewed := readSession(t, srv, c)
-	if srv.freshSignIn(renewed) {
-		t.Fatalf("a renewed old session reads as a recent sign-in (auth=%d)", renewed.Auth)
-	}
 }
 
 // A capital in AUTH_PUBLIC_URL does not break passkeys: browsers write the

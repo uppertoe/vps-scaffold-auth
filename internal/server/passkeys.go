@@ -419,11 +419,6 @@ func (s *Server) passkeySession(r *http.Request) (*session.Identity, string, boo
 	if role != authz.RoleUser && role != authz.RoleAdmin && role != authz.RoleMember {
 		return nil, "", false
 	}
-	// A session started with a removed passkey manages nothing, whether or not
-	// it is due for renewal.
-	if !s.passkeyStillValid(r, id) {
-		return nil, "", false
-	}
 	return id, role, true
 }
 
@@ -909,25 +904,31 @@ func (s *Server) handlePasskeyRemove(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	held, _, err := s.store.GetPasskey(r.Context(), pid)
+	held, found, err := s.store.GetPasskey(r.Context(), pid)
 	if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}
-	removed, err := s.store.DeletePasskey(r.Context(), id.Email, pid)
-	if err != nil {
-		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
-		return
+	removed := false
+	if found && held.Email == id.Email {
+		// The sessions the passkey started end first; the passkey is removed
+		// only once they have, so a failure leaves it listed to try again.
+		err = s.revokeAnd(r.Context(), []string{passkeyKey(pid)}, func(x *store.Session) bool { return x.Passkey == pid }, s.now(), func() error {
+			var err error
+			removed, err = s.store.DeletePasskey(r.Context(), id.Email, pid)
+			return err
+		})
+		if err != nil {
+			log.Printf("remove passkey %d: %v", pid, err)
+			s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Please try again", Message: msgPkRemoveFailed})
+			return
+		}
 	}
 	if removed {
 		// The person removed it on this device: the page this redirects to
 		// asks the browser to forget it.
 		s.forgetPasskeyHere(w, r, held.CredentialID)
 		s.setPasskeyForget(w, held.CredentialID)
-		// The sessions the passkey started end now, not at their renewal.
-		if err := s.endSessions(r.Context(), passkeyKey(pid), s.now()); err != nil {
-			log.Printf("end sessions of passkey %d: %v", pid, err)
-		}
 		s.recordAuth(r, id.Email, store.AuthEventPasskeyRemove, store.AuthOutcomeOK)
 		s.notifyPasskeyRemoved(r, id.Email, s.now())
 	}
@@ -945,38 +946,23 @@ func (s *Server) handleAdminRemovePasskeys(w http.ResponseWriter, r *http.Reques
 		s.adminError(w, r)
 		return
 	}
-	n, err := s.store.DeletePasskeys(r.Context(), emailAddr)
-	if err != nil {
+	// The sessions the passkeys started end first, those of a passkey added
+	// since the list included; the passkeys are removed only once they have.
+	cut := make([]string, 0, len(keys))
+	for _, k := range keys {
+		cut = append(cut, passkeyKey(k.ID))
+	}
+	var n int
+	if err := s.revokeAnd(r.Context(), cut, func(x *store.Session) bool { return x.Email == emailAddr && x.Passkey != 0 }, s.now(), func() error {
+		var err error
+		n, err = s.store.DeletePasskeys(r.Context(), emailAddr)
+		return err
+	}); err != nil {
 		s.adminError(w, r)
 		return
 	}
-	// The sessions those passkeys started end now, not at their renewal.
-	// A passkey added between the list and the delete was deleted too, and
-	// its sessions still end at their renewal (passkeyStillValid).
-	for _, k := range keys {
-		if err := s.endSessions(r.Context(), passkeyKey(k.ID), s.now()); err != nil {
-			s.adminError(w, r)
-			return
-		}
-	}
 	s.auditAdmin(r, store.AdminActionPasskeysRemove, emailAddr, strconv.Itoa(n))
 	http.Redirect(w, r, "/admin/access?email="+url.QueryEscape(emailAddr)+"&passkeys_removed=1", http.StatusFound)
-}
-
-// passkeyStillValid is the renewal check for a session started with a
-// passkey: the passkey must still exist and still belong to the session's
-// address. A database error ends the session too, since the check cannot be
-// made; the person signs in again.
-func (s *Server) passkeyStillValid(r *http.Request, id *session.Identity) bool {
-	if id.PK == 0 {
-		return true
-	}
-	p, ok, err := s.store.GetPasskey(r.Context(), id.PK)
-	if err != nil {
-		log.Printf("renewal passkey check for %s: %v", id.Email, err)
-		return false
-	}
-	return ok && p.Email == id.Email
 }
 
 // passkeyRows lists passkeys for the administrator's page, and is the base of

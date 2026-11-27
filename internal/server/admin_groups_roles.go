@@ -408,7 +408,7 @@ func (s *Server) domainChanged(r *http.Request, group, domain, action, line stri
 // come through here; the caller records each change in the audit.
 func (s *Server) domainsChanged(r *http.Request, group string, lines []string) {
 	s.forgetRoles()
-	actor := s.actorOf(r)
+	actor := s.adminActor(r)
 	label := group
 	if gs, err := s.store.ListGroups(r.Context()); err == nil {
 		for _, g := range gs {
@@ -418,15 +418,6 @@ func (s *Server) domainsChanged(r *http.Request, group string, lines []string) {
 		}
 	}
 	s.emailOtherAdmins(actor, fmt.Sprintf(msgDomainSubject, label), lines)
-}
-
-// actorOf is the address of the administrator making a request, for the
-// emails to the other administrators.
-func (s *Server) actorOf(r *http.Request) string {
-	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
-		return id.Email
-	}
-	return ""
 }
 
 // clampOrg trims an organisation name, drops control characters and caps it

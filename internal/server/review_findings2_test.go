@@ -4,7 +4,6 @@ package server
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -20,31 +19,39 @@ func TestReviewLegacyAdminCookies(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
 		name string
-		g    session.Grant
+		g    session.Identity
 		want bool
 	}{
-		{"main TOTP=true Auth 1h", session.Grant{TOTP: true, Auth: now.Add(-time.Hour).Unix()}, true},
-		{"main TOTP=true Auth 13h", session.Grant{TOTP: true, Auth: now.Add(-13 * time.Hour).Unix()}, false},
-		{"TOTP=true Auth=1", session.Grant{TOTP: true, Auth: 1}, false},
-		{"TOTP=false Step now", session.Grant{Step: now.Unix(), Auth: now.Unix()}, false},
-		{"TOTP=true Step 13h Auth now", session.Grant{TOTP: true, Step: now.Add(-13 * time.Hour).Unix(), Auth: now.Unix()}, false},
-		{"TOTP=false Auth now", session.Grant{Auth: now.Unix()}, false},
+		{"main TOTP=true Auth 1h", session.Identity{Email: "admin@example.com", Groups: "admin", TOTP: true, Auth: now.Add(-time.Hour).Unix()}, true},
+		{"main TOTP=true Auth 13h", session.Identity{Email: "admin@example.com", Groups: "admin", TOTP: true, Auth: now.Add(-13 * time.Hour).Unix()}, false},
+		{"TOTP=true Auth=1", session.Identity{Email: "admin@example.com", Groups: "admin", TOTP: true, Auth: 1}, false},
+		{"TOTP=false Step now", session.Identity{Email: "admin@example.com", Groups: "admin", Step: now.Unix(), Auth: now.Unix()}, false},
+		{"TOTP=true Step 13h Auth now", session.Identity{Email: "admin@example.com", Groups: "admin", TOTP: true, Step: now.Add(-13 * time.Hour).Unix(), Auth: now.Unix()}, false},
+		{"TOTP=false Auth now", session.Identity{Email: "admin@example.com", Groups: "admin", Auth: now.Unix()}, false},
 	}
 	for _, tc := range cases {
-		rr := httptest.NewRecorder()
-		if err := srv.sessions.IssueSessionGrant(rr, "admin@example.com", "admin", tc.g, time.Hour, now); err != nil {
-			t.Fatal(err)
-		}
-		c := newClient(t, srv.Handler())
-		for _, ck := range rr.Result().Cookies() {
-			c.cookies[ck.Name] = ck
-		}
-		a := c.get("/admin/", nil)
-		v := c.get("/verify", anyGuard(t, srv))
-		got := strings.HasPrefix(sessionOf(t, srv, c).Groups, "admin") && a.Code == http.StatusOK
-		t.Logf("%-30s admin=%d verify=%d groups=%q", tc.name, a.Code, v.Code, sessionOf(t, srv, c).Groups)
-		if got != tc.want {
-			t.Errorf("%s: admin tier held=%v, want %v", tc.name, got, tc.want)
+		// The same shapes as a session started now, and as an old-format
+		// cookie converted at the upgrade.
+		for _, kind := range []string{"row", "old cookie"} {
+			c := mintSession(t, srv, tc.g, time.Hour)
+			if kind == "old cookie" {
+				id := tc.g
+				id.Iat = now.Unix()
+				c = clientWith(t, srv, legacyCookie(t, srv, id, now.Add(time.Hour)))
+			}
+			a := c.get("/admin/", nil)
+			v := c.get("/verify", anyGuard(t, srv))
+			groups := ""
+			if ck := c.cookies[session.SessionCookie]; ck != nil {
+				if id, ok := readWith(srv, ck); ok {
+					groups = id.Groups
+				}
+			}
+			got := strings.HasPrefix(groups, "admin") && a.Code == http.StatusOK
+			t.Logf("%-30s %-10s admin=%d verify=%d groups=%q", tc.name, kind, a.Code, v.Code, groups)
+			if got != tc.want {
+				t.Errorf("%s (%s): admin tier held=%v, want %v", tc.name, kind, got, tc.want)
+			}
 		}
 	}
 }
