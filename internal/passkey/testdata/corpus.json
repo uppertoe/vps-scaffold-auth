@@ -1017,5 +1017,27 @@
     "signature": "MEUCIFBuPI2kX/hk42RCF4HUoahEGKYBCdwOB0purv7xsWASAiEAzTRt1FAqkALlfZoRswcMbJS4KgCgi/LIMXZtHb4tut8=",
     "storedKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8A6JVmcfWE3JERZfg2zKyfC0/WbyKLQfv8Us3gj+gkAYUjgCQd3gejWtVc7gAmbrEVwE0Rj8h+2PrJCHStIoMQ==",
     "want": "ErrSignature"
+  },
+  {
+    "name": "register: challenge with a carriage return",
+    "kind": "register",
+    "challenge": "IUf+7zYkDTgEY6on4D9mvwSENurQm7HWBeUliMbWo1E=",
+    "credentialId": "VEuJf5aUO5SvU/e8c0s9ig==",
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiSVVmLTd6WWtEVFxyZ0VZNm9uNEQ5bXZ3U0VOdXJRbTdIV0JlVWxpTWJXbzFFIiwib3JpZ2luIjoiaHR0cHM6Ly9hdXRoLmV4YW1wbGUub3JnIn0=",
+    "authenticatorData": "2pt/Ia1Df1Z1Pqm4Cb+1/LEw2orDtyRggc7RK5JlDX9dAAAAAAAAAAAAAAAAAAAAAAAAAAAAEFRLiX+WlDuUr1P3vHNLPYqlAQIDJiABIVggdAHXQCsESaWHy/v6njFGTJrabW1DrL+RCM3V9j/85poiWCDL8pmpz1jdyMDAWYKB0jwuF8ySiF5a0ImIndN9C6Vy3g==",
+    "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdAHXQCsESaWHy/v6njFGTJrabW1DrL+RCM3V9j/85prL8pmpz1jdyMDAWYKB0jwuF8ySiF5a0ImIndN9C6Vy3g==",
+    "publicKeyAlg": -7,
+    "want": "ErrClientData"
+  },
+  {
+    "name": "register: challenge with its spare bits set",
+    "kind": "register",
+    "challenge": "IUf+7zYkDTgEY6on4D9mvwSENurQm7HWBeUliMbWo1E=",
+    "credentialId": "Wq9gljSLArv+WApUEWRXzQ==",
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiSVVmLTd6WWtEVGdFWTZvbjREOW12d1NFTnVyUW03SFdCZVVsaU1iV28xRiIsIm9yaWdpbiI6Imh0dHBzOi8vYXV0aC5leGFtcGxlLm9yZyJ9",
+    "authenticatorData": "2pt/Ia1Df1Z1Pqm4Cb+1/LEw2orDtyRggc7RK5JlDX9dAAAAAAAAAAAAAAAAAAAAAAAAAAAAEFqvYJY0iwK7/lgKVBFkV82lAQIDJiABIVggdbiURI9D/jN/UwdyIShyyee81YLA0ZDLDz7/iwDZqbkiWCDLMTB7SQHF1+MGxSN7cr86VLNrYzpgNqWofcou3xOkWQ==",
+    "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdbiURI9D/jN/UwdyIShyyee81YLA0ZDLDz7/iwDZqbnLMTB7SQHF1+MGxSN7cr86VLNrYzpgNqWofcou3xOkWQ==",
+    "publicKeyAlg": -7,
+    "want": "ErrClientData"
   }
 ]

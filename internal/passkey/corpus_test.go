@@ -6,8 +6,9 @@ package passkey_test
 // moving its parsing to a library, must give the same verdict on every case.
 //
 // The corpus is fixed bytes (ECDSA signatures are randomised, so it cannot be
-// regenerated to the same bytes). To record it afresh, which should be rare
-// and deliberate:
+// regenerated to the same bytes). The corpus only grows: to add the cases
+// buildCorpus makes that it does not hold yet, recorded with the verifier as
+// it stands, run the line below. It never re-records a case already held.
 //
 //	go test ./internal/passkey -run TestCorpus -update-corpus
 
@@ -97,21 +98,7 @@ func (c corpusCase) run() corpusCase {
 
 func TestCorpus(t *testing.T) {
 	if *updateCorpus {
-		cases := buildCorpus()
-		for i := range cases {
-			cases[i] = cases[i].run()
-		}
-		b, err := json.MarshalIndent(cases, "", "  ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(corpusFile, append(b, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("recorded %d cases", len(cases))
+		appendNewCases(t)
 	}
 	b, err := os.ReadFile(corpusFile)
 	if err != nil {
@@ -136,6 +123,43 @@ func TestCorpus(t *testing.T) {
 				want.Name, want.Kind, got.Want, got.Count, got.Synced, got.AAGUID, want.Want, want.Count, want.Synced, want.AAGUID)
 		}
 	}
+}
+
+// appendNewCases records the cases buildCorpus makes that the corpus does not
+// hold yet, and only those. A recorded case is never recorded again, so a
+// verdict cannot be changed by re-recording: TestCorpus fails on it instead.
+func appendNewCases(t *testing.T) {
+	var cases []corpusCase
+	if b, err := os.ReadFile(corpusFile); err == nil {
+		if err := json.Unmarshal(b, &cases); err != nil {
+			t.Fatal(err)
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, c := range cases {
+		have[c.Name] = true
+	}
+	added := 0
+	for _, c := range buildCorpus() {
+		if !have[c.Name] {
+			cases = append(cases, c.run())
+			have[c.Name] = true
+			added++
+		}
+	}
+	b, err := json.MarshalIndent(cases, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll("testdata", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(corpusFile, append(b, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("added %d cases; %d in all", added, len(cases))
 }
 
 // buildCorpus makes the cases. It runs only when the corpus is recorded.
@@ -233,6 +257,16 @@ func buildCorpus() []corpusCase {
 	reg("register: challenge with a line break", passkeytest.New(), func(r *passkey.Registration) {
 		c := enc(ch)
 		r.ClientDataJSON = []byte(`{"type":"webauthn.create","challenge":"` + c[:10] + `\n` + c[10:] + `","origin":"https://auth.example.org"}`)
+	})
+	reg("register: challenge with a carriage return", passkeytest.New(), func(r *passkey.Registration) {
+		c := enc(ch)
+		r.ClientDataJSON = []byte(`{"type":"webauthn.create","challenge":"` + c[:10] + `\r` + c[10:] + `","origin":"https://auth.example.org"}`)
+	})
+	reg("register: challenge with its spare bits set", passkeytest.New(), func(r *passkey.Registration) {
+		c := []byte(enc(ch)) // 32 bytes: the last of 43 characters carries 2 spare bits
+		const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+		c[len(c)-1] = alphabet[strings.IndexByte(alphabet, c[len(c)-1])|1]
+		r.ClientDataJSON = []byte(`{"type":"webauthn.create","challenge":"` + string(c) + `","origin":"https://auth.example.org"}`)
 	})
 	reg("register: topOrigin as null", passkeytest.New(), func(r *passkey.Registration) {
 		r.ClientDataJSON = rawCD(`{"type":"webauthn.create","challenge":"CH","origin":"https://auth.example.org","topOrigin":null}`)

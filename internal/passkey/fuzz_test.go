@@ -14,7 +14,9 @@ package passkey_test
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -177,10 +179,41 @@ func FuzzRegistration(f *testing.F) {
 			return
 		}
 		if !clientDataAcceptable(cd, "webauthn.create", fuzzChallenge) || !authDataAcceptable(ad) || ad[32]&0x40 == 0 ||
-			alg != passkey.AlgES256 || !bytes.Equal(cred.ID, id) || !bytes.Equal(cred.PublicKey, spki) {
+			alg != passkey.AlgES256 || !bytes.Equal(cred.ID, id) || !bytes.Equal(cred.PublicKey, spki) || !coseMatchesSPKI(ad, spki) {
 			t.Fatalf("accepted registration id %x cd %q ad %x key %x alg %d", id, cd, ad, spki, alg)
 		}
 	})
+}
+
+// coseMatchesSPKI reports whether the COSE key in registration data ad is
+// exactly the canonical ES256 encoding of the P-256 key in spki, followed by
+// nothing unless the extensions flag is set. It is written independently of
+// the verifier, from the CTAP2 layout.
+func coseMatchesSPKI(ad, spki []byte) bool {
+	if len(ad) < 55 {
+		return false
+	}
+	idLen := int(binary.BigEndian.Uint16(ad[53:55]))
+	if len(ad) < 55+idLen {
+		return false
+	}
+	cose := ad[55+idLen:]
+	k, err := x509.ParsePKIXPublicKey(spki)
+	if err != nil {
+		return false
+	}
+	pub, ok := k.(*ecdsa.PublicKey)
+	if !ok || pub.Curve != elliptic.P256() {
+		return false
+	}
+	e, err := pub.ECDH()
+	if err != nil {
+		return false
+	}
+	raw := e.Bytes()
+	want := append([]byte{0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20}, raw[1:33]...)
+	want = append(append(want, 0x22, 0x58, 0x20), raw[33:65]...)
+	return bytes.HasPrefix(cose, want) && (ad[32]&0x80 != 0 || len(cose) == len(want))
 }
 
 func sameKey(spki []byte, a *passkeytest.Authenticator) bool {

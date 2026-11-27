@@ -330,7 +330,10 @@ const (
 
 // coseDecode reads a COSE key strictly: no duplicate or unknown labels, no
 // indefinite lengths and no tags. coseEncode writes the canonical CBOR that
-// CTAP2 requires.
+// CTAP2 requires. matchCOSEKey applies both: the key must decode under these
+// options, and must re-encode to exactly the bytes received. Either alone
+// refuses each of those encodings; TestCOSEDecoderOptions pins the options,
+// and the corpus the comparison, so neither can be dropped unnoticed.
 var (
 	coseDecode = mustDecMode(cbor.DecOptions{
 		DupMapKey:         cbor.DupMapKeyEnforcedAPF,
