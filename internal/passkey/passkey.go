@@ -51,6 +51,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/fxamacker/cbor/v2"
 )
@@ -231,23 +232,45 @@ func (rp RelyingParty) VerifyAssertion(a Assertion, challenge, publicKey []byte,
 // present only when the ceremony ran in a cross-origin iframe, which the
 // sign-in pages forbid (frame-ancestors 'none'); its presence is refused.
 type clientData struct {
-	Type        string  `json:"type"`
-	Challenge   string  `json:"challenge"`
-	Origin      string  `json:"origin"`
-	CrossOrigin bool    `json:"crossOrigin"`
-	TopOrigin   *string `json:"topOrigin"`
+	Type        string
+	Challenge   string
+	Origin      string
+	CrossOrigin bool
+	TopOrigin   *string
 }
 
+// checkClientData reads clientDataJSON as the browser writes it. Go's
+// encoding/json matches member names without regard to case, so each member
+// is read by its exact name from a map, and a member whose name differs from
+// one of these only in case ("tYpe") is refused. The challenge must be the
+// exact unpadded base64url of the one issued.
 func (rp RelyingParty) checkClientData(raw []byte, typ string, challenge []byte) error {
-	var cd clientData
-	if err := json.Unmarshal(raw, &cd); err != nil {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
 		return ErrClientData
+	}
+	var cd clientData
+	fields := map[string]any{
+		"type": &cd.Type, "challenge": &cd.Challenge, "origin": &cd.Origin,
+		"crossOrigin": &cd.CrossOrigin, "topOrigin": &cd.TopOrigin,
+	}
+	for got := range m {
+		for name := range fields {
+			if got != name && strings.EqualFold(got, name) {
+				return ErrClientData
+			}
+		}
+	}
+	for name, v := range fields {
+		if r, ok := m[name]; ok && json.Unmarshal(r, v) != nil {
+			return ErrClientData
+		}
 	}
 	if cd.Type != typ || cd.Origin != rp.Origin || cd.CrossOrigin || cd.TopOrigin != nil {
 		return ErrClientData
 	}
-	got, err := base64.RawURLEncoding.DecodeString(cd.Challenge)
-	if err != nil || len(challenge) == 0 || subtle.ConstantTimeCompare(got, challenge) != 1 {
+	want := base64.RawURLEncoding.EncodeToString(challenge)
+	if len(challenge) == 0 || subtle.ConstantTimeCompare([]byte(cd.Challenge), []byte(want)) != 1 {
 		return ErrClientData
 	}
 	return nil

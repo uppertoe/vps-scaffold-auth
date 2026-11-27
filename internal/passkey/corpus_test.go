@@ -224,6 +224,25 @@ func buildCorpus() []corpusCase {
 	reg("register: empty top origin", passkeytest.New(), func(r *passkey.Registration) {
 		r.ClientDataJSON = cdWith("webauthn.create", func(m map[string]any) { m["topOrigin"] = "" })
 	})
+	reg("register: member names in other cases", passkeytest.New(), func(r *passkey.Registration) {
+		r.ClientDataJSON = rawCD(`{"tYpe":"webauthn.create","ChAllenge":"CH","ORIGIN":"https://auth.example.org"}`)
+	})
+	reg("register: type given in two cases", passkeytest.New(), func(r *passkey.Registration) {
+		r.ClientDataJSON = rawCD(`{"type":"webauthn.create","challenge":"CH","origin":"https://auth.example.org","TYPE":"webauthn.get"}`)
+	})
+	reg("register: challenge with a line break", passkeytest.New(), func(r *passkey.Registration) {
+		c := enc(ch)
+		r.ClientDataJSON = []byte(`{"type":"webauthn.create","challenge":"` + c[:10] + `\n` + c[10:] + `","origin":"https://auth.example.org"}`)
+	})
+	reg("register: topOrigin as null", passkeytest.New(), func(r *passkey.Registration) {
+		r.ClientDataJSON = rawCD(`{"type":"webauthn.create","challenge":"CH","origin":"https://auth.example.org","topOrigin":null}`)
+	})
+	reg("register: crossOrigin as null", passkeytest.New(), func(r *passkey.Registration) {
+		r.ClientDataJSON = rawCD(`{"type":"webauthn.create","challenge":"CH","origin":"https://auth.example.org","crossOrigin":null}`)
+	})
+	reg("register: crossOrigin as a string", passkeytest.New(), func(r *passkey.Registration) {
+		r.ClientDataJSON = rawCD(`{"type":"webauthn.create","challenge":"CH","origin":"https://auth.example.org","crossOrigin":"false"}`)
+	})
 	reg("register: client data is not JSON", passkeytest.New(), func(r *passkey.Registration) {
 		r.ClientDataJSON = []byte("type=webauthn.create")
 	})

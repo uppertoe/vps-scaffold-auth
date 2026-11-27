@@ -48,9 +48,9 @@ func clientDataAcceptable(raw []byte, typ string, ch []byte) bool {
 		return false
 	}
 	got, _ := cd["challenge"].(string)
-	_, top := cd["topOrigin"]
+	top, _ := cd["topOrigin"]
 	return cd["type"] == typ && cd["origin"] == rp.Origin && got == base64.RawURLEncoding.EncodeToString(ch) &&
-		(cd["crossOrigin"] == nil || cd["crossOrigin"] == false) && !top
+		(cd["crossOrigin"] == nil || cd["crossOrigin"] == false) && top == nil
 }
 
 // authDataAcceptable is what any accepted authenticator data must say.
