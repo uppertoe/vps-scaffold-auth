@@ -188,6 +188,11 @@ func (s *Server) readSession(r *http.Request, now time.Time) (*session.Identity,
 // session the request already carried is replaced, since the browser keeps
 // only one cookie; replacing it also gives a new token whenever the session
 // gains the admin step.
+//
+// A session built from an existing one (id.SID set: the admin step, or the
+// acting administrator's new token after "Sign out everyone") starts only if
+// that session is still live under the write lock, so a revocation that
+// lands after the handler read it cannot be outlived by its replacement.
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request, id session.Identity, ttl time.Duration, now time.Time) error {
 	if ttl <= 0 {
 		ttl = s.sessions.DefaultTTL()
@@ -216,6 +221,14 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, id session
 	// lock every revocation takes (revokeAnd), so a sign-in already under
 	// way when it is removed or withdrawn cannot start a session after.
 	err = s.grantStillValid(r.Context(), id)
+	if err == nil && id.SID != 0 {
+		l.mu.RLock()
+		_, live := l.byID[id.SID]
+		l.mu.RUnlock()
+		if !live {
+			err = errGrantGone
+		}
+	}
 	if err == nil {
 		x.ID, err = s.store.CreateSession(r.Context(), x)
 	}
@@ -239,7 +252,8 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, id session
 }
 
 // errGrantGone means the passkey or card a sign-in used was removed or
-// withdrawn while the sign-in was under way.
+// withdrawn, or the session being replaced was ended, while the sign-in was
+// under way.
 var errGrantGone = errors.New("the passkey or card has been removed")
 
 // grantStillValid reports whether the passkey or card a session is being
