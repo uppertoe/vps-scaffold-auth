@@ -45,6 +45,10 @@ func OpenSQLite(path string) (*SQLite, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.migrateSessions(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

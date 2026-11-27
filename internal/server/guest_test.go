@@ -65,7 +65,7 @@ func sessionOf(t *testing.T, srv *Server, c *client) *session.Identity {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(ck)
-	id, ok := srv.sessions.ReadSession(req, srv.now())
+	id, ok := srv.readSession(req, srv.now())
 	if !ok {
 		t.Fatal("session cookie did not verify")
 	}
@@ -233,13 +233,13 @@ func TestGuestRoleAdmitsNormalUsers(t *testing.T) {
 	}
 }
 
-// Renewal must not end a guest session because Role says deny: it re-issues
+// Renewal must not end a guest session because Role says deny: it renews
 // with kind guest and a recomputed group set.
 func TestGuestSessionRenews(t *testing.T) {
 	srv, sender := guestServer(t)
 	c := newClient(t, srv.Handler())
 	loginGuest(t, c, sender, strangerAddr)
-	before := c.cookies[session.SessionCookie].Value
+	before := sessionOf(t, srv, c).Iat
 
 	if err := srv.store.CreateGroup(context.Background(), "reviewers", ""); err != nil {
 		t.Fatal(err)
@@ -253,11 +253,10 @@ func TestGuestSessionRenews(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("guest at renewal = %d, want 200", rec.Code)
 	}
-	ck := c.cookies[session.SessionCookie]
-	if ck == nil || ck.Value == before {
-		t.Fatal("guest session was not re-issued at renewal")
-	}
 	id := sessionOf(t, srv, c)
+	if id.Iat == before {
+		t.Fatal("guest session was not renewed")
+	}
 	if id.Kind != session.KindGuest {
 		t.Errorf("renewed kind = %q, want guest", id.Kind)
 	}
@@ -409,7 +408,7 @@ func TestGuestSessionEndsWhenNoHostIsOpen(t *testing.T) {
 	if ck := c.cookies[session.SessionCookie]; ck != nil && ck.Value != "" {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.AddCookie(ck)
-		if _, ok := srv.sessions.ReadSession(req, srv.now()); ok {
+		if _, ok := srv.readSession(req, srv.now()); ok {
 			t.Error("the guest session should have been cleared")
 		}
 	}
@@ -484,19 +483,11 @@ func TestGroupPageMarksMemberNotOnAllowList(t *testing.T) {
 }
 
 // A session whose kind this build does not know is refused at /verify rather
-// than read as a normal login. The kind rides inside the signed envelope, so
-// only a sibling build sharing SESSION_SECRET could mint one, and it must
-// not be mistaken for a department user.
+// than read as a normal login. Only a newer build could have written one (a
+// rollback), and it must not be mistaken for a department user.
 func TestVerifyRefusesUnknownSessionKind(t *testing.T) {
 	srv, _ := guestServer(t)
-	c := newClient(t, srv.Handler())
-	rec := httptest.NewRecorder()
-	if err := srv.sessions.IssueSessionTTL(rec, "user@example.com", "user", "future_kind", false, time.Hour, srv.now()); err != nil {
-		t.Fatal(err)
-	}
-	for _, ck := range rec.Result().Cookies() {
-		c.cookies[ck.Name] = ck
-	}
+	c := mintSession(t, srv, session.Identity{Email: "user@example.com", Groups: "user", Kind: "future_kind"}, time.Hour)
 	res := c.get("/verify", anyGuard(t, srv))
 	if res.Code != http.StatusFound || !strings.Contains(res.Header().Get("Location"), "/login") {
 		t.Fatalf("unknown kind at /verify = %d %q, want 302 to login", res.Code, res.Header().Get("Location"))
@@ -504,7 +495,7 @@ func TestVerifyRefusesUnknownSessionKind(t *testing.T) {
 	if ck := c.cookies[session.SessionCookie]; ck != nil && ck.Value != "" {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.AddCookie(ck)
-		if _, ok := srv.sessions.ReadSession(req, srv.now()); ok {
+		if _, ok := srv.readSession(req, srv.now()); ok {
 			t.Error("unknown-kind session should have been cleared")
 		}
 	}

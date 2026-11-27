@@ -134,7 +134,7 @@ func (s *Server) handleAdminBreakMove(w http.ResponseWriter, r *http.Request) {
 	}
 	s.forgetRoles()
 	s.auditAdmin(r, store.AdminActionBreakMove, c.Label, "group="+c.TargetGroup+" app="+app+" page="+page)
-	s.emailOtherAdmins(s.actor(r), fmt.Sprintf(msgCardMoveSubj, c.Label, a.Label),
+	s.emailOtherAdmins(s.adminActor(r), fmt.Sprintf(msgCardMoveSubj, c.Label, a.Label),
 		[]string{c.Label + " · opens " + a.Label + " · " + a.Hosts[0] + page + " · no longer opens the group " + c.TargetGroup})
 	s.redirectDone(w, r, back, "card-moved", "")
 }

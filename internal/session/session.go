@@ -1,7 +1,8 @@
-// Package session implements stateless, HMAC-signed cookies. The login session
-// itself carries the user's identity; short-lived "state" and "pending"
-// cookies carry the in-progress login (which email, where to return to, and
-// whether an admin still owes a TOTP step). Nothing here touches a database.
+// Package session implements the gateway's cookies. The login session cookie
+// carries a random token, and the gateway keeps the session itself; short-lived
+// HMAC-signed "state" and "pending" cookies carry the in-progress login (which
+// email, where to return to, and whether an admin still owes a TOTP step).
+// Nothing here touches a database.
 package session
 
 import (
@@ -13,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -121,7 +123,8 @@ const (
 	KindMember     = "member"
 )
 
-// Identity is the authenticated principal carried by the session cookie.
+// Identity is the authenticated principal of a session, as the gateway keeps
+// it. An old-format session cookie carried it whole.
 type Identity struct {
 	Email  string `json:"email"`
 	Groups string `json:"groups"`
@@ -139,7 +142,7 @@ type Identity struct {
 	// TOTP step before it is honoured for admin access.
 	TOTP bool `json:"totp,omitempty"`
 	// PK is the ID of the passkey this session was started with, zero for any
-	// other sign-in. Renewal ends the session once that passkey is removed.
+	// other sign-in. Removing the passkey ends the session.
 	PK int64 `json:"pk,omitempty"`
 	// Auth is when the person actually signed in (Unix seconds). Iat moves
 	// forward at every renewal; Auth does not, so it says how recently the
@@ -155,16 +158,8 @@ type Identity struct {
 	// session itself lasts. Zero with TOTP set means a session from before
 	// this field existed; its sign-in time stands in.
 	Step int64 `json:"step,omitempty"`
-}
-
-// Grant is how a session was earned, carried unchanged across renewals.
-type Grant struct {
-	Kind string
-	TOTP bool
-	PK   int64
-	Auth int64 // zero means now
-	Card int64 // the break-glass card, for a break-glass session
-	Step int64 // when the admin second step was last passed, zero for never
+	// SID is the gateway's ID for the session. It is never in a cookie.
+	SID int64 `json:"-"`
 }
 
 // PasskeyChallenge is the random challenge for one passkey ceremony. For
@@ -228,6 +223,10 @@ type Manager struct {
 	renew        time.Duration
 	cookieDomain string
 	secure       bool
+	// Subject returns the address of the request's session, which a CSRF
+	// token is bound to; "" when there is none. The gateway sets it, since
+	// only the gateway can look a session up.
+	Subject func(r *http.Request, now time.Time) string
 }
 
 // NewManager builds a Manager. secure controls the cookie Secure attribute
@@ -255,21 +254,30 @@ func (m *Manager) encode(typ string, v any, exp time.Time) (string, error) {
 }
 
 func (m *Manager) decode(typ string, token string, now time.Time, v any) error {
+	_, err := m.decodeExp(typ, token, now, v)
+	return err
+}
+
+// decodeExp is decode, also returning the token's expiry.
+func (m *Manager) decodeExp(typ string, token string, now time.Time, v any) (time.Time, error) {
 	raw, err := m.signer.Verify(token)
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return ErrInvalid
+		return time.Time{}, ErrInvalid
 	}
 	if env.Typ == "" || env.Typ != typ {
-		return ErrInvalid // wrong purpose, or a legacy untyped token
+		return time.Time{}, ErrInvalid // wrong purpose, or a legacy untyped token
 	}
 	if now.Unix() > env.Exp {
-		return ErrInvalid
+		return time.Time{}, ErrInvalid
 	}
-	return json.Unmarshal(env.Data, v)
+	if err := json.Unmarshal(env.Data, v); err != nil {
+		return time.Time{}, ErrInvalid
+	}
+	return time.Unix(env.Exp, 0), nil
 }
 
 func (m *Manager) setCookie(w http.ResponseWriter, name, value, domain string, ttl time.Duration) {
@@ -300,40 +308,44 @@ func (m *Manager) clearCookie(w http.ResponseWriter, name, domain string) {
 
 // --- Session ---
 
-// IssueSession writes a normal session cookie using the default TTL.
-func (m *Manager) IssueSession(w http.ResponseWriter, email, groups string, now time.Time) error {
-	return m.IssueSessionTTL(w, email, groups, "", false, m.ttl, now)
+// The session cookie carries a random token, and the gateway keeps the
+// session itself (internal/server/sessions.go). A cookie from before that,
+// a signed envelope carrying the whole Identity, is read only so that it can
+// be converted once (ReadLegacySession).
+
+// NewToken returns a fresh random session token.
+func NewToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return b64.EncodeToString(b), nil
 }
 
-// IssueSessionTTL writes a session cookie with an explicit lifetime and kind.
-// The chosen TTL is stored in the identity so a later renewal preserves it.
-// totp records whether the admin second factor was satisfied at login; a renewal
-// must pass the existing value through so the assurance is not silently dropped.
-func (m *Manager) IssueSessionTTL(w http.ResponseWriter, email, groups, kind string, totp bool, ttl time.Duration, now time.Time) error {
-	return m.IssueSessionGrant(w, email, groups, Grant{Kind: kind, TOTP: totp}, ttl, now)
+// TokenHash is what the gateway stores for a token.
+func TokenHash(token string) []byte {
+	h := sha256.Sum256([]byte(token))
+	return h[:]
 }
 
-// IssueSessionGrant writes a session cookie for a grant. A renewal passes the
-// grant read from the old session, so the passkey and the time of sign-in
-// survive it.
-func (m *Manager) IssueSessionGrant(w http.ResponseWriter, email, groups string, g Grant, ttl time.Duration, now time.Time) error {
-	if ttl <= 0 {
-		ttl = m.ttl
-	}
-	auth := g.Auth
-	if auth == 0 {
-		auth = now.Unix()
-	}
-	id := Identity{Email: email, Groups: groups, Iat: now.Unix(), Kind: g.Kind, TTL: int64(ttl.Seconds()), TOTP: g.TOTP, PK: g.PK, Auth: auth, Card: g.Card, Step: g.Step}
-	tok, err := m.encode(typSession, id, now.Add(ttl))
-	if err != nil {
-		return err
-	}
-	m.setCookie(w, SessionCookie, tok, m.cookieDomain, ttl)
-	return nil
+// IsLegacy reports whether a session cookie's value is the old signed
+// envelope. A token has no dot; an envelope always has one.
+func IsLegacy(value string) bool {
+	return strings.Contains(value, ".")
 }
 
-// ReadSession returns the identity from a valid session cookie.
+// MigratedToken is the token an old-format cookie converts to. It is keyed
+// with the session secret, so only this service can work it out, and it is
+// the same at every request, so parallel requests carrying one old cookie
+// reach one session.
+func (m *Manager) MigratedToken(legacy string) string {
+	h := hmac.New(sha256.New, m.signer.secret)
+	h.Write([]byte("migrated session\x00"))
+	h.Write([]byte(legacy))
+	return b64.EncodeToString(h.Sum(nil))
+}
+
+// SessionToken returns the request's session cookie value.
 //
 // The session cookie is scoped to the shared cookie domain so one login serves
 // every app, which also means any host on that domain can set a cookie of the
@@ -345,25 +357,62 @@ func (m *Manager) IssueSessionGrant(w http.ResponseWriter, email, groups string,
 // cookie outright is indistinguishable from a fresh login and cannot be
 // detected here; every app on the cookie domain must be trusted equally (see
 // the README's security notes).
-func (m *Manager) ReadSession(r *http.Request, now time.Time) (*Identity, bool) {
+func (m *Manager) SessionToken(r *http.Request) (string, bool) {
 	var c *http.Cookie
 	for _, ck := range r.Cookies() {
 		if ck.Name != SessionCookie {
 			continue
 		}
 		if c != nil {
-			return nil, false // ambiguous: two cookies by this name
+			return "", false // ambiguous: two cookies by this name
 		}
 		c = ck
 	}
-	if c == nil {
-		return nil, false
+	if c == nil || c.Value == "" {
+		return "", false
 	}
+	return c.Value, true
+}
+
+// SetSession writes the session cookie, to last until expires. A session
+// cookie already written to this response is replaced, so a response never
+// carries two: the gate in auth.caddy copies the session's Set-Cookie to the
+// browser as one header.
+func (m *Manager) SetSession(w http.ResponseWriter, token string, expires, now time.Time) {
+	dropSessionCookie(w)
+	m.setCookie(w, SessionCookie, token, m.cookieDomain, expires.Sub(now))
+}
+
+func dropSessionCookie(w http.ResponseWriter) {
+	h := w.Header()
+	kept := h.Values("Set-Cookie")[:0:0]
+	for _, v := range h.Values("Set-Cookie") {
+		if !strings.HasPrefix(v, SessionCookie+"=") {
+			kept = append(kept, v)
+		}
+	}
+	h.Del("Set-Cookie")
+	for _, v := range kept {
+		h.Add("Set-Cookie", v)
+	}
+}
+
+// ReadLegacySession returns the identity in an old-format session cookie,
+// and the cookie's own expiry, if it is validly signed, minted as a session
+// and unexpired.
+func (m *Manager) ReadLegacySession(value string, now time.Time) (*Identity, time.Time, bool) {
 	var id Identity
-	if err := m.decode(typSession, c.Value, now, &id); err != nil {
-		return nil, false
+	exp, err := m.decodeExp(typSession, value, now, &id)
+	if err != nil {
+		return nil, time.Time{}, false
 	}
-	return &id, true
+	return &id, exp, true
+}
+
+// EncodeLegacySession mints an old-format session cookie value. Only tests
+// of the conversion use it; it goes with ReadLegacySession.
+func (m *Manager) EncodeLegacySession(id Identity, exp time.Time) (string, error) {
+	return m.encode(typSession, id, exp)
 }
 
 // NeedsRenew reports whether a session is past its sliding-renewal threshold.
@@ -385,8 +434,13 @@ func (m *Manager) SessionTTL(id *Identity) time.Duration {
 	return m.ttl
 }
 
-// ClearSession expires the session cookie.
+// DefaultTTL is the lifetime of a session that does not choose another.
+func (m *Manager) DefaultTTL() time.Duration { return m.ttl }
+
+// ClearSession expires the session cookie, in place of any session cookie
+// already written to this response.
 func (m *Manager) ClearSession(w http.ResponseWriter) {
+	dropSessionCookie(w)
 	m.clearCookie(w, SessionCookie, m.cookieDomain)
 }
 
@@ -546,10 +600,10 @@ type csrfPayload struct {
 // csrfSub returns the subject the CSRF token is bound to: the current session's
 // email, or "" when there is no session (pre-login forms).
 func (m *Manager) csrfSub(r *http.Request, now time.Time) string {
-	if id, ok := m.ReadSession(r, now); ok {
-		return id.Email
+	if m.Subject == nil {
+		return ""
 	}
-	return ""
+	return m.Subject(r, now)
 }
 
 // EnsureCSRF returns the request's CSRF token, minting and setting a fresh one

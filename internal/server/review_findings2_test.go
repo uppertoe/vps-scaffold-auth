@@ -4,7 +4,6 @@ package server
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -20,25 +19,18 @@ func TestReviewLegacyAdminCookies(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
 		name string
-		g    session.Grant
+		g    session.Identity
 		want bool
 	}{
-		{"main TOTP=true Auth 1h", session.Grant{TOTP: true, Auth: now.Add(-time.Hour).Unix()}, true},
-		{"main TOTP=true Auth 13h", session.Grant{TOTP: true, Auth: now.Add(-13 * time.Hour).Unix()}, false},
-		{"TOTP=true Auth=1", session.Grant{TOTP: true, Auth: 1}, false},
-		{"TOTP=false Step now", session.Grant{Step: now.Unix(), Auth: now.Unix()}, false},
-		{"TOTP=true Step 13h Auth now", session.Grant{TOTP: true, Step: now.Add(-13 * time.Hour).Unix(), Auth: now.Unix()}, false},
-		{"TOTP=false Auth now", session.Grant{Auth: now.Unix()}, false},
+		{"main TOTP=true Auth 1h", session.Identity{Email: "admin@example.com", Groups: "admin", TOTP: true, Auth: now.Add(-time.Hour).Unix()}, true},
+		{"main TOTP=true Auth 13h", session.Identity{Email: "admin@example.com", Groups: "admin", TOTP: true, Auth: now.Add(-13 * time.Hour).Unix()}, false},
+		{"TOTP=true Auth=1", session.Identity{Email: "admin@example.com", Groups: "admin", TOTP: true, Auth: 1}, false},
+		{"TOTP=false Step now", session.Identity{Email: "admin@example.com", Groups: "admin", Step: now.Unix(), Auth: now.Unix()}, false},
+		{"TOTP=true Step 13h Auth now", session.Identity{Email: "admin@example.com", Groups: "admin", TOTP: true, Step: now.Add(-13 * time.Hour).Unix(), Auth: now.Unix()}, false},
+		{"TOTP=false Auth now", session.Identity{Email: "admin@example.com", Groups: "admin", Auth: now.Unix()}, false},
 	}
 	for _, tc := range cases {
-		rr := httptest.NewRecorder()
-		if err := srv.sessions.IssueSessionGrant(rr, "admin@example.com", "admin", tc.g, time.Hour, now); err != nil {
-			t.Fatal(err)
-		}
-		c := newClient(t, srv.Handler())
-		for _, ck := range rr.Result().Cookies() {
-			c.cookies[ck.Name] = ck
-		}
+		c := mintSession(t, srv, tc.g, time.Hour)
 		a := c.get("/admin/", nil)
 		v := c.get("/verify", anyGuard(t, srv))
 		got := strings.HasPrefix(sessionOf(t, srv, c).Groups, "admin") && a.Code == http.StatusOK

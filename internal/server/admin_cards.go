@@ -631,7 +631,7 @@ func (s *Server) handleAdminBreakCreate(w http.ResponseWriter, r *http.Request) 
 	}
 	s.forgetRoles()
 	s.auditAdmin(r, store.AdminActionBreakCreate, label, "app="+app+" page="+page)
-	s.emailOtherAdmins(s.actor(r), fmt.Sprintf(msgCardCreatedSubj, a.Label), []string{label + " · opens " + a.Label + " · " + a.Hosts[0] + page})
+	s.emailOtherAdmins(s.adminActor(r), fmt.Sprintf(msgCardCreatedSubj, a.Label), []string{label + " · opens " + a.Label + " · " + a.Hosts[0] + page})
 	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-created", "")
 }
 
@@ -716,7 +716,7 @@ func (s *Server) createGroupCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditAdmin(r, store.AdminActionBreakCreate, label, "group="+group)
-	s.emailOtherAdmins(s.actor(r), fmt.Sprintf(msgCardCreatedSubj, group), []string{label + " · opens the group " + group})
+	s.emailOtherAdmins(s.adminActor(r), fmt.Sprintf(msgCardCreatedSubj, group), []string{label + " · opens the group " + group})
 	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(id, 10), "card-created", "")
 }
 
@@ -952,7 +952,7 @@ func (s *Server) handleAdminBreakRevoke(w http.ResponseWriter, r *http.Request) 
 	}
 	s.forgetRoles()
 	s.auditAdmin(r, store.AdminActionBreakRevoke, "code#"+strconv.FormatInt(c.ID, 10), c.Label)
-	s.emailOtherAdmins(s.actor(r), fmt.Sprintf(msgCardWithdrawSub, c.Label), []string{c.Label + " · withdrawn"})
+	s.emailOtherAdmins(s.adminActor(r), fmt.Sprintf(msgCardWithdrawSub, c.Label), []string{c.Label + " · withdrawn"})
 	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(c.ID, 10), "card-revoked", "")
 }
 
@@ -991,6 +991,6 @@ func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) 
 	}
 	s.forgetRoles()
 	s.auditAdmin(r, store.AdminActionBreakRemint, "code#"+strconv.FormatInt(c.ID, 10), c.Label)
-	s.emailOtherAdmins(s.actor(r), fmt.Sprintf(msgCardReplaceSubj, c.Label), []string{c.Label + " · replaced, and the printed card no longer works"})
+	s.emailOtherAdmins(s.adminActor(r), fmt.Sprintf(msgCardReplaceSubj, c.Label), []string{c.Label + " · replaced, and the printed card no longer works"})
 	s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(c.ID, 10), "card-reminted", "")
 }

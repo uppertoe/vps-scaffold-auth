@@ -501,7 +501,7 @@ func (s *Server) handleAdminDesignCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.auditAdmin(r, store.AdminActionDesignCreate, d.Name, "size="+d.Size)
-	s.emailOtherAdmins(s.actor(r), fmt.Sprintf(msgDesignSubject, d.Name), []string{d.Name + " · a new design, which no card uses yet"})
+	s.emailOtherAdmins(s.adminActor(r), fmt.Sprintf(msgDesignSubject, d.Name), []string{d.Name + " · a new design, which no card uses yet"})
 	s.redirectDone(w, r, "/admin/break/designs/"+strconv.FormatInt(id, 10), "design-created", "")
 }
 
@@ -546,7 +546,7 @@ func (s *Server) handleAdminDesignSave(w http.ResponseWriter, r *http.Request) {
 	codes, _ := s.store.ListBreakGlassCodes(r.Context())
 	n := designUse(codes, designs)[d.ID]
 	s.auditAdmin(r, store.AdminActionDesignSave, d.Name, "size="+d.Size)
-	s.emailOtherAdmins(s.actor(r), fmt.Sprintf(msgDesignSubject, d.Name), []string{d.Name + " · saved · " + strings.ToLower(usesDesign(n))})
+	s.emailOtherAdmins(s.adminActor(r), fmt.Sprintf(msgDesignSubject, d.Name), []string{d.Name + " · saved · " + strings.ToLower(usesDesign(n))})
 	s.redirectDone(w, r, "/admin/break/designs/"+strconv.FormatInt(d.ID, 10), "design-saved", "")
 }
 

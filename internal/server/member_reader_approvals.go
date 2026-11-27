@@ -230,12 +230,13 @@ func (s *Server) handleAdminWithdrawReader(w http.ResponseWriter, r *http.Reques
 	s.redirectDone(w, r, appFeedsPath, noticeReaderWithdrawn+noticeReaderCookieSep+app+noticeReaderCookieSep+group, "")
 }
 
-// adminActor is the address of the administrator making the request.
+// adminActor is the address of the administrator making the request, as
+// requireAdmin admitted it. It is read from the request, not the session, so
+// an administrator who has just ended their own sessions (replacing their
+// authenticator, say) is still named.
 func (s *Server) adminActor(r *http.Request) string {
-	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
-		return id.Email
-	}
-	return ""
+	actor, _ := r.Context().Value(adminActorKey{}).(string)
+	return actor
 }
 
 // groupLabel is a group's label, or its name when it has none.

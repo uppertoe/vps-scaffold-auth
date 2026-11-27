@@ -2,7 +2,7 @@
 title: Signing in
 summary: The emailed code, the limits on guessing it, what the sign-in page reveals, how long a session lasts and where a person lands afterwards.
 weight: 2
-lastmod: 2026-11-19
+lastmod: 2026-11-27
 ---
 
 ## The code
@@ -113,11 +113,18 @@ for confirmation first, so a link alone cannot sign anyone out.
 
 The confirmation page also offers to sign out on every device. That ends every
 session the person has, on this device and any other, including one someone
-else may be using. An administrator can do the same for anyone from that
-person's page in the access log, and the action is recorded in the admin
-audit. A session also ends at its next request when the person's administrator
-authenticator is replaced or removed, or when the passkey it was started with
-is removed.
+else may be using.
+
+The Sessions page lists every session, with the person, when they signed in,
+when the session was last used and the browser. An administrator can sign out
+one session, one person on every device, or, in an incident, everyone except
+themselves. Each action is confirmed on the page, recorded in the admin audit
+and emailed to the other administrators. A session also ends at once when the
+person's administrator authenticator is replaced or removed, or when the
+passkey it was started with is removed.
+
+When the gateway began keeping sessions, a person already signed in stayed
+signed in: their session moved across at their next request.
 
 ## Where a person lands
 

@@ -419,11 +419,6 @@ func (s *Server) passkeySession(r *http.Request) (*session.Identity, string, boo
 	if role != authz.RoleUser && role != authz.RoleAdmin && role != authz.RoleMember {
 		return nil, "", false
 	}
-	// A session started with a removed passkey manages nothing, whether or not
-	// it is due for renewal.
-	if !s.passkeyStillValid(r, id) {
-		return nil, "", false
-	}
 	return id, role, true
 }
 
@@ -950,33 +945,20 @@ func (s *Server) handleAdminRemovePasskeys(w http.ResponseWriter, r *http.Reques
 		s.adminError(w, r)
 		return
 	}
-	// The sessions those passkeys started end now, not at their renewal.
-	// A passkey added between the list and the delete was deleted too, and
-	// its sessions still end at their renewal (passkeyStillValid).
+	// The sessions those passkeys started end now, including those of a
+	// passkey added between the list and the delete.
 	for _, k := range keys {
 		if err := s.endSessions(r.Context(), passkeyKey(k.ID), s.now()); err != nil {
 			s.adminError(w, r)
 			return
 		}
 	}
+	if _, err := s.endSessionsWhere(r.Context(), func(x *store.Session) bool { return x.Email == emailAddr && x.Passkey != 0 }); err != nil {
+		s.adminError(w, r)
+		return
+	}
 	s.auditAdmin(r, store.AdminActionPasskeysRemove, emailAddr, strconv.Itoa(n))
 	http.Redirect(w, r, "/admin/access?email="+url.QueryEscape(emailAddr)+"&passkeys_removed=1", http.StatusFound)
-}
-
-// passkeyStillValid is the renewal check for a session started with a
-// passkey: the passkey must still exist and still belong to the session's
-// address. A database error ends the session too, since the check cannot be
-// made; the person signs in again.
-func (s *Server) passkeyStillValid(r *http.Request, id *session.Identity) bool {
-	if id.PK == 0 {
-		return true
-	}
-	p, ok, err := s.store.GetPasskey(r.Context(), id.PK)
-	if err != nil {
-		log.Printf("renewal passkey check for %s: %v", id.Email, err)
-		return false
-	}
-	return ok && p.Email == id.Email
 }
 
 // passkeyRows lists passkeys for the administrator's page, and is the base of

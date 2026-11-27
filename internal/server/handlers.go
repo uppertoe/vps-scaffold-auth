@@ -21,12 +21,11 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
-// renewSession re-checks policy and reissues the session cookie with freshly
-// computed groups. It is the scheduled sliding renewal, and also runs when a
-// group rule refuses a session whose groups have since changed. Revocation
-// takes effect here: a principal no longer permitted, or an admin who now
-// needs the TOTP step, is cleared and sent to sign in, and ok is false (the
-// response has been written).
+// renewSession re-checks policy and saves the session with freshly computed
+// groups and a new expiry. It is the scheduled sliding renewal, and also runs
+// when a group rule refuses a session whose groups have since changed. A
+// principal no longer permitted has the session ended and is sent to sign in,
+// and ok is false (the response has been written).
 func (s *Server) renewSession(w http.ResponseWriter, r *http.Request, id *session.Identity, now time.Time) bool {
 	return s.renewSessionWith(w, r, id, now, nil)
 }
@@ -43,14 +42,7 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 	}
 	role := s.renewalRole(id)
 	if role == authz.RoleDeny {
-		s.sessions.ClearSession(w)
-		s.redirectToLogin(w, r)
-		return false
-	}
-	// A session started with a passkey lasts only while the passkey does:
-	// removing it, by its owner or an administrator, ends the session here.
-	if !s.passkeyStillValid(r, id) {
-		s.sessions.ClearSession(w)
+		s.endThisSession(w, r, id)
 		s.redirectToLogin(w, r)
 		return false
 	}
@@ -62,25 +54,17 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 	// so stays confined to roles held by guests). The one change is between a
 	// person's own kinds: an address that now holds a role but is off the
 	// allow-list becomes a member, and a member the allow-list now admits
-	// becomes an ordinary session. The passkey and the time of sign-in pass
-	// through too.
+	// becomes an ordinary session.
 	kind := id.Kind
 	if role == authz.RoleMember {
 		kind = session.KindMember
 	} else if kind == session.KindMember {
 		kind = ""
 	}
-	grant := session.Grant{Kind: kind, TOTP: id.TOTP, PK: id.PK, Auth: id.Auth, Card: id.Card, Step: id.Step}
-	if grant.Auth == 0 {
-		// A session from before the sign-in time was recorded. Its sign-in
-		// time is unknown, so it is recorded as long ago, never as now: a
-		// renewal must not make an old session look like a recent sign-in.
-		grant.Auth = 1
-	}
-	if err := s.sessions.IssueSessionGrant(w, id.Email, *groups, grant, s.sessions.SessionTTL(id), now); err != nil {
-		// Most likely a cookie over the browser's size limit (very many
-		// groups through includes); the old cookie stays in place.
-		log.Printf("session renewal for %s: %v", id.Email, err)
+	if !s.renewSessionRow(w, r, id, kind, *groups, now) {
+		s.sessions.ClearSession(w)
+		s.redirectToLogin(w, r)
+		return false
 	}
 	// Reflect the freshly computed set in this response too, not just the
 	// renewed cookie, so a demotion takes effect immediately.
@@ -96,7 +80,7 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups string, ok bool) {
 	role := s.renewalRole(id)
 	if role == authz.RoleDeny {
-		return "", true // renewSessionWith clears the session
+		return "", true // renewSessionWith ends the session
 	}
 	dbGroups, err := s.store.GroupsForEmail(r.Context(), id.Email)
 	if err != nil {
@@ -112,17 +96,29 @@ func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups st
 // user is redirected to the login page.
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
-	if id, ok := s.readSession(r, now); ok {
-		// Fail closed on a kind this build does not know. The kind is inside the
-		// signed envelope, so only this service can mint one, but a cookie left by
-		// a newer build (a rollback, or two versions sharing SESSION_SECRET) must
-		// not be read as a normal session: anything that is neither break-glass
-		// nor guest would pass for a department login. Such a session is
-		// cleared and sent to sign in.
+	x, token, legacy, err := s.resolveSession(r, now)
+	if err != nil {
+		// An old cookie could not be converted because the database could
+		// not be reached: the person is asked to try again, not signed out.
+		s.renderUnavailable(w, s.reconstructOriginalURL(r))
+		return
+	}
+	if x != nil {
+		id := identityOf(x)
+		// Fail closed on a kind this build does not know. Only this service
+		// writes a session, but a row left by a newer build (a rollback) must
+		// not be read as a normal session: anything that is neither
+		// break-glass nor guest would pass for a department login. Such a
+		// session is ended and sent to sign in.
 		if !knownSessionKind(id.Kind) {
-			s.sessions.ClearSession(w)
+			s.endThisSession(w, r, id)
 			s.redirectToLogin(w, r)
 			return
+		}
+		// An old cookie has just become a session: the browser is given the
+		// new cookie now (renewal below would send it too).
+		if legacy {
+			s.sessions.SetSession(w, token, x.Expires, now)
 		}
 		// Without the allow-list and before the domain groups have ever been
 		// read, the gateway cannot tell staff from strangers: it answers 503
@@ -160,8 +156,8 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A single session cookie that is present but unreadable (expired, or
-	// minted by an earlier build) is cleared on the way to login. Otherwise it
+	// A single session cookie that is present but names no session (expired,
+	// ended, or minted by an earlier build) is cleared on the way to login. Otherwise it
 	// lingers, and an app route that treats "has a session cookie" as "signed
 	// in" (p.stonn.org sends such visitors from / to the gated schedule) keeps
 	// bouncing a returning visitor to login instead of showing them the
@@ -920,7 +916,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 // if it started with one, has not been removed.
 func (s *Server) stepUpSession(r *http.Request) (*session.Identity, bool) {
 	id, ok := s.readSession(r, s.now())
-	if !ok || id.Kind != "" || s.policy.Role(id.Email) != authz.RoleAdmin || !s.passkeyStillValid(r, id) {
+	if !ok || id.Kind != "" || s.policy.Role(id.Email) != authz.RoleAdmin {
 		return nil, false
 	}
 	return id, true
@@ -1069,12 +1065,11 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 		s.renderStepUp(w, r, id, rd, status, msg)
 		return
 	}
-	grant := session.Grant{TOTP: true, Step: now.Unix(), PK: id.PK, Auth: id.Auth}
-	if grant.Auth == 0 {
-		grant.Auth = 1 // unknown sign-in time: never read as recent
-	}
-	groups := s.computeGroups(r.Context(), id.Email, authz.RoleAdmin)
-	if err := s.sessions.IssueSessionGrant(w, id.Email, groups, grant, s.sessions.SessionTTL(id), now); err != nil {
+	// The session gains the admin tier under a new token (startSession
+	// replaces the old one), keeping its sign-in time and passkey.
+	next := session.Identity{Email: id.Email, TOTP: true, Step: now.Unix(), PK: id.PK, Auth: id.Auth}
+	next.Groups = s.computeGroups(r.Context(), id.Email, authz.RoleAdmin)
+	if err := s.startSession(w, r, next, s.sessions.SessionTTL(id), now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
@@ -1178,11 +1173,11 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr, role, rd string, remember, totpVerified bool, pk int64, now time.Time) {
 	// The admin tier needs the second step; without it an administrator's
 	// session is built as an ordinary user's (see tierRole).
-	grant := session.Grant{PK: pk}
+	next := session.Identity{Email: emailAddr, PK: pk}
 	if totpVerified {
-		grant.TOTP, grant.Step = true, now.Unix()
+		next.TOTP, next.Step = true, now.Unix()
 	}
-	groups := s.computeGroups(r.Context(), emailAddr, s.tierRole(&session.Identity{TOTP: grant.TOTP, Step: grant.Step}, role))
+	next.Groups = s.computeGroups(r.Context(), emailAddr, s.tierRole(&next, role))
 	// The kind follows the role: a guest login is marked so /verify confines it
 	// to routes that opt in, and renewal keeps it a guest. A member (signed in
 	// by an app role) is marked so that a role guard decides it by its roles
@@ -1194,17 +1189,14 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	case authz.RoleMember:
 		kind = session.KindMember
 	}
-	// A guest never gets the remember-me lifetime. Sessions are stateless, so
-	// the only ways to end one guest's access are emptying
-	// OPEN_REGISTRATION_HOSTS (every guest, at their next request) or rotating
-	// SESSION_SECRET (everyone). Keeping a stranger on the short lifetime bounds
-	// how long an unwanted guest can hold a cookie before renewal re-checks it.
+	// A guest never gets the remember-me lifetime, which bounds how long an
+	// unwanted guest holds a session that nobody has ended.
 	ttl := s.cfg.SessionTTL
 	if remember && kind != session.KindGuest {
 		ttl = s.cfg.SessionRememberTTL
 	}
-	grant.Kind = kind
-	if err := s.sessions.IssueSessionGrant(w, emailAddr, groups, grant, ttl, now); err != nil {
+	next.Kind = kind
+	if err := s.startSession(w, r, next, ttl, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}
@@ -1479,7 +1471,7 @@ func (s *Server) handleLogoutConfirm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "logout", data)
 }
 
-// handleLogout clears the session. POST-only (see handleLogoutConfirm) so a
+// handleLogout ends the session. POST-only (see handleLogoutConfirm) so a
 // cross-site GET cannot force a logout. The confirmation form re-carries rd,
 // so the login page it lands on knows where to return to.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -1491,16 +1483,20 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// and on any other device, including one someone else may hold. A
 	// break-glass session belongs to a card, not a person, and only signs
 	// out here.
-	if r.PostFormValue("everywhere") == "1" {
-		now := s.now()
-		if id, ok := s.readSession(r, now); ok && id.Kind != session.KindBreakGlass {
-			if err := s.endSessions(r.Context(), id.Email, now); err != nil {
-				log.Printf("sign out everywhere for %s: %v", id.Email, err)
-				s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
-				return
-			}
-			s.recordAuth(r, id.Email, store.AuthEventSessionsEnd, store.AuthOutcomeOK)
+	now := s.now()
+	id, ok := s.readSession(r, now)
+	if ok && r.PostFormValue("everywhere") == "1" && id.Kind != session.KindBreakGlass {
+		if err := s.endSessions(r.Context(), id.Email, now); err != nil {
+			log.Printf("sign out everywhere for %s: %v", id.Email, err)
+			s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
+			return
 		}
+		s.recordAuth(r, id.Email, store.AuthEventSessionsEnd, store.AuthOutcomeOK)
+	}
+	// Signing out ends this session on the gateway, not only in this
+	// browser.
+	if ok {
+		s.endThisSession(w, r, id)
 	}
 	s.sessions.ClearSession(w)
 	// A pending admin notice belongs to the person signing out; on a shared
@@ -1687,7 +1683,7 @@ func (s *Server) grantBreakGlass(w http.ResponseWriter, r *http.Request, code st
 
 	groups := authz.BuildGroups(code.TargetGroup, nil)
 	principal := "breakglass:" + code.Label
-	if err := s.sessions.IssueSessionGrant(w, principal, groups, session.Grant{Kind: session.KindBreakGlass, Card: code.ID}, ttl, now); err != nil {
+	if err := s.startSession(w, r, session.Identity{Email: principal, Groups: groups, Kind: session.KindBreakGlass, Card: code.ID}, ttl, now); err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong"})
 		return
 	}

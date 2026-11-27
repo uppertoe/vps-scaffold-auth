@@ -111,6 +111,8 @@ const (
 	AdminActionTOTPGenerate       = "totp_generate"
 	AdminActionTOTPRemove         = "totp_remove"
 	AdminActionSessionsEnd        = "sessions_end"
+	AdminActionSessionEnd         = "session_end"
+	AdminActionSessionsEndAll     = "sessions_end_all"
 	AdminActionSettingsUpdate     = "settings_update"
 	AdminActionBrandingUpdate     = "branding_update"
 	AdminActionCodeBranding       = "break_glass_branding"
@@ -717,6 +719,9 @@ type Store interface {
 
 	// Card designs, and each card's design, download and test.
 	CardDesignStore
+
+	// The signed-in sessions (sessions.go).
+	SessionStore
 
 	// Close releases underlying resources.
 	Close() error

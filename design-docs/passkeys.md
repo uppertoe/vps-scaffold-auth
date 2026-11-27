@@ -2,7 +2,7 @@
 title: Passkeys
 summary: How a person signs in on their phone, or on their own computer, with a passkey instead of an emailed code, and the rules that keep a passkey as safe as the sign-in it replaces.
 weight: 4
-lastmod: 2026-11-23
+lastmod: 2026-11-27
 ---
 
 ## What a passkey changes
@@ -101,15 +101,15 @@ and takes the second step with an authenticator code.
 ## Ending access
 
 A session started with a passkey names that passkey. When the passkey is
-removed, the session ends at its next request, on the tools as well as the
+removed, the sessions it started end at once, on the tools as well as the
 admin pages. A person removes their own passkeys on their passkeys
 page, and the gateway emails them each time, as it does when a passkey is
 added. An administrator removes all of one person's passkeys on that person's
 access page, and the removal is recorded in the admin audit.
 
-Sessions started with an emailed code can be ended too: the person, or an
-administrator, can sign them out on every device, as
-[Signing in](signing-in.md) describes.
+Sessions started with an emailed code can be ended too: the person can sign
+out on every device, and an administrator can end any session on the Sessions
+page, as [Signing in](signing-in.md) describes.
 
 ## The rules the gateway enforces
 

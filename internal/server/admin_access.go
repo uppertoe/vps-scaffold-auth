@@ -205,6 +205,7 @@ func (s *Server) handleAdminAccess(w http.ResponseWriter, r *http.Request) {
 	if plainAddress(person) {
 		data.EndSessionsFor = person
 		data.SessionsEnded = q.Get("sessions_ended") == "1"
+		data.SessionsLink = &attentionLine{Before: msgAccessSessBefore, Link: sessionsHref(person, nil), Name: msgSessMenu, After: msgAccessSessAfter}
 	}
 	// The passkeys panel needs one whole address, not part of one.
 	if s.cfg.PasskeysEnabled && plainAddress(person) {

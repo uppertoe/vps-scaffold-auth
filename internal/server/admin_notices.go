@@ -31,11 +31,15 @@ var adminNotices = map[string]string{
 	"roles-saved":     "The changes have been saved.",
 	"domain-added":    "The domain has been added.",
 	"domain-removed":  "The domain has been removed.",
+	"session-ended":   "The session has ended.",
+	"sessions-ended":  "The person has been signed out on every device.",
+	"everyone-ended":  "Everyone except you has been signed out.",
 }
 
 // adminWarnings are notices that report an action was NOT taken, shown in
 // the error style.
 var adminWarnings = map[string]string{
+	"session-gone":        "The session had already ended, so nothing has changed.",
 	"card-design-refused": "The card's design has not been changed. Choose a design from the list, and note that a withdrawn card keeps its design.",
 	"card-remint-refused": "The card has not been replaced, because the card has been withdrawn. To give the location a working card, create a new card.",
 	"card-move-refused":   "The card has not been moved, because the card no longer opens a group or has been withdrawn.",

@@ -48,13 +48,13 @@ type Server struct {
 	// passkeyChallenges makes each passkey challenge single-use (passkeys.go).
 	passkeyChallenges *challengeGuard
 	access            *accessAudit
-	members           *membersAPI     // the members endpoint (see members_api.go)
-	cutoffs           *sessionCutoffs // sessions ended early (see session_cutoffs.go)
-	mailSlots         chan struct{}   // emails being sent (see sendMail)
-	noticeSlots       chan struct{}   // security notices being sent (see sendNotice)
-	groupRecheck      *groupRecheck   // refusal-path group re-reads (group_recheck.go)
-	feeds             *feedSyncer     // groups filled from endpoints (group_feeds.go)
-	csp               string          // precomputed Content-Security-Policy (see cspPolicy)
+	members           *membersAPI   // the members endpoint (see members_api.go)
+	live              *liveSessions // the signed-in sessions (see sessions.go)
+	mailSlots         chan struct{} // emails being sent (see sendMail)
+	noticeSlots       chan struct{} // security notices being sent (see sendNotice)
+	groupRecheck      *groupRecheck // refusal-path group re-reads (group_recheck.go)
+	feeds             *feedSyncer   // groups filled from endpoints (group_feeds.go)
+	csp               string        // precomputed Content-Security-Policy (see cspPolicy)
 	pages             pages
 	adminPages        pages
 	emailTmpl         *texttemplate.Template
@@ -84,9 +84,9 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	if err != nil {
 		return nil, err
 	}
-	cutoffs, err := newSessionCutoffs(context.Background(), st)
+	live, err := loadSessions(context.Background(), st, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("session cutoffs: %w", err)
+		return nil, fmt.Errorf("sessions: %w", err)
 	}
 	secrets, err := secretbox.NewFromConfig(cfg.SessionSecret, cfg.DataEncryptionKey)
 	if err != nil {
@@ -112,7 +112,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		access:        newAccessAudit(st, cfg.AuditRetention),
 		members:       newMembersAPI(cfg.MemberReaders),
 		groupRecheck:  newGroupRecheck(),
-		cutoffs:       cutoffs,
+		live:          live,
 		mailSlots:     make(chan struct{}, maxMailSends),
 		noticeSlots:   make(chan struct{}, maxMailSends),
 		feeds:         newFeedSyncer(cfg.GroupFeeds),
@@ -127,6 +127,13 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	// Anti-replay reads the clock through s.now so tests sharing a fake clock stay
 	// consistent with the rest of the server.
 	s.totpReplay = newTOTPReplay(func() time.Time { return s.now() })
+	// A form token is bound to the address of the session that asked for it.
+	s.sessions.Subject = func(r *http.Request, now time.Time) string {
+		if id, ok := s.readSession(r, now); ok {
+			return id.Email
+		}
+		return ""
+	}
 	s.passkeyChallenges = newChallengeGuard(st, func() time.Time { return s.now() })
 	if s.policy.OpenRegistration() {
 		log.Printf("authz: OPEN REGISTRATION enabled (ALLOWED_EMAIL_DOMAINS contains %q): any email verified by one-time code is admitted as a user. On a shared server prefer OPEN_REGISTRATION_HOSTS, which opens one app only.", authz.Wildcard)

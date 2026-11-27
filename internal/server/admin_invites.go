@@ -521,7 +521,7 @@ func (s *Server) handleAdminInviteSend(w http.ResponseWriter, r *http.Request) {
 		s.renderInviteForm(w, r, http.StatusOK, f, nil, msgCheckNobody)
 		return
 	}
-	actor := s.actor(r)
+	actor := s.adminActor(r)
 	now := s.now()
 	var invs []store.Invitation
 	var events []store.AdminEvent
@@ -563,14 +563,6 @@ func (s *Server) handleAdminInviteSend(w http.ResponseWriter, r *http.Request) {
 		done = "invite-sent"
 	}
 	s.redirectDone(w, r, "/admin/invitations", done, "")
-}
-
-// actor is the signed-in administrator's address.
-func (s *Server) actor(r *http.Request) string {
-	if id, ok := s.sessions.ReadSession(r, s.now()); ok {
-		return id.Email
-	}
-	return ""
 }
 
 func (s *Server) adminEvent(r *http.Request, actor, action, target, detail string) store.AdminEvent {
@@ -680,7 +672,7 @@ func (s *Server) handleAdminInviteResend(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	now := s.now()
-	actor := s.actor(r)
+	actor := s.adminActor(r)
 	ev := s.adminEvent(r, actor, store.AdminActionInviteResend, v.App+":"+v.Role, v.Email)
 	if err := s.store.ResendInvitation(r.Context(), v.ID, otp.Hash(token), now, now.Add(inviteTTL), ev); err != nil {
 		if errors.Is(err, store.ErrInvitationClosed) {
@@ -701,7 +693,7 @@ func (s *Server) handleAdminInviteWithdraw(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	ev := s.adminEvent(r, s.actor(r), store.AdminActionInviteWithdraw, v.App+":"+v.Role, v.Email)
+	ev := s.adminEvent(r, s.adminActor(r), store.AdminActionInviteWithdraw, v.App+":"+v.Role, v.Email)
 	if err := s.store.WithdrawInvitation(r.Context(), v.ID, s.now(), ev); err != nil {
 		if errors.Is(err, store.ErrInvitationClosed) {
 			s.redirectDone(w, r, inviteBack(r), "invite-closed", "")
