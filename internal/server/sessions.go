@@ -39,6 +39,14 @@ type liveSessions struct {
 	// session whose groups were worked out at or before it renews at its
 	// next request (groupsStale).
 	groupsChangedAt int64
+	// cutoffs mirrors session_cutoffs, and refused holds the old-format
+	// cookies (by the hash of their new token) already refused or whose
+	// row has been deleted, until their own expiry. Both only grow, so a
+	// refusal read from them without the write lock is final, and a
+	// refused old cookie sent again and again never waits on that lock or
+	// reaches the database (session_legacy.go).
+	cutoffs map[string]int64
+	refused map[string]time.Time
 }
 
 // seenEvery is how often a session's last-seen time is written to the
@@ -61,10 +69,20 @@ func loadSessions(ctx context.Context, st store.Store, now time.Time) (*liveSess
 	if err != nil {
 		return nil, err
 	}
-	l := &liveSessions{byHash: map[string]*store.Session{}, byID: map[int64]*store.Session{}, groupsChangedAt: cut[groupsKey]}
+	migrated, err := st.ListMigratedSessions(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	l := &liveSessions{byHash: map[string]*store.Session{}, byID: map[int64]*store.Session{}, groupsChangedAt: cut[groupsKey], cutoffs: cut, refused: map[string]time.Time{}}
 	for i := range rows {
 		x := rows[i]
 		l.byHash[string(x.Hash)], l.byID[x.ID] = &x, &x
+	}
+	// A converted old cookie whose row is gone has ended.
+	for h, until := range migrated {
+		if l.byHash[h] == nil {
+			l.refused[h] = until
+		}
 	}
 	return l, nil
 }
@@ -260,9 +278,25 @@ func (l *liveSessions) drop(ids []int64) {
 		if x := l.byID[id]; x != nil {
 			delete(l.byHash, string(x.Hash))
 			delete(l.byID, id)
+			// If the row came from an old cookie, that cookie stays refused.
+			l.refused[string(x.Hash)] = x.Expires
 		}
 	}
 	l.mu.Unlock()
+}
+
+// writeCutoff records a cutoff in the database, then in memory.
+func (s *Server) writeCutoff(ctx context.Context, key string, now time.Time) error {
+	if err := s.store.EndSessionsBefore(ctx, key, now); err != nil {
+		return err
+	}
+	l := s.live
+	l.mu.Lock()
+	if now.Unix() > l.cutoffs[key] {
+		l.cutoffs[key] = now.Unix()
+	}
+	l.mu.Unlock()
+	return nil
 }
 
 // renewSessionRow saves a renewal of the request's session: its kind and
@@ -364,7 +398,7 @@ func (s *Server) revokeAnd(ctx context.Context, keys []string, match func(*store
 	l.write.Lock()
 	defer l.write.Unlock()
 	for _, k := range keys {
-		if err := s.store.EndSessionsBefore(ctx, k, now); err != nil {
+		if err := s.writeCutoff(ctx, k, now); err != nil {
 			return err
 		}
 	}
@@ -443,13 +477,18 @@ func (s *Server) sweepSessions(ctx context.Context, now time.Time) {
 		return
 	}
 	var gone []int64
-	l.mu.RLock()
+	l.mu.Lock()
 	for id, x := range l.byID {
 		if !now.Before(x.Expires) {
 			gone = append(gone, id)
 		}
 	}
-	l.mu.RUnlock()
+	for h, until := range l.refused {
+		if !now.Before(until) {
+			delete(l.refused, h)
+		}
+	}
+	l.mu.Unlock()
 	l.drop(gone)
 }
 
@@ -459,7 +498,7 @@ func (s *Server) markGroupsChanged(at time.Time) {
 	s.groupRecheck.forgetAll()
 	// Stored first, so a restart cannot forget the change. If the write
 	// fails, the change still reaches every session in this process.
-	if err := s.store.EndSessionsBefore(context.Background(), groupsKey, at); err != nil {
+	if err := s.writeCutoff(context.Background(), groupsKey, at); err != nil {
 		log.Printf("record membership change: %v", err)
 	}
 	l := s.live

@@ -739,3 +739,56 @@ func TestFailedLastSeenIsNotRetriedEveryRequest(t *testing.T) {
 		t.Errorf("%d last-seen writes, want 1", tc.n)
 	}
 }
+
+// A refused old cookie is turned away without the write lock, so one sent in
+// a loop cannot hold up sign-ins and renewals: one refused by a cutoff, one
+// whose converted row has been ended (also after a restart), and one whose
+// passkey is gone, after its first refusal. The test holds the lock and
+// requires every refusal to come back at once.
+func TestRefusedOldCookieNeverTakesTheLock(t *testing.T) {
+	srv, sender := testServer(t)
+	now := srv.now()
+	ctx := context.Background()
+	old := func(id session.Identity) *http.Cookie {
+		id.Groups, id.Iat, id.Auth = "user", now.Unix(), now.Add(-time.Hour).Unix()
+		return legacyCookie(t, srv, id, now.Add(time.Hour))
+	}
+	revoked := old(session.Identity{Email: "gone@example.com"})
+	if err := srv.endSessions(ctx, "gone@example.com", now); err != nil {
+		t.Fatal(err)
+	}
+	ended := old(session.Identity{Email: "amy@example.com"})
+	if _, ok := readWith(srv, ended); !ok {
+		t.Fatal("not converted")
+	}
+	if _, err := srv.endSessionsWhere(ctx, func(x *store.Session) bool { return x.Email == "amy@example.com" }); err != nil {
+		t.Fatal(err)
+	}
+	nopk := old(session.Identity{Email: "pk@example.com", PK: 4242})
+	if _, ok := readWith(srv, nopk); ok { // the first refusal takes the lock
+		t.Fatal("converted")
+	}
+	again, err := New(srv.cfg, srv.store, sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range []*Server{srv, again} {
+		g.live.write.Lock()
+		for name, ck := range map[string]*http.Cookie{"cutoff": revoked, "ended": ended, "passkey gone": nopk} {
+			if g == again && name == "passkey gone" {
+				continue // a restart forgets this refusal; the next one takes the lock once
+			}
+			done := make(chan bool, 1)
+			go func() { _, ok := readWith(g, ck); done <- ok }()
+			select {
+			case ok := <-done:
+				if ok {
+					t.Errorf("%s: admitted", name)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("%s: a refused old cookie waited on the write lock (restarted=%v)", name, g == again)
+			}
+		}
+		g.live.write.Unlock()
+	}
+}

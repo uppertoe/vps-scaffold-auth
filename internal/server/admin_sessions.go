@@ -249,7 +249,7 @@ func (s *Server) handleAdminEndAllSessions(w http.ResponseWriter, r *http.Reques
 	}
 	// An old-format cookie not yet seen is refused when it arrives
 	// (session_legacy.go).
-	if err := s.store.EndSessionsBefore(r.Context(), everyoneKey, now); err != nil {
+	if err := s.writeCutoff(r.Context(), everyoneKey, now); err != nil {
 		s.adminError(w, r)
 		return
 	}

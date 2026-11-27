@@ -53,6 +53,10 @@ type SessionStore interface {
 	DeleteSessions(ctx context.Context, ids []int64) error
 	// ListSessions returns every session that has not expired at now.
 	ListSessions(ctx context.Context, now time.Time) ([]Session, error)
+	// ListMigratedSessions returns the converted old-format cookies whose
+	// record has not expired at now, as the hash of their new token mapped
+	// to the record's expiry.
+	ListMigratedSessions(ctx context.Context, now time.Time) (map[string]time.Time, error)
 	// DeleteExpiredSessions deletes the sessions, and the records of
 	// converted cookies, that have expired at now.
 	DeleteExpiredSessions(ctx context.Context, now time.Time) error
@@ -176,6 +180,25 @@ func (s *SQLite) ListSessions(ctx context.Context, now time.Time) ([]Session, er
 		x.SignedIn, x.Renewed, x.Expires, x.LastSeen = time.Unix(signedIn, 0), time.Unix(renewed, 0), time.Unix(expires, 0), time.Unix(seen, 0)
 		x.TTL = time.Duration(ttl) * time.Second
 		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+// ListMigratedSessions returns the unexpired conversion records.
+func (s *SQLite) ListMigratedSessions(ctx context.Context, now time.Time) (map[string]time.Time, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT hash, until FROM migrated_sessions WHERE until > ?`, now.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var h []byte
+		var until int64
+		if err := rows.Scan(&h, &until); err != nil {
+			return nil, err
+		}
+		out[string(h)] = time.Unix(until, 0)
 	}
 	return out, rows.Err()
 }

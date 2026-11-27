@@ -49,13 +49,30 @@ func (s *Server) convertLegacy(r *http.Request, value, token string, now time.Ti
 	if max := s.cfg.SessionMaxAge; max > 0 && x.Expires.After(x.SignedIn.Add(max)) {
 		x.Expires = x.SignedIn.Add(max)
 	}
-	// Everything from here runs under the lock every revocation takes
+	// A refusal is decided first from memory, without the write lock: the
+	// cutoffs and the refused cookies only ever grow, so what they refuse
+	// now stays refused. A refused old cookie sent in a loop therefore
+	// never queues sign-ins and renewals behind it.
+	l := s.live
+	l.mu.RLock()
+	until, gone := l.refused[string(x.Hash)]
+	ended := legacyEnded(id, l.cutoffs, s.cfg.SessionMaxAge, now)
+	l.mu.RUnlock()
+	if ended || (gone && now.Before(until)) {
+		return nil, nil
+	}
+	// An acceptance is decided under the lock every revocation takes
 	// (revokeAnd), so a revocation lands either before the cutoffs are
 	// read, and refuses the cookie, or after the row is made, and deletes
 	// it.
-	l := s.live
 	l.write.Lock()
 	defer l.write.Unlock()
+	refuse := func() (*store.Session, error) {
+		l.mu.Lock()
+		l.refused[string(x.Hash)] = exp
+		l.mu.Unlock()
+		return nil, nil
+	}
 	// Another request with the same cookie may have converted it meanwhile.
 	l.mu.RLock()
 	got := l.byHash[string(x.Hash)]
@@ -73,13 +90,13 @@ func (s *Server) convertLegacy(r *http.Request, value, token string, now time.Ti
 		return nil, errSessionsUnavailable
 	}
 	if legacyEnded(id, cut, s.cfg.SessionMaxAge, now) {
-		return nil, nil
+		return refuse()
 	}
 	// A passkey removed before its removal wrote a cutoff (early November
 	// 2026) ended its sessions only at renewal; its old cookies are refused
 	// here.
 	if err := s.grantStillValid(r.Context(), session.Identity{Email: id.Email, PK: id.PK}); errors.Is(err, errGrantGone) {
-		return nil, nil
+		return refuse()
 	} else if err != nil {
 		log.Printf("session conversion: %v", err)
 		return nil, errSessionsUnavailable
@@ -91,7 +108,7 @@ func (s *Server) convertLegacy(r *http.Request, value, token string, now time.Ti
 		return nil, errSessionsUnavailable
 	}
 	if !ok2 {
-		return nil, nil // converted before, and since ended
+		return refuse() // converted before, and since ended
 	}
 	l.add(&x)
 	cp = x
