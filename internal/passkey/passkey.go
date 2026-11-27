@@ -1,21 +1,32 @@
 // Package passkey verifies WebAuthn passkey registrations and sign-ins for the
 // one shape this gateway accepts: a discoverable ES256 (P-256) credential held
 // by the device's own passkey provider (a phone's, or a computer's Touch ID or
-// Windows Hello), with user verification, and no attestation. Nothing else is supported, on purpose. The general WebAuthn
-// libraries carry attestation formats, TPM and certificate-chain parsing and a
-// metadata service client; none of that is used when attestation is "none",
-// and all of it would be code on the sign-in path. What remains is small
-// enough to read in one sitting:
+// Windows Hello), with user verification, and no attestation. Nothing else is
+// supported, on purpose.
 //
-//   - clientDataJSON: the ceremony type, the challenge this server issued, and
-//     the exact origin of the sign-in host.
-//   - authenticatorData: the hash of the relying-party ID (the sign-in host),
-//     the user-present and user-verified flags, and the signature counter.
-//   - at registration, the public key the browser reports (SubjectPublicKeyInfo,
-//     from getPublicKey()) must match, byte for byte, the canonical COSE key
-//     in authenticatorData.
-//   - at sign-in, an ECDSA signature over authenticatorData followed by the
+// The parsing and the cryptographic checks are go-webauthn's
+// (github.com/go-webauthn/webauthn/protocol), a maintained library with its
+// own fuzzing and conformance tests. This package holds only the policy, and
+// calls the library for each part of a ceremony:
+//
+//   - clientDataJSON (protocol.CollectedClientData): the ceremony type, the
+//     challenge this server issued, and the origin of the sign-in host. On top
+//     of the library's checks, the origin must be the configured one exactly,
+//     and no cross-origin ceremony or topOrigin is accepted.
+//   - authenticatorData (protocol.AuthenticatorData): the hash of the
+//     relying-party ID (the sign-in host), the user-present and user-verified
+//     flags, the signature counter, and at registration the credential ID and
+//     its COSE key.
+//   - at registration, the COSE key (webauthncose) must be an ES256 key on
+//     P-256 and the same key the browser reports (SubjectPublicKeyInfo, from
+//     getPublicKey()), which is the form stored.
+//   - at sign-in, the stored key is read as a COSE EC2 key and the library
+//     verifies its ECDSA signature over authenticatorData followed by the
 //     SHA-256 of clientDataJSON.
+//
+// The library's attestation formats, metadata service and high-level
+// webauthn.WebAuthn flow are not used: attestation is "none", and the server
+// keeps its own challenges, cookies and stored credential format.
 //
 // Registration carries no attestation, so nothing at registration is signed:
 // the flags (user verified, backed up), the provider ID and the key are what
@@ -32,31 +43,19 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/sha256"
-	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 )
 
 // AlgES256 is the COSE algorithm identifier for ECDSA with P-256 and SHA-256,
 // the only algorithm accepted. Apple and Google passkeys both use it.
 const AlgES256 = -7
-
-// Authenticator-data flag bits (WebAuthn §6.1).
-const (
-	flagUP = 1 << 0 // user present
-	flagUV = 1 << 2 // user verified (face, fingerprint or PIN)
-	flagBE = 1 << 3 // backup eligible (a synced passkey)
-	flagBS = 1 << 4 // backed up
-	flagAT = 1 << 6 // attested credential data included
-	flagED = 1 << 7 // extension data included
-)
-
-// maxCredentialID is WebAuthn's limit on a credential ID's length.
-const maxCredentialID = 1023
 
 // Errors. They are deliberately coarse: the caller shows one message for any
 // failure and records which check failed in the audit log.
@@ -135,29 +134,15 @@ type Assertion struct {
 // VerifyRegistration checks a new credential against the challenge this server
 // issued for it.
 func (rp RelyingParty) VerifyRegistration(reg Registration, challenge []byte) (Credential, error) {
-	if err := rp.checkClientData(reg.ClientDataJSON, "webauthn.create", challenge); err != nil {
+	if err := rp.checkClientData(reg.ClientDataJSON, protocol.CreateCeremony, challenge); err != nil {
 		return Credential{}, err
 	}
-	ad, err := rp.parseAuthData(reg.AuthenticatorData)
+	ad, err := rp.checkAuthData(reg.AuthenticatorData)
 	if err != nil {
 		return Credential{}, err
 	}
-	if ad.flags&flagAT == 0 {
-		return Credential{}, ErrAuthData
-	}
-	rest := ad.rest
-	if len(rest) < 18 {
-		return Credential{}, ErrAuthData
-	}
-	var aaguid [16]byte
-	copy(aaguid[:], rest[:16])
-	idLen := int(binary.BigEndian.Uint16(rest[16:18]))
-	rest = rest[18:]
-	if idLen == 0 || idLen > maxCredentialID || len(rest) < idLen {
-		return Credential{}, ErrAuthData
-	}
-	credID, coseKey := rest[:idLen], rest[idLen:]
-	if !bytes.Equal(credID, reg.CredentialID) {
+	att := ad.AttData
+	if !ad.Flags.HasAttestedCredentialData() || len(att.CredentialID) == 0 || !bytes.Equal(att.CredentialID, reg.CredentialID) {
 		return Credential{}, ErrAuthData
 	}
 	if reg.PublicKeyAlg != AlgES256 {
@@ -167,21 +152,30 @@ func (rp RelyingParty) VerifyRegistration(reg Registration, challenge []byte) (C
 	if err != nil {
 		return Credential{}, err
 	}
-	want, err := coseP256(pub)
+	// The key the authenticator wrote must be an ES256 key on P-256, and the
+	// same key the browser reports. With attestation "none" nothing signs
+	// either, so this is a consistency check on the person's own browser, not
+	// proof of which device holds the key.
+	parsed, err := webauthncose.ParsePublicKey(att.CredentialPublicKey)
 	if err != nil {
-		return Credential{}, err
-	}
-	// The key must be exactly the canonical encoding of the reported key.
-	// Anything after it is allowed only when the extensions flag says so.
-	if !bytes.HasPrefix(coseKey, want) || (ad.flags&flagED == 0 && len(coseKey) != len(want)) {
 		return Credential{}, ErrKey
 	}
+	cose, ok := parsed.(webauthncose.EC2PublicKeyData)
+	if !ok || !isES256(cose) {
+		return Credential{}, ErrKey
+	}
+	want, err := coseKey(pub)
+	if err != nil || !bytes.Equal(cose.XCoord, want.XCoord) || !bytes.Equal(cose.YCoord, want.YCoord) {
+		return Credential{}, ErrKey
+	}
+	var aaguid [16]byte
+	copy(aaguid[:], att.AAGUID)
 	return Credential{
-		ID:        append([]byte(nil), credID...),
-		PublicKey: append([]byte(nil), reg.PublicKey...),
-		SignCount: ad.signCount,
+		ID:        bytes.Clone(att.CredentialID),
+		PublicKey: bytes.Clone(reg.PublicKey),
+		SignCount: ad.Counter,
 		AAGUID:    aaguid,
-		Synced:    ad.flags&flagBE != 0,
+		Synced:    ad.Flags.HasBackupEligible(),
 	}, nil
 }
 
@@ -191,10 +185,10 @@ func (rp RelyingParty) VerifyRegistration(reg Registration, challenge []byte) (C
 // always report zero; a counter that is non-zero and has not increased means
 // the key may have been copied, and is refused.
 func (rp RelyingParty) VerifyAssertion(a Assertion, challenge, publicKey []byte, storedCount uint32) (uint32, error) {
-	if err := rp.checkClientData(a.ClientDataJSON, "webauthn.get", challenge); err != nil {
+	if err := rp.checkClientData(a.ClientDataJSON, protocol.AssertCeremony, challenge); err != nil {
 		return 0, err
 	}
-	ad, err := rp.parseAuthData(a.AuthenticatorData)
+	ad, err := rp.checkAuthData(a.AuthenticatorData)
 	if err != nil {
 		return 0, err
 	}
@@ -203,69 +197,69 @@ func (rp RelyingParty) VerifyAssertion(a Assertion, challenge, publicKey []byte,
 		return 0, err
 	}
 	cdHash := sha256.Sum256(a.ClientDataJSON)
-	signed := make([]byte, 0, len(a.AuthenticatorData)+len(cdHash))
-	signed = append(signed, a.AuthenticatorData...)
-	signed = append(signed, cdHash[:]...)
-	digest := sha256.Sum256(signed)
-	if !ecdsa.VerifyASN1(pub, digest[:], a.Signature) {
+	signed := append(bytes.Clone(a.AuthenticatorData), cdHash[:]...)
+	key, err := coseKey(pub)
+	if err != nil {
+		return 0, err
+	}
+	if ok, err := webauthncose.VerifySignature(key, signed, a.Signature); !ok || err != nil {
 		return 0, ErrSignature
 	}
-	if (ad.signCount != 0 || storedCount != 0) && ad.signCount <= storedCount {
+	if (ad.Counter != 0 || storedCount != 0) && ad.Counter <= storedCount {
 		return 0, ErrCounter
 	}
-	return ad.signCount, nil
+	return ad.Counter, nil
 }
 
-// clientData is the part of clientDataJSON this package reads. topOrigin is
-// present only when the ceremony ran in a cross-origin iframe, which the
-// sign-in pages forbid (frame-ancestors 'none'); its presence is refused.
-type clientData struct {
-	Type        string  `json:"type"`
-	Challenge   string  `json:"challenge"`
-	Origin      string  `json:"origin"`
-	CrossOrigin bool    `json:"crossOrigin"`
-	TopOrigin   *string `json:"topOrigin"`
-}
-
-func (rp RelyingParty) checkClientData(raw []byte, typ string, challenge []byte) error {
-	var cd clientData
+// checkClientData parses clientDataJSON and has the library check its type,
+// challenge and origin. Two checks of this package's own sit on top: the
+// origin must be the configured one exactly, as the browser serialises it,
+// not merely an equivalent spelling; and a topOrigin of any value is refused,
+// because it is present only when the ceremony ran in a cross-origin iframe,
+// which the sign-in pages forbid (frame-ancestors 'none').
+func (rp RelyingParty) checkClientData(raw []byte, ceremony protocol.CeremonyType, challenge []byte) error {
+	var cd protocol.CollectedClientData
 	if err := json.Unmarshal(raw, &cd); err != nil {
 		return ErrClientData
 	}
-	if cd.Type != typ || cd.Origin != rp.Origin || cd.CrossOrigin || cd.TopOrigin != nil {
+	var top struct {
+		TopOrigin *string `json:"topOrigin"`
+	}
+	if err := json.Unmarshal(raw, &top); err != nil || top.TopOrigin != nil {
 		return ErrClientData
 	}
-	got, err := base64.RawURLEncoding.DecodeString(cd.Challenge)
-	if err != nil || len(challenge) == 0 || subtle.ConstantTimeCompare(got, challenge) != 1 {
+	if len(challenge) == 0 || cd.Origin != rp.Origin {
+		return ErrClientData
+	}
+	if err := cd.Verify(base64.RawURLEncoding.EncodeToString(challenge), ceremony,
+		[]string{rp.Origin}, nil, nil, protocol.TopOriginExplicitVerificationMode, false); err != nil {
 		return ErrClientData
 	}
 	return nil
 }
 
-type authData struct {
-	flags     byte
-	signCount uint32
-	rest      []byte // attested credential data and extensions, when present
-}
-
-// parseAuthData reads the fixed 37-byte head of authenticatorData and checks
-// the relying-party hash and the presence and verification flags, which every
+// checkAuthData parses authenticatorData and has the library check the
+// relying-party hash and the presence and verification flags, which every
 // ceremony here requires.
-func (rp RelyingParty) parseAuthData(b []byte) (authData, error) {
-	if len(b) < 37 {
-		return authData{}, ErrAuthData
+func (rp RelyingParty) checkAuthData(raw []byte) (protocol.AuthenticatorData, error) {
+	var ad protocol.AuthenticatorData
+	if err := ad.Unmarshal(raw); err != nil {
+		return ad, ErrAuthData
 	}
-	want := sha256.Sum256([]byte(rp.ID))
-	if subtle.ConstantTimeCompare(b[:32], want[:]) != 1 {
-		return authData{}, ErrAuthData
+	rpHash := sha256.Sum256([]byte(rp.ID))
+	if err := ad.Verify(rpHash[:], nil, true, true); err != nil {
+		// The library reports every failure alike. The audit log tells a
+		// missing face, fingerprint or PIN check apart from the wrong host.
+		if bytes.Equal(ad.RPIDHash, rpHash[:]) {
+			return ad, ErrNotVerified
+		}
+		return ad, ErrAuthData
 	}
-	flags := b[32]
-	if flags&flagUP == 0 || flags&flagUV == 0 {
-		return authData{}, ErrNotVerified
-	}
-	return authData{flags: flags, signCount: binary.BigEndian.Uint32(b[33:37]), rest: b[37:]}, nil
+	return ad, nil
 }
 
+// parseP256 reads a stored or browser-reported SubjectPublicKeyInfo, which
+// must hold a P-256 key.
 func parseP256(spki []byte) (*ecdsa.PublicKey, error) {
 	k, err := x509.ParsePKIXPublicKey(spki)
 	if err != nil {
@@ -278,28 +272,33 @@ func parseP256(spki []byte) (*ecdsa.PublicKey, error) {
 	return pub, nil
 }
 
-// coseP256 is the COSE_Key an authenticator writes for the ES256 key pub, in
-// the canonical CBOR that CTAP2 requires and Apple's and Google's passkeys
-// emit: a five-entry map of kty 2 (EC2), alg -7 (ES256), crv 1 (P-256), and
-// the 32-byte x and y coordinates, in that order. Rather than carry a general
-// CBOR decoder, registration requires the authenticator data to hold exactly
-// these 77 bytes, which binds the browser-reported SubjectPublicKeyInfo to the
-// key the authenticator wrote. With attestation "none" nothing signs either,
-// so this is a consistency check on the person's own browser, not proof of
-// which device holds the key.
-func coseP256(pub *ecdsa.PublicKey) ([]byte, error) {
+// coseKey is the ES256 COSE key for pub, the form the library verifies with.
+// Stored passkeys keep the SubjectPublicKeyInfo they were registered with, so
+// every passkey added before the library was adopted still signs in.
+func coseKey(pub *ecdsa.PublicKey) (webauthncose.EC2PublicKeyData, error) {
 	ecdh, err := pub.ECDH()
 	if err != nil {
-		return nil, ErrKey
+		return webauthncose.EC2PublicKeyData{}, ErrKey
 	}
 	raw := ecdh.Bytes() // 0x04 || x || y
 	if len(raw) != 65 {
-		return nil, ErrKey
+		return webauthncose.EC2PublicKeyData{}, ErrKey
 	}
-	out := []byte{0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20}
-	out = append(out, raw[1:33]...)
-	out = append(out, 0x22, 0x58, 0x20)
-	return append(out, raw[33:65]...), nil
+	return webauthncose.EC2PublicKeyData{
+		PublicKeyData: webauthncose.PublicKeyData{
+			KeyType:   int64(webauthncose.EllipticKey),
+			Algorithm: int64(webauthncose.AlgES256),
+		},
+		Curve:  int64(webauthncose.P256),
+		XCoord: raw[1:33],
+		YCoord: raw[33:65],
+	}, nil
+}
+
+func isES256(k webauthncose.EC2PublicKeyData) bool {
+	return k.KeyType == int64(webauthncose.EllipticKey) &&
+		k.Algorithm == int64(webauthncose.AlgES256) &&
+		k.Curve == int64(webauthncose.P256)
 }
 
 // AAGUIDString formats a provider identifier the usual way.
