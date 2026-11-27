@@ -357,6 +357,12 @@ func TestNoticesHaveTheirOwnSlots(t *testing.T) {
 // seen, and through it the allow-list.
 func TestCodeRequestDuringAFloodCannotBeSeen(t *testing.T) {
 	srv, sender := testServer(t)
+	// The gateway's clock is held still: HasRecentCode compares whole
+	// seconds, so a run that crossed a second boundary between minExpiry and a
+	// decoy's own timestamp failed under load (-race), though production
+	// compares each request against its own clock.
+	start := time.Now()
+	srv.now = func() time.Time { return start }
 	ctx := context.Background()
 	release := make(chan struct{})
 	for i := 0; i < maxMailSends; i++ {
