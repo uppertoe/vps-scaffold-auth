@@ -74,9 +74,8 @@ func TestReviewDoorUpgradesPasskeyOfPlantedSession(t *testing.T) {
 // P4: the guest filter fails closed while the role data cannot be read: an
 // outsider keeps none of the lists, and keeps the leading guest role.
 func TestReviewGuestFilterFailsClosedWhileRolesUnread(t *testing.T) {
-	srv, _ := staffOnlyListServer(t, func(c *config.Config) {
-		c.OpenRegistrationHosts = []string{"apply.example.com"}
-	})
+	srv, _ := staffOnlyListServer(t, nil)
+	openToGuestsForTest(t, srv, "apply")
 	ctx := context.Background()
 	_ = srv.store.CreateGroup(ctx, "collaborators", "")
 	_, _ = srv.store.AddGroupMembers(ctx, "collaborators", []string{strangerAddr})

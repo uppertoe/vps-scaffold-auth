@@ -25,7 +25,7 @@ import (
 // proxies, so only containers on the server's Docker network can reach it.
 // Each app has its own bearer token and may read only the groups listed for
 // it in MEMBER_READERS_FILE or MEMBER_READERS. The answer is the members the gateway applies now,
-// through includes, less any address the allow-list does not admit: a guest
+// through includes, less any address that is not staff: a guest
 // member is told about the group when signed in, but is never reported here
 // (the owner's choice, 2026-11-03).
 
@@ -186,8 +186,8 @@ func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
 		membersError(w, http.StatusForbidden, notPermitted)
 		return
 	}
-	// Only known people (knownRole: the allow-list, or without one a domain
-	// group's domains): they are the ones the gateway signs in as staff. A
+	// Only known people (knownRole: ADMIN_EMAILS, or a domain group's
+	// domains): they are the ones the gateway signs in as staff. A
 	// membership kept for an address that is no longer known is not
 	// reported.
 	// While the gateway cannot tell who is staff, it says so rather than

@@ -305,8 +305,9 @@ func TestOwnSessionEndedMeanwhileEndsNothing(t *testing.T) {
 	}
 }
 
-// A break-glass card's session and a guest's have no Your sessions, and
-// cannot end anything through it; a member's has.
+// A break-glass card's session has no Your sessions, and cannot end anything
+// through it; a guest's and a member's have the page. A guest ends only its
+// own sessions: a card's session is never one of them.
 func TestOwnSessionsRefuseCardsAndGuests(t *testing.T) {
 	srv, sender := guestServer(t)
 	anyGuard(t, srv)
@@ -323,20 +324,39 @@ func TestOwnSessionsRefuseCardsAndGuests(t *testing.T) {
 	loginGuest(t, guest2, sender, "stranger@elsewhere.org")
 	member := mintSession(t, srv, session.Identity{Email: "amy@example.com", Groups: "user", Kind: session.KindMember}, time.Hour)
 
-	for name, c := range map[string]*client{"card": card, "guest": guest} {
-		rec := c.get("/sessions", nil)
-		if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
-			t.Errorf("a %s session opened Your sessions: %d", name, rec.Code)
-		}
-		if strings.Contains(c.get("/welcome", nil).Body.String(), `href="/sessions"`) {
-			t.Errorf("the welcome page links a %s session to Your sessions", name)
-		}
-		for _, path := range []string{"/sessions/end-one", "/sessions/end-others"} {
-			c.postForm(path, url.Values{"csrf": {"x"}, "id": {strconv.FormatInt(sessionID(t, srv, card2), 10)}})
-		}
+	rec := card.get("/sessions", nil)
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+		t.Errorf("a card session opened Your sessions: %d", rec.Code)
+	}
+	if strings.Contains(card.get("/welcome", nil).Body.String(), `href="/sessions"`) {
+		t.Error("the welcome page links a card session to Your sessions")
+	}
+	cardID := strconv.FormatInt(sessionID(t, srv, card2), 10)
+	for _, path := range []string{"/sessions/end-one", "/sessions/end-others"} {
+		card.postForm(path, url.Values{"csrf": {"x"}, "id": {cardID}})
 	}
 	if liveCount(srv, "breakglass:Ward") != 2 || liveCount(srv, "stranger@elsewhere.org") != 2 {
-		t.Error("a card's or a guest's session ended a session")
+		t.Fatal("a card's session ended a session")
+	}
+
+	// A guest has the page, with both of its sessions, and its form token
+	// cannot end a card's session.
+	page := guest.get("/sessions", nil)
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), msgSessThisBrowser) {
+		t.Fatalf("a guest's Your sessions = %d", page.Code)
+	}
+	if !strings.Contains(guest.get("/welcome", nil).Body.String(), `href="/sessions"`) {
+		t.Error("the welcome page does not link a guest session to Your sessions")
+	}
+	tok := adminCSRF(t, guest, "/sessions?confirm=others")
+	guest.postForm("/sessions/end-one", url.Values{"csrf": {tok}, "id": {cardID}})
+	if liveCount(srv, "breakglass:Ward") != 2 {
+		t.Error("a guest ended a card's session")
+	}
+	guest.postForm("/sessions/end-others", url.Values{"csrf": {tok}})
+	if liveCount(srv, "breakglass:Ward") != 2 || liveCount(srv, "stranger@elsewhere.org") != 1 {
+		t.Errorf("after a guest signed out on every other device: card %d, guest %d; want 2 and 1",
+			liveCount(srv, "breakglass:Ward"), liveCount(srv, "stranger@elsewhere.org"))
 	}
 	if rec := member.get("/sessions", nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), msgSessThisBrowser) {
 		t.Errorf("a member's Your sessions = %d", rec.Code)

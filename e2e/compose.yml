@@ -45,9 +45,7 @@ services:
     environment:
       - DOMAIN=e2e.test
       - AUTH_PUBLIC_URL=https://auth.e2e.test
-      - ALLOWED_EMAIL_DOMAINS=example.org,example.net
       - ADMIN_EMAILS=boss@admins.example
-      - OPEN_REGISTRATION_HOSTS=open.e2e.test
       - SESSION_SECRET=${E2E_SESSION_SECRET:?set by scripts/e2e.sh}
       - DATA_ENCRYPTION_KEY=${E2E_DATA_KEY:?set by scripts/e2e.sh}
       - EMAIL_BACKEND=log

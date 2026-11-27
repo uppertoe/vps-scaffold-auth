@@ -191,56 +191,54 @@ The renderer also writes `route-access.tsv` (`ROUTE_ACCESS_FILE`), each site's
 paths that are open by design and the roles that guard the rest, which the
 overview shows as a "who can reach what" table.
 
-##### Open registration for one app
+##### Guest sign-in for one app
 
 Some apps are meant for people the department does not yet know, such as an
-applicant portal. Set `OPEN_REGISTRATION_HOSTS` to that app's host, and give the
-app's User role to guests on its admin page:
+applicant portal. Give the app's User role to **Guests** on its admin page:
 
 ```caddyfile
-# .env:  OPEN_REGISTRATION_HOSTS=apply.example.com
 apply.{$DOMAIN} { import role "apply" "user" apply:3000 }
 ```
 
-When someone signs in on the way to a listed host and their address is not
-staff, the gateway sends them a code as usual and, once they enter it, signs
-them in as a **guest**. A member of staff, or an admin, signs in with their usual
-role on the open host as anywhere else.
+A role held by guests opens guest sign-in on that app's hosts. When someone
+signs in on the way to one of them and their address is not staff and holds no
+app role, the gateway sends them a code as usual and, once they enter it, signs
+them in as a **guest**. A sign-in that names no destination (a direct visit to
+the sign-in page) is decided as one to `DEFAULT_REDIRECT`. A member of staff,
+an administrator or a member signs in with their usual role on such a host as
+anywhere else. The review step on the app's page says that saving opens
+sign-in on the app's hosts, and saving emails the other administrators.
 
 A guest holds only the roles given to guests, and those given to a list an
-admin has placed the guest in. A role held by guests is the User role only, and
-a guest is never an admin and never sees the TOTP step.
+admin has placed the guest in, never a staff-only list. A role held by guests is
+the User role only, and a guest is never an admin and never sees the TOTP step.
+A guest may add a passkey on their own phone, or on a computer under the
+computer's rules, and has Your sessions; a guest's passkey is never admin grade
+and signs in as a guest only where an emailed code would.
 
 Guest sessions renew like ordinary ones, keeping their guest kind, but a guest
 never receives the remember-me lifetime, which bounds how long an unwanted guest
 holds a session that nobody has ended. If a guest reaches a page they cannot open,
 the "no access" page tells them they are signed in as a guest and offers to sign
 them out, so they can sign in again with an approved address. Guest visits
-appear as `guest` in the admin access log.
+appear as `guest` in the admin access log. Taking guests off every app ends
+every guest session at its next request.
 
 The host check decides only where the gateway offers a guest sign-in; it is not
 the boundary. The destination rides in the login URL, so anyone who can receive
-mail can obtain a guest session once any host is listed. What keeps guests
-contained is that only roles given to guests, or to a list a guest is in, admit
-them.
+mail can obtain a guest session once any app's role is held by guests. What
+keeps guests contained is that only roles given to guests, or to a list a guest
+is in, admit them. The auth host is never an app's host: the gateway refuses to
+start with a manifest that names it.
 
-Listing a host also gives effect to list memberships that were previously
+Giving guests a role also gives effect to list memberships that were previously
 inert. A membership for an address that is not staff used to do nothing,
-because that address could never sign in. Once any host is open, the same
-address can sign in as a guest and hold every role given to that list. Before
-listing a host, review the admin groups page, which marks each member who is
-not staff, and remove any membership that should have ended with the person's
-access. Removing a domain from `ALLOWED_EMAIL_DOMAINS`, or from a domain group,
-does not remove list memberships.
-
-`OPEN_REGISTRATION_HOSTS` takes a comma-separated list of bare hostnames, each
-either `DOMAIN` or a subdomain of it. The gateway refuses to start if an entry is
-anything else, such as a URL, a host with a port, or a sibling domain.
-
-**The global form, `ALLOWED_EMAIL_DOMAINS=*`.** This older switch still works:
-any email verified by a one-time code signs in as staff, on every host. Each
-app's roles still decide what such a person reaches. Admin stays an exact
-`ADMIN_EMAILS` allow-list either way.
+because that address could never sign in. Once any app's role is held by
+guests, the same address can sign in as a guest and hold every role given to
+that list. Before giving guests a role, review the admin groups page, which
+marks each member who is not staff, and remove any membership that should have
+ended with the person's access. Removing a domain from a domain group does not
+remove list memberships.
 
 #### Mixing public and protected routes
 
@@ -291,9 +289,8 @@ for the annotated list. Key ones:
 | Variable | Purpose |
 |---|---|
 | `AUTH_PUBLIC_URL` | Base URL of the `auth.<domain>` site |
-| `ALLOWED_EMAIL_DOMAINS` | CSV of domains whose addresses sign in as staff; `*` = open registration on every host (discouraged on a shared server). Optional on a server with app roles (`APP_ROLES_FILE`): without it, the domains of the domain groups that hold an app role decide who is staff; see [Without the allow-list](#without-the-allow-list) |
-| `OPEN_REGISTRATION_HOSTS` | CSV of hosts (`DOMAIN` or a subdomain) where other addresses may sign in as guests; see [Open registration for one app](#open-registration-for-one-app) |
-| `ADMIN_EMAILS` | CSV of explicit admin addresses |
+| `ADMIN_EMAILS` | CSV of explicit admin addresses. Required |
+| `APP_ROLES_FILE` | The scaffold-rendered app-roles manifest. Required; see [Who is staff](#who-is-staff) |
 | `SESSION_SECRET` | 32+ random bytes (`openssl rand -hex 32`) |
 | `COOKIE_DOMAIN` | Leading-dot domain for the shared session cookie |
 | `EMAIL_BACKEND` | `smtp` \| `resend` \| `log` (`log` is dev-only; refused unless `COOKIE_INSECURE=true`) |
@@ -306,28 +303,34 @@ for the annotated list. Key ones:
 | `BREAKGLASS_REFUSED_GROUPS` | **Deprecated; read for one release only.** Lists to make staff only as well as those the role rule makes staff only (space or comma separated). The gateway logs at start that the setting is deprecated, and names each list that only the setting makes staff only. Remove it once that line names nothing you need closed |
 | `DOMAIN` | The server domain (provided by the server `.env`) |
 
-The gateway refuses to start when neither `ALLOWED_EMAIL_DOMAINS` nor `ADMIN_EMAILS` is set.
+The gateway refuses to start without `ADMIN_EMAILS` or `APP_ROLES_FILE`.
+`ALLOWED_EMAIL_DOMAINS` and `OPEN_REGISTRATION_HOSTS` are no longer read: if
+either is still set, the gateway logs a warning at start and ignores it.
 
-#### Without the allow-list
+#### Who is staff
 
-A server that uses app roles (`APP_ROLES_FILE`) can leave `ALLOWED_EMAIL_DOMAINS`
-empty. The gateway then counts as staff the administrators in `ADMIN_EMAILS` and
-every address at a domain of a domain group that holds at least one app role the
-manifest declares. A domain group that holds no role admits nobody, and the
-sign-in page does not name its domains. Staff sign in as before, feeds and the members endpoint keep them,
-and the staff-only lists are kept in their sessions. Anyone else signs in
-as a member when they hold a role through a list, by name or by an invitation, or
-as a guest on an open host. While `ALLOWED_EMAIL_DOMAINS` is set, it alone decides
-who is staff, and a domain group adds no one. Without it, giving a domain group
-its first role lets everyone at its domains sign in, and they reach the apps
-where the group holds a role, and no other. Taking the group's last role
-away, or removing a domain, signs those people out at their next request, or makes
-them members if they still hold a role. If the gateway has not been able to read
-its domain groups since it started, it answers sign-in and session checks with a
-503 and ends no session until it can.
+Staff are the administrators in `ADMIN_EMAILS` and every address at a domain of
+a domain group that holds at least one app role the manifest declares. A domain
+group that holds no role admits nobody, and the sign-in page does not name its
+domains. Staff sign in as staff, feeds and the members endpoint keep them, and
+the staff-only lists are kept in their sessions. Anyone else signs in as a
+member when they hold a role through a list, by name or by an invitation, or as
+a guest on the host of an app whose User role is held by guests. Giving a domain
+group its first role lets everyone at its domains sign in, and they reach the
+apps where the group holds a role, and no other. Taking the group's last role
+away, or removing a domain, signs those people out at their next request, or
+makes them members if they still hold a role. If the gateway has not been able
+to read its domain groups since it started, it answers sign-in and session
+checks with a 503 and ends no session until it can. At start, the gateway logs
+who can sign in and where guests may.
 
-At start, a gateway without the allow-list logs who can sign in.
-
+**Upgrading from `ALLOWED_EMAIL_DOMAINS`.** A staff session that began before
+this release first ran on the server, and whose address is no longer staff and
+holds no role through a list or by name, becomes a guest session at its next
+request while some app's role is held by guests, instead of ending. This keeps
+p.stonn's users signed in when markbot drops `ALLOWED_EMAIL_DOMAINS=*`. The rule
+applies only to sessions from before the release, so it lapses with them, and
+is to be removed after 1 March 2027.
 
 ### Passkeys (optional)
 
@@ -466,9 +469,9 @@ The login page has a **"Keep me signed in"** checkbox. Unchecked, a session
 lasts `SESSION_TTL` (default 2h); checked, it lasts `SESSION_REMEMBER_TTL`
 (default 24h). Both slide on activity (renewing every `SESSION_RENEW_AFTER`,
 default 1h), up to `SESSION_MAX_AGE` from sign-in. Removing a domain from the
-allow-list (or, without one, from the domain groups), a person from the admin listing, or every host from
-`OPEN_REGISTRATION_HOSTS` takes effect at each person's next request once the
-gateway has restarted with the new setting, as a group change does. The renewal is issued by `/verify`
+domain groups, a person from the admin listing (once the gateway has restarted
+with the new setting), or guests from every app takes effect at each person's
+next request, as a group change does. The renewal is issued by `/verify`
 and carried to the browser by the guard's auth gate; a hand-rolled
 `forward_auth` would drop it (see the note under "Protecting an app").
 
@@ -775,7 +778,7 @@ docker build -t vps-scaffold-auth . # image
 # Run standalone with the log email backend (codes printed to stdout):
 SESSION_SECRET=$(openssl rand -hex 32) \
 AUTH_PUBLIC_URL=https://localhost DOMAIN=localhost \
-ALLOWED_EMAIL_DOMAINS=example.com EMAIL_BACKEND=log \
+ADMIN_EMAILS=you@example.com APP_ROLES_FILE=deploy/app-roles.sample.tsv EMAIL_BACKEND=log \
 COOKIE_INSECURE=true SQLITE_PATH=./auth.db \
 ./auth
 ```

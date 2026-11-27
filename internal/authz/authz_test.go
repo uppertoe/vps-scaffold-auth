@@ -2,83 +2,27 @@ package authz
 
 import "testing"
 
+// Role answers admin only for ADMIN_EMAILS, whatever the domain: no domain
+// makes an address staff here, and no "*" opens anything.
 func TestRole(t *testing.T) {
-	p := NewPolicy([]string{"Example.com", "example.org"}, []string{"Admin@Example.com"})
-
+	p := NewPolicy([]string{"Admin@Example.com", " "})
 	cases := []struct {
 		email string
 		want  string
 	}{
-		{"admin@example.com", RoleAdmin}, // whitelist, case-insensitive
-		{"ADMIN@EXAMPLE.COM", RoleAdmin}, // case-insensitive
-		{"user@example.com", RoleUser},   // allowed domain
-		{"user@example.org", RoleUser},   // second allowed domain
-		{"user@EXAMPLE.com", RoleUser},   // domain case-insensitive
-		{"user@evil.com", RoleDeny},      // domain not allowed
-		{"", RoleDeny},                   // empty
-		{"nobody", RoleDeny},             // no @
-		{"trailing@", RoleDeny},          // empty domain
-		{"admin@evil.com", RoleDeny},     // admin local-part at wrong domain
+		{"admin@example.com", RoleAdmin},
+		{"ADMIN@EXAMPLE.COM", RoleAdmin},
+		{"user@example.com", RoleDeny},
+		{"anyone@gmail.com", RoleDeny},
+		{"*", RoleDeny},
+		{"", RoleDeny},
+		{"nobody", RoleDeny},
+		{"admin@evil.com", RoleDeny},
 	}
 	for _, c := range cases {
 		if got := p.Role(c.email); got != c.want {
 			t.Errorf("Role(%q) = %q, want %q", c.email, got, c.want)
 		}
-	}
-}
-
-func TestRoleWildcard(t *testing.T) {
-	// Open registration: "*" plus an explicit admin whitelist and an incidental
-	// literal domain (which is now redundant but must not break anything).
-	p := NewPolicy([]string{"*", "example.org"}, []string{"Admin@Example.com"})
-	if !p.OpenRegistration() {
-		t.Fatal("expected OpenRegistration() true when \"*\" is configured")
-	}
-
-	cases := []struct {
-		email string
-		want  string
-	}{
-		{"admin@example.com", RoleAdmin}, // whitelist still wins over wildcard
-		{"user@example.org", RoleUser},   // explicit domain still works
-		{"anyone@gmail.com", RoleUser},   // wildcard: any real domain
-		{"person@some.co.uk", RoleUser},  // multi-label domain
-		{"a@b.io", RoleUser},             // short but valid
-		{"", RoleDeny},                   // empty
-		{"nobody", RoleDeny},             // no @
-		{"trailing@", RoleDeny},          // empty domain
-		{"x@localhost", RoleDeny},        // no TLD: not a public mail domain
-		{"x@internal", RoleDeny},         // bare host rejected
-		{"x@a..b.com", RoleDeny},         // empty label rejected
-		{"x@example.c", RoleDeny},        // one-char TLD rejected
-		{"x@example.123", RoleDeny},      // numeric TLD rejected
-		{"x@example.com.", RoleDeny},     // trailing dot rejected
-		{"x@.example.com", RoleDeny},     // leading dot rejected
-	}
-	for _, c := range cases {
-		if got := p.Role(c.email); got != c.want {
-			t.Errorf("Role(%q) = %q, want %q", c.email, got, c.want)
-		}
-	}
-}
-
-func TestOpenRegistrationDefaultOff(t *testing.T) {
-	p := NewPolicy([]string{"example.com"}, nil)
-	if p.OpenRegistration() {
-		t.Error("expected OpenRegistration() false without \"*\"")
-	}
-	if p.Role("anyone@gmail.com") != RoleDeny {
-		t.Error("non-wildcard policy must still deny unlisted domains")
-	}
-}
-
-func TestAllowed(t *testing.T) {
-	p := NewPolicy([]string{"example.com"}, nil)
-	if !p.Allowed("a@example.com") {
-		t.Error("expected allowed")
-	}
-	if p.Allowed("a@evil.com") {
-		t.Error("expected denied")
 	}
 }
 
@@ -165,39 +109,16 @@ func TestGuestEligible(t *testing.T) {
 		"x@":                       false,
 		"no-at-sign":               false,
 		"breakglass:ops@rch.org.a": false, // one-letter TLD
+		"x@internal":               false, // bare host
+		"x@a..b.com":               false, // empty label
+		"x@example.com.":           false, // trailing dot
+		"x@.example.com":           false, // leading dot
+		"x@example.123":            false, // numeric TLD
 	}
 	for in, want := range cases {
 		if got := GuestEligible(in); got != want {
 			t.Errorf("GuestEligible(%q) = %v, want %v", in, got, want)
 		}
-	}
-}
-
-// LoginRole confers a guest only for an address the allow-list denies, and only
-// from an open host. A permitted address keeps its real role on an open host, so
-// an admin or a department user is never downgraded to a guest.
-func TestLoginRoleGuest(t *testing.T) {
-	p := NewPolicy([]string{"rch.org.au"}, []string{"boss@elsewhere.com"})
-	cases := []struct {
-		email    string
-		openHost bool
-		want     string
-	}{
-		{"stranger@gmail.com", true, RoleGuest},
-		{"stranger@gmail.com", false, RoleDeny},
-		{"x@localhost", true, RoleDeny}, // not a plausible public address
-		{"u@rch.org.au", true, RoleUser},
-		{"u@rch.org.au", false, RoleUser},
-		{"boss@elsewhere.com", true, RoleAdmin},
-	}
-	for _, c := range cases {
-		if got := p.LoginRole(c.email, c.openHost); got != c.want {
-			t.Errorf("LoginRole(%q, open=%v) = %q, want %q", c.email, c.openHost, got, c.want)
-		}
-	}
-	// Role itself never answers "guest": that would make every stranger allowed.
-	if got := p.Role("stranger@gmail.com"); got != RoleDeny {
-		t.Errorf("Role(stranger) = %q, want deny", got)
 	}
 }
 
@@ -212,22 +133,6 @@ func TestGuestIsReservedGroup(t *testing.T) {
 func TestBuildGroupsDropsReservedStoredGroups(t *testing.T) {
 	if got := BuildGroups("user", []string{"admin", "guest", "user", "team"}); got != "user,team" {
 		t.Errorf("BuildGroups = %q, want user,team", got)
-	}
-}
-
-func TestHasAllowList(t *testing.T) {
-	for _, c := range []struct {
-		domains []string
-		want    bool
-	}{
-		{nil, false},
-		{[]string{"", "  "}, false},
-		{[]string{"example.com"}, true},
-		{[]string{"*"}, true},
-	} {
-		if got := NewPolicy(c.domains, []string{"admin@example.com"}).HasAllowList(); got != c.want {
-			t.Errorf("HasAllowList(%q) = %v, want %v", c.domains, got, c.want)
-		}
 	}
 }
 

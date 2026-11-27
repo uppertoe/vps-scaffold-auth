@@ -67,8 +67,8 @@ func TestAppAccessRecordedAndDeduped(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("app_access rows = %d, want 1 (hourly dedup)", len(rows))
 	}
-	if rows[0].Host != "app.example.com" {
-		t.Errorf("host = %q, want app.example.com", rows[0].Host)
+	if rows[0].Host != "any.example.com" {
+		t.Errorf("host = %q, want any.example.com", rows[0].Host)
 	}
 }
 

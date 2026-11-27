@@ -122,7 +122,7 @@ func TestRedirectDoneDropsMalformedGroup(t *testing.T) {
 }
 
 func TestCreateGroupCapsLabel(t *testing.T) {
-	srv, sender := testServer(t)
+	srv, sender := testServerNoStaff(t, nil)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())

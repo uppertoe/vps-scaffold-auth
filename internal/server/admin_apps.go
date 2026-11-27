@@ -26,9 +26,12 @@ import (
 
 // The strings the review and the email use. Each is kept here, once.
 const (
-	msgLastHolder    = "Nobody will hold %s once this is saved, so %s will be closed to everyone."
-	msgNetworkOpens  = "Anyone on the %s will reach %s without signing in."
-	msgGuestsOpen    = "Anyone who confirms an email address will reach %s."
+	msgLastHolder   = "Nobody will hold %s once this is saved, so %s will be closed to everyone."
+	msgNetworkOpens = "Anyone on the %s will reach %s without signing in."
+	msgGuestsOpen   = "Anyone who confirms an email address will reach %s."
+	// msgGuestsSignIn follows msgGuestsOpen: giving guests a role opens guest
+	// sign-in on the app's hosts (openToGuests). %s is the hosts.
+	msgGuestsSignIn  = "Once this is saved, anyone who confirms an email address at %s will be signed in as a guest."
 	msgOrphanRole    = "This role is no longer in the snippet. Its assignments are kept until you remove them."
 	msgSaveNote      = "Saving these changes emails the other administrators, and each change is recorded in the admin log."
 	msgChangeSubject = "Access to %s has changed."
@@ -934,6 +937,9 @@ func (s *Server) reviewWarnings(w *rolesWorld, a *roles.App, changes []roleChang
 			out = append(out, fmt.Sprintf(msgNetworkOpens, s.networkLabel(c.A.Ref), pathsPhrase(a, c.A.Role)))
 		case c.A.Kind == store.AssignGuests:
 			out = append(out, fmt.Sprintf(msgGuestsOpen, pathsPhrase(a, c.A.Role)))
+			if len(a.Hosts) > 0 {
+				out = append(out, fmt.Sprintf(msgGuestsSignIn, joinOr(a.Hosts)))
+			}
 		}
 	}
 	return out

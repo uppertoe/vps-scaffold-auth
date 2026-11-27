@@ -155,9 +155,9 @@ func TestRefusedGroupsSettingLogsDeprecation(t *testing.T) {
 // marks the outsider as not staff.
 func TestOutsiderIsNeverAMemberOfAStaffOnlyList(t *testing.T) {
 	srv, sender := staffOnlyListServer(t, func(c *config.Config) {
-		c.OpenRegistrationHosts = []string{"apply.example.com"}
 		c.MemberReaders = []config.MemberReader{{App: "digest", Token: digestToken, Groups: []string{"planka-admins", "planka-users"}}}
 	})
+	openToGuestsForTest(t, srv, "apply")
 	srv.members = newMembersAPI(srv.cfg.MemberReaders)
 	ctx := context.Background()
 	for _, g := range []string{"planka-admins", "planka-users"} {
@@ -200,9 +200,8 @@ func TestOutsiderIsNeverAMemberOfAStaffOnlyList(t *testing.T) {
 // A member who stays signed in loses a list at the next request once the
 // list becomes staff only, and keeps the roles held another way.
 func TestMemberLosesAListAtTheNextRequestOnceItIsStaffOnly(t *testing.T) {
-	srv, sender := staffOnlyListServer(t, func(c *config.Config) {
-		c.OpenRegistrationHosts = []string{"apply.example.com"}
-	})
+	srv, sender := staffOnlyListServer(t, nil)
+	openToGuestsForTest(t, srv, "apply")
 	ctx := context.Background()
 	if _, err := srv.store.AddGroupMembers(ctx, "planka-users", []string{strangerAddr}); err != nil {
 		t.Fatal(err)
@@ -341,8 +340,10 @@ func TestNeverLoadedRefusesTargetsOutsidersAndIncludes(t *testing.T) {
 		t.Errorf("card targeting bg_ward = %d, want 400", rec.Code)
 	}
 	c.postForm("/admin/groups/bg_ward/members/confirm", url.Values{"csrf": {tok}, "add": {strangerAddr, "staff@example.com"}})
-	if m, _ := srv.store.ListGroupMembers(ctx, "bg_ward"); len(m) != 1 || m[0] != "staff@example.com" {
-		t.Errorf("bg_ward members = %v, want only the staff member", m)
+	// Staff are told apart by the domain groups, which cannot be read, so
+	// nobody is taken as staff and nobody is added.
+	if m, _ := srv.store.ListGroupMembers(ctx, "bg_ward"); len(m) != 0 {
+		t.Errorf("bg_ward members = %v, want none while staff cannot be told apart", m)
 	}
 	c.postForm("/admin/groups/staff-list/includes", url.Values{"csrf": {tok}, "included": {"collaborators"}})
 	if inc, _ := srv.store.ListGroupIncludes(ctx); len(inc["staff-list"]) != 0 {

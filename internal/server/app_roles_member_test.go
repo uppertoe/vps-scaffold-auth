@@ -77,9 +77,9 @@ func TestInviteeIsAMember(t *testing.T) {
 	}
 }
 
-// Renewal keeps a member a member, turns a member whom the allow-list now
-// admits into an ordinary session at once, and turns a normal session whose
-// address has left the allow-list but holds a role into a member at once.
+// Renewal keeps a member a member, turns a member who is now staff into an
+// ordinary session at once, and turns a normal session whose address is no
+// longer staff but holds a role into a member at once.
 func TestMemberTierAtRenewal(t *testing.T) {
 	srv, sender := rolesServer(t, "")
 	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignPerson, Ref: "p@partner.org", How: store.AssignedByAdmin})
@@ -102,18 +102,20 @@ func TestMemberTierAtRenewal(t *testing.T) {
 		t.Errorf("renewed member: iat %d (was %d), kind %q, groups %q", id.Iat, before, id.Kind, id.Groups)
 	}
 
-	// The allow-list changes: partner.org joins, example.com leaves.
-	srv.cfg.AllowedDomains = []string{"partner.org"}
-	srv.policy = newPolicyFor(srv.cfg)
+	// Staff change: partner.org's domain group is given a role, and
+	// example.com's loses its own.
+	mustDomainGroup(t, srv, "partner-staff", "partner.org")
+	mustAssign(t, srv, store.RoleAssignment{App: staffHarnessApp, Role: "user", Kind: store.AssignDomainGroup, Ref: "partner-staff"})
+	unseedStaff(t, srv)
 	if rec := p.get("/verify", roleGuard("enquiries", "")); rec.Code != http.StatusOK || sessionOf(t, srv, p).Groups != authz.RoleUser {
-		t.Errorf("member now on the allow-list = %d, groups %q; want 200, user", rec.Code, sessionOf(t, srv, p).Groups)
+		t.Errorf("member now staff = %d, groups %q; want 200, user", rec.Code, sessionOf(t, srv, p).Groups)
 	}
 	if id := sessionOf(t, srv, p); id.Kind != "" {
-		t.Errorf("kind after joining the allow-list = %q, want ordinary", id.Kind)
+		t.Errorf("kind once staff = %q, want ordinary", id.Kind)
 	}
 	a.get("/verify", roleGuard("enquiries", ""))
 	if id := sessionOf(t, srv, a); id.Kind != session.KindMember {
-		t.Errorf("kind after leaving the allow-list = %q, want member", id.Kind)
+		t.Errorf("kind once no longer staff = %q, want member", id.Kind)
 	}
 	if rec := a.get("/verify", roleGuard("enquiries", "")); rec.Code != http.StatusOK {
 		t.Errorf("former staff member with a role on the role guard = %d, want 200", rec.Code)

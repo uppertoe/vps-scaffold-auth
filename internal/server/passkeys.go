@@ -357,8 +357,8 @@ func (s *Server) passkeyRegisterOptionsFor(w http.ResponseWriter, r *http.Reques
 }
 
 // shouldOfferPasskey decides whether completeLogin shows the offer to add a
-// passkey: on a phone, for a staff or administrator account, after every
-// sign-in with an emailed code. An emailed code on a phone is the moment a
+// passkey: on a phone, for a staff, administrator, member or guest account,
+// after every sign-in with an emailed code. An emailed code on a phone is the moment a
 // passkey would have saved the person a step; "Not now" costs one tap. A
 // phone that already holds one of the person's passkeys says so if they tap
 // Add (excludeCredentials).
@@ -366,7 +366,21 @@ func (s *Server) shouldOfferPasskey(r *http.Request, role string, pk int64) bool
 	if !s.cfg.PasskeysEnabled || pk != 0 || !isPhone(r) {
 		return false
 	}
-	return role == authz.RoleUser || role == authz.RoleAdmin || role == authz.RoleMember
+	return mayHoldPasskey(role)
+}
+
+// mayHoldPasskey reports whether a sign-in with this role may add and use a
+// passkey: staff, an administrator, a member or a guest, under the same
+// rules. A guest's passkey is never admin grade (only an administrator's
+// is), and signing in with it gives whatever an emailed code would give the
+// address on that destination (loginRole), so a guest's passkey signs in as
+// a guest only where guests may sign in.
+func mayHoldPasskey(role string) bool {
+	switch role {
+	case authz.RoleUser, authz.RoleAdmin, authz.RoleMember, authz.RoleGuest:
+		return true
+	}
+	return false
 }
 
 // offerPasskey renders the offer in place of the redirect, once the session
@@ -406,17 +420,26 @@ func (s *Server) offerAdminPasskey(w http.ResponseWriter, r *http.Request, email
 	return true
 }
 
-// passkeySession reads the session of a person who may manage passkeys: a
-// normal sign-in, staff or administrator. An administrator need not hold the
-// admin tier to see or remove their passkeys; adding one asks for the
-// authenticator code first (mayAddPasskeyNow).
+// passkeySession reads the session of a person who may manage passkeys and
+// their own sessions: staff, an administrator, a member or a guest, never a
+// break-glass card. A guest's role is RoleGuest while guests may still sign
+// in (renewalRole), even if the address has since become staff, since the
+// session stays a guest's until its person signs in again. An administrator
+// need not hold the admin tier to see or remove their passkeys; adding one
+// asks for the authenticator code first (mayAddPasskeyNow).
 func (s *Server) passkeySession(r *http.Request) (*session.Identity, string, bool) {
 	id, ok := s.readSession(r, s.now())
-	if !ok || !personSession(id) {
+	if !ok {
 		return nil, "", false
 	}
-	role := s.currentRole(r.Context(), id.Email)
-	if role != authz.RoleUser && role != authz.RoleAdmin && role != authz.RoleMember {
+	var role string
+	switch {
+	case personSession(id):
+		role = s.currentRole(r.Context(), id.Email)
+	case id.Kind == session.KindGuest:
+		role = s.renewalRole(id)
+	}
+	if !mayHoldPasskey(role) || (id.Kind == session.KindGuest) != (role == authz.RoleGuest) {
 		return nil, "", false
 	}
 	return id, role, true
@@ -854,15 +877,16 @@ func (s *Server) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.TouchPasskey(r.Context(), pk.ID, count, now); err != nil {
 		log.Printf("touch passkey %d: %v", pk.ID, err)
 	}
-	// The role comes from the current policy, as for an email code. A passkey
-	// is never a way in for an address the allow-list no longer permits, and
-	// never makes a guest.
+	// The role comes from the current policy, exactly as for an email code
+	// to the same destination (loginRole). A passkey is never a way in for an
+	// address that may no longer sign in, and makes a guest only where an
+	// emailed code would.
 	if s.rolesUnavailable(r.Context()) {
 		s.renderUnavailable(w, rd)
 		return
 	}
-	role := s.loginRole(r.Context(), pk.Email, s.isOpenHost(rd))
-	if role != authz.RoleUser && role != authz.RoleAdmin && role != authz.RoleMember {
+	role := s.loginRole(r.Context(), pk.Email, s.isOpenHost(r.Context(), rd))
+	if !mayHoldPasskey(role) {
 		s.recordAuth(r, pk.Email, store.AuthEventPasskey, store.AuthOutcomeDenied)
 		s.renderLogin(w, r, http.StatusForbidden, pageData{Error: "This account is not permitted.", Redirect: rd})
 		return

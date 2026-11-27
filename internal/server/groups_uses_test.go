@@ -57,7 +57,7 @@ func TestGroupsShowEveryUse(t *testing.T) {
 }
 
 func TestGroupLabelEdit(t *testing.T) {
-	srv, sender := testServer(t)
+	srv, sender := testServerNoStaff(t, nil)
 	ctx := context.Background()
 	if err := srv.store.CreateGroup(ctx, "planka-users", ""); err != nil {
 		t.Fatal(err)

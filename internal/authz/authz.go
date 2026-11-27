@@ -1,7 +1,7 @@
 // Package authz decides who is allowed in and where it is safe to redirect
-// them. Access is intentionally permissive-by-design within the configured
-// boundary: anyone with a verified email at an allowed domain is a regular
-// user, and an explicit whitelist grants admin.
+// them. An explicit list of administrators (ADMIN_EMAILS) grants admin; who
+// else is staff, a member or a guest is decided by the server from the app
+// roles (see the server's knownRole and loginRole).
 package authz
 
 import (
@@ -15,102 +15,49 @@ const (
 	RoleAdmin = "admin"
 	RoleUser  = "user"
 	RoleDeny  = ""
-	// RoleGuest is the base role of a guest session: an address the allow-list
-	// does not permit, signed in through a host listed in OPEN_REGISTRATION_HOSTS.
-	// It is never returned by Role (which answers "is this address permitted?");
-	// LoginRole confers it, and only an app role held by guests (or by a list
-	// the guest was explicitly placed in) admits it.
+	// RoleGuest is the base role of a guest session: an address that is not
+	// staff and holds no app role, signed in on the host of an app whose User
+	// role is held by guests. It is never returned by Role; the server confers
+	// it, and only an app role held by guests (or by a list the guest was
+	// explicitly placed in) admits it.
 	RoleGuest = "guest"
-	// RoleMember is the base role of an address the allow-list does not
-	// permit but that holds an app role (or has accepted an invitation). It
-	// is never sent to an app: such a session's groups carry the guest tier
-	// token, and a role guard decides it by its roles.
+	// RoleMember is the base role of an address that is not staff but holds
+	// an app role (or has accepted an invitation). It is never sent to an
+	// app: such a session's groups carry the guest tier token, and a role
+	// guard decides it by its roles.
 	RoleMember = "member"
 )
 
-// Wildcard is the ALLOWED_EMAIL_DOMAINS entry that opts the WHOLE instance into
-// open registration (the global form; prefer per-host OPEN_REGISTRATION_HOSTS
-// guest sessions on a shared server, which leave every other app closed): any email at a syntactically valid domain becomes a regular
-// user. Safe only because login is email-verified (OTP) — the code proves the
-// visitor controls that mailbox — so a wildcard grants no access to an address
-// the visitor cannot actually receive mail at. Admin remains an exact allow-list
-// regardless, and app roles are unchanged: with a wildcard, a role held by a
-// domain group still admits only that group's domains.
-const Wildcard = "*"
-
-// Policy captures the access rules. Domains and emails are stored lowercased.
+// Policy holds the administrators. Addresses are stored lowercased.
 type Policy struct {
-	allowedDomains map[string]struct{}
-	adminEmails    map[string]struct{}
-	openReg        bool // ALLOWED_EMAIL_DOMAINS contained "*": any valid domain is a user
+	adminEmails map[string]struct{}
 }
 
-// NewPolicy builds a Policy from the configured allowed domains and admin
-// emails. A "*" entry in allowedDomains enables open registration (see Wildcard).
-func NewPolicy(allowedDomains, adminEmails []string) *Policy {
-	p := &Policy{
-		allowedDomains: make(map[string]struct{}, len(allowedDomains)),
-		adminEmails:    make(map[string]struct{}, len(adminEmails)),
-	}
-	for _, d := range allowedDomains {
-		d = strings.ToLower(strings.TrimSpace(d))
-		if d == "" {
-			continue
-		}
-		if d == Wildcard {
-			p.openReg = true
-			continue // not a literal domain; never store "*" in the exact set
-		}
-		p.allowedDomains[d] = struct{}{}
-	}
+// NewPolicy builds a Policy from the configured admin emails.
+func NewPolicy(adminEmails []string) *Policy {
+	p := &Policy{adminEmails: make(map[string]struct{}, len(adminEmails))}
 	for _, e := range adminEmails {
-		p.adminEmails[strings.ToLower(strings.TrimSpace(e))] = struct{}{}
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+			p.adminEmails[e] = struct{}{}
+		}
 	}
 	return p
 }
 
-// OpenRegistration reports whether any verified email is accepted as a user
-// (the "*" wildcard). Callers use it to suppress domain-specific login hints.
-func (p *Policy) OpenRegistration() bool { return p.openReg }
-
-// HasAllowList reports whether ALLOWED_EMAIL_DOMAINS names any domain, or the
-// "*" wildcard. Without one, the gateway takes its staff domains from the
-// domain groups instead (see the server's knownRole).
-func (p *Policy) HasAllowList() bool { return p.openReg || len(p.allowedDomains) > 0 }
-
-// Role returns the role for an email address: RoleAdmin, RoleUser, or RoleDeny
-// (empty string) if the email is not permitted.
+// Role returns RoleAdmin for an address in ADMIN_EMAILS and RoleDeny for any
+// other. Staff at a domain group's domains are the server's to decide.
 func (p *Policy) Role(email string) string {
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
-		return RoleDeny
-	}
-	if _, ok := p.adminEmails[email]; ok {
+	if _, ok := p.adminEmails[strings.ToLower(strings.TrimSpace(email))]; ok {
 		return RoleAdmin
-	}
-	at := strings.LastIndex(email, "@")
-	if at < 0 || at == len(email)-1 {
-		return RoleDeny
-	}
-	domain := email[at+1:]
-	if _, ok := p.allowedDomains[domain]; ok {
-		return RoleUser
-	}
-	// Open registration: any address at a syntactically valid, deliverable-looking
-	// domain is a user. The dot requirement rejects bare hosts like "localhost" or
-	// "internal" that can't receive public mail; real security rests on OTP, which
-	// only lets in someone who can read the code at that address.
-	if p.openReg && validPublicDomain(domain) {
-		return RoleUser
 	}
 	return RoleDeny
 }
 
 // GuestEligible reports whether email may be signed in as a guest: it has a
-// local part and its domain passes validPublicDomain. This is the same sanity
-// gate as the wildcard path — not a trust decision. What makes a guest safe is
-// that OTP proves mailbox control and a role guard admits a guest only where
-// an app role is held by guests.
+// local part and its domain passes validPublicDomain. This is a sanity gate,
+// not a trust decision. What makes a guest safe is that the emailed code
+// proves mailbox control and a role guard admits a guest only where an app
+// role is held by guests.
 func GuestEligible(email string) bool {
 	email = strings.ToLower(strings.TrimSpace(email))
 	at := strings.LastIndex(email, "@")
@@ -120,25 +67,9 @@ func GuestEligible(email string) bool {
 	return validPublicDomain(email[at+1:])
 }
 
-// LoginRole is the role a completed email-code login confers. It is Role(email)
-// whenever that permits the address, so an admin or an allow-listed user is
-// never downgraded to a guest. Only when Role denies, and the login was reached
-// from an open-registration host, does a syntactically valid public address
-// become RoleGuest; otherwise the answer stays RoleDeny. openHost is derived by
-// the caller from the (validated) post-login destination.
-func (p *Policy) LoginRole(email string, openHost bool) string {
-	if role := p.Role(email); role != RoleDeny {
-		return role
-	}
-	if openHost && GuestEligible(email) {
-		return RoleGuest
-	}
-	return RoleDeny
-}
-
 // validPublicDomain reports whether domain is plausibly a public, mail-carrying
 // domain: at least one dot, no empty labels, and a non-numeric TLD. It is a
-// sanity gate for the open-registration path, not a substitute for OTP delivery.
+// sanity gate for a guest's address, not a substitute for OTP delivery.
 func validPublicDomain(domain string) bool {
 	if domain == "" || len(domain) > 253 {
 		return false
@@ -165,11 +96,6 @@ func validPublicDomain(domain string) bool {
 		}
 	}
 	return true
-}
-
-// Allowed reports whether the email may authenticate at all.
-func (p *Policy) Allowed(email string) bool {
-	return p.Role(email) != RoleDeny
 }
 
 // BuildGroups composes the comma-separated groups baked into a session: the

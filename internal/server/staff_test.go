@@ -25,13 +25,11 @@ import (
 
 // staffServer is a server shaped like the department's: app roles, route
 // manifests with application-role lists, a refused list in the settings, a
-// feed, a members reader, an open host, and a domain group "staff" carrying
-// example.com and holding caffeine's User role. With allowList,
-// ALLOWED_EMAIL_DOMAINS is example.com, as before; without it the setting is
-// empty and the domain group stands in. A second domain group, "partner",
-// carries partner.org, which the allow-list does not name, and holds no
-// role.
-func staffServer(t *testing.T, allowList bool, feedURL string) (*Server, *captureSender) {
+// feed, a members reader, apply.example.com open to guests, and a domain
+// group "staff" carrying example.com and holding caffeine's User role, which
+// makes example.com the staff domain. A second domain group, "partner",
+// carries partner.org and holds no role.
+func staffServer(t *testing.T, feedURL string) (*Server, *captureSender) {
 	t.Helper()
 	dir := t.TempDir()
 	write := func(name, body string) string {
@@ -42,17 +40,14 @@ func staffServer(t *testing.T, allowList bool, feedURL string) (*Server, *captur
 		return p
 	}
 	rolesFile := write("app-roles.tsv", testAppRoles)
-	srv, sender := testServerWith(t, func(c *config.Config) {
-		if !allowList {
-			c.AllowedDomains = nil
-		}
+	srv, sender := testServerNoStaff(t, func(c *config.Config) {
 		c.AppRolesFile = rolesFile
 		c.BreakGlassRefusedGroups = []string{"insights-admins", "rch-consultants"}
-		c.OpenRegistrationHosts = []string{"apply.example.com"}
 		if feedURL != "" {
 			c.GroupFeeds = []config.GroupFeed{{Group: "rch-consultants", URL: feedURL, Token: testFeedToken}}
 		}
 	})
+	openToGuestsForTest(t, srv, "apply")
 	mustDomainGroup(t, srv, "staff", "example.com")
 	mustDomainGroup(t, srv, "partner", "partner.org")
 	mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignDomainGroup, Ref: "staff"})
@@ -75,243 +70,196 @@ func partnerRole(t *testing.T, srv *Server, give bool) {
 	srv.forgetRoles()
 }
 
-// bothWays runs a check with ALLOWED_EMAIL_DOMAINS set and with it empty, so
-// each place that asks whether an address is staff is shown to answer the
-// same way in both.
-func bothWays(t *testing.T, check func(t *testing.T, allowList bool)) {
-	for _, allowList := range []bool{true, false} {
-		name := "allow-list set"
-		if !allowList {
-			name = "allow-list empty"
-		}
-		t.Run(name, func(t *testing.T) { check(t, allowList) })
-	}
-}
-
 // Who is known: an administrator, an address at a staff domain; not a
 // stranger, and not a person who only holds a role (a member) or signs in on
 // an open host (a guest).
-func TestKnownWithAndWithoutAllowList(t *testing.T) {
-	bothWays(t, func(t *testing.T, allowList bool) {
-		srv, _ := staffServer(t, allowList, "")
-		ctx := context.Background()
-		mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignPerson, Ref: "p@elsewhere.org", How: store.AssignedByAdmin})
-		cases := []struct {
-			email           string
-			known, login    string
-			loginOnOpenHost string
-		}{
-			{"admin@example.com", authz.RoleAdmin, authz.RoleAdmin, authz.RoleAdmin},
-			{"amy@example.com", authz.RoleUser, authz.RoleUser, authz.RoleUser},
-			{"AMY@Example.com", authz.RoleUser, authz.RoleUser, authz.RoleUser},
-			{strangerAddr, authz.RoleDeny, authz.RoleDeny, authz.RoleGuest},
-			{"p@elsewhere.org", authz.RoleDeny, authz.RoleMember, authz.RoleMember},
-		}
-		for _, c := range cases {
-			if got := srv.knownRole(ctx, c.email); got != c.known {
-				t.Errorf("knownRole(%q) = %q, want %q", c.email, got, c.known)
-			}
-			if got := srv.loginRole(ctx, c.email, false); got != c.login {
-				t.Errorf("loginRole(%q) = %q, want %q", c.email, got, c.login)
-			}
-			if got := srv.loginRole(ctx, c.email, true); got != c.loginOnOpenHost {
-				t.Errorf("loginRole(%q) on the open host = %q, want %q", c.email, got, c.loginOnOpenHost)
-			}
-		}
-		// A domain group that holds no role knows nobody.
-		if got := srv.knownRole(ctx, "x@partner.org"); got != authz.RoleDeny {
-			t.Errorf("knownRole(x@partner.org) with no role = %q, want deny", got)
-		}
-		// Given a role, it knows its domain at once, but only without the
-		// allow-list; taking the role away reverses it at once.
-		partnerRole(t, srv, true)
-		want := authz.RoleDeny
-		if !allowList {
-			want = authz.RoleUser
-		}
-		if got := srv.knownRole(ctx, "x@partner.org"); got != want {
-			t.Errorf("knownRole(x@partner.org) with a role = %q, want %q", got, want)
-		}
-		partnerRole(t, srv, false)
-		if got := srv.knownRole(ctx, "x@partner.org"); got != authz.RoleDeny {
-			t.Errorf("knownRole(x@partner.org) after the role is removed = %q, want deny", got)
-		}
-	})
-}
-
-// Without the allow-list and with the app-roles model off, the domain groups
-// count for nothing: only the administrators can sign in.
-func TestDomainGroupsNeedTheRolesModel(t *testing.T) {
-	srv, _ := testServerWith(t, func(c *config.Config) { c.AllowedDomains = nil })
-	mustDomainGroup(t, srv, "staff", "example.com")
-	srv.forgetRoles()
+func TestWhoIsStaff(t *testing.T) {
+	srv, _ := staffServer(t, "")
 	ctx := context.Background()
-	if got := srv.loginRole(ctx, "amy@example.com", false); got != authz.RoleDeny {
-		t.Errorf("loginRole(amy) with the model off = %q, want deny", got)
+	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignPerson, Ref: "p@elsewhere.org", How: store.AssignedByAdmin})
+	cases := []struct {
+		email           string
+		known, login    string
+		loginOnOpenHost string
+	}{
+		{"admin@example.com", authz.RoleAdmin, authz.RoleAdmin, authz.RoleAdmin},
+		{"amy@example.com", authz.RoleUser, authz.RoleUser, authz.RoleUser},
+		{"AMY@Example.com", authz.RoleUser, authz.RoleUser, authz.RoleUser},
+		{strangerAddr, authz.RoleDeny, authz.RoleDeny, authz.RoleGuest},
+		{"p@elsewhere.org", authz.RoleDeny, authz.RoleMember, authz.RoleMember},
 	}
-	if got := srv.loginRole(ctx, "admin@example.com", false); got != authz.RoleAdmin {
-		t.Errorf("loginRole(admin) = %q, want admin", got)
+	for _, c := range cases {
+		if got := srv.knownRole(ctx, c.email); got != c.known {
+			t.Errorf("knownRole(%q) = %q, want %q", c.email, got, c.known)
+		}
+		if got := srv.loginRole(ctx, c.email, false); got != c.login {
+			t.Errorf("loginRole(%q) = %q, want %q", c.email, got, c.login)
+		}
+		if got := srv.loginRole(ctx, c.email, true); got != c.loginOnOpenHost {
+			t.Errorf("loginRole(%q) on the open host = %q, want %q", c.email, got, c.loginOnOpenHost)
+		}
+	}
+	// A domain group that holds no role knows nobody.
+	if got := srv.knownRole(ctx, "x@partner.org"); got != authz.RoleDeny {
+		t.Errorf("knownRole(x@partner.org) with no role = %q, want deny", got)
+	}
+	// Given a role, it knows its domain at once; taking the role away
+	// reverses it at once.
+	partnerRole(t, srv, true)
+	if got := srv.knownRole(ctx, "x@partner.org"); got != authz.RoleUser {
+		t.Errorf("knownRole(x@partner.org) with a role = %q, want user", got)
+	}
+	partnerRole(t, srv, false)
+	if got := srv.knownRole(ctx, "x@partner.org"); got != authz.RoleDeny {
+		t.Errorf("knownRole(x@partner.org) after the role is removed = %q, want deny", got)
 	}
 }
 
 // A member of staff signs in as an ordinary session (not a member), reaches
-// a role guard, and is suggested the staff domain; a stranger on
-// the open host is still a guest. Without the allow-list, removing the domain
-// group's last role ends the staff session at its next request.
-func TestSignInWithAndWithoutAllowList(t *testing.T) {
-	bothWays(t, func(t *testing.T, allowList bool) {
-		srv, sender := staffServer(t, allowList, "")
-		if page := newClient(t, srv.Handler()).get("/login", nil).Body.String(); !strings.Contains(page, "This page is for <strong>example.com") {
-			t.Error("the sign-in page does not suggest the staff domain")
-		}
+// a role guard, and is suggested the staff domain; a stranger on the open
+// host is a guest. Removing the domain group's last role ends the staff
+// session at its next request.
+func TestStaffSignIn(t *testing.T) {
+	srv, sender := staffServer(t, "")
+	if page := newClient(t, srv.Handler()).get("/login", nil).Body.String(); !strings.Contains(page, "This page is for <strong>example.com") {
+		t.Error("the sign-in page does not suggest the staff domain")
+	}
 
-		c := newClient(t, srv.Handler())
-		loginAs(t, c, sender, "amy@example.com", nil)
-		if id := sessionOf(t, srv, c); id.Kind != "" || !strings.HasPrefix(id.Groups, authz.RoleUser) {
-			t.Fatalf("staff session = kind %q groups %q, want an ordinary user session", id.Kind, id.Groups)
-		}
-		if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
-			t.Errorf("staff on a role guard = %d, want 200", rec.Code)
-		}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "amy@example.com", nil)
+	if id := sessionOf(t, srv, c); id.Kind != "" || !strings.HasPrefix(id.Groups, authz.RoleUser) {
+		t.Fatalf("staff session = kind %q groups %q, want an ordinary user session", id.Kind, id.Groups)
+	}
+	if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
+		t.Errorf("staff on a role guard = %d, want 200", rec.Code)
+	}
 
-		g := newClient(t, srv.Handler())
-		loginGuest(t, g, sender, strangerAddr)
-		if id := sessionOf(t, srv, g); id.Kind != session.KindGuest || !strings.HasPrefix(id.Groups, authz.RoleGuest) {
-			t.Errorf("stranger session = kind %q groups %q, want a guest", id.Kind, id.Groups)
-		}
+	g := newClient(t, srv.Handler())
+	loginGuest(t, g, sender, strangerAddr)
+	if id := sessionOf(t, srv, g); id.Kind != session.KindGuest || !strings.HasPrefix(id.Groups, authz.RoleGuest) {
+		t.Errorf("stranger session = kind %q groups %q, want a guest", id.Kind, id.Groups)
+	}
 
-		if allowList {
-			return
-		}
-		if err := srv.store.RemoveRoleAssignment(context.Background(), "caffeine", "user", store.AssignDomainGroup, "staff"); err != nil {
-			t.Fatal(err)
-		}
-		srv.forgetRoles()
-		rec := c.get("/verify", anyGuard(t, srv))
-		if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
-			t.Errorf("after the domain group's last role is removed: %d to %q, want sign-in", rec.Code, rec.Header().Get("Location"))
-		}
-	})
+	if err := srv.store.RemoveRoleAssignment(context.Background(), "caffeine", "user", store.AssignDomainGroup, "staff"); err != nil {
+		t.Fatal(err)
+	}
+	srv.forgetRoles()
+	rec := c.get("/verify", anyGuard(t, srv))
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+		t.Errorf("after the domain group's last role is removed: %d to %q, want sign-in", rec.Code, rec.Header().Get("Location"))
+	}
 }
 
 // A feed keeps the addresses of staff and skips strangers and anything that
 // is not a plain address.
-func TestFeedKeepsStaffWithAndWithoutAllowList(t *testing.T) {
-	bothWays(t, func(t *testing.T, allowList bool) {
-		var body atomic.Value
-		var hits atomic.Int32
-		body.Store(`["a@example.com","B@example.com","` + strangerAddr + `","not-an-email","admin@example.com"]`)
-		ts := feedEndpoint(t, &body, &hits)
-		srv, _ := staffServer(t, allowList, ts.URL)
-		st, err := srv.syncFeed(context.Background(), "rch-consultants", "group feed", "")
-		if err != nil || st.Status != store.GroupSyncOK {
-			t.Fatalf("sync = %+v, %v", st, err)
-		}
-		if got := members(t, srv); !reflect.DeepEqual(got, []string{"a@example.com", "admin@example.com", "b@example.com"}) {
-			t.Errorf("members = %v, want the staff and the administrator only", got)
-		}
-		if !strings.Contains(st.Detail, "2 entries were skipped") {
-			t.Errorf("detail = %q", st.Detail)
-		}
-	})
+func TestFeedKeepsStaff(t *testing.T) {
+	var body atomic.Value
+	var hits atomic.Int32
+	body.Store(`["a@example.com","B@example.com","` + strangerAddr + `","not-an-email","admin@example.com"]`)
+	ts := feedEndpoint(t, &body, &hits)
+	srv, _ := staffServer(t, ts.URL)
+	st, err := srv.syncFeed(context.Background(), "rch-consultants", "group feed", "")
+	if err != nil || st.Status != store.GroupSyncOK {
+		t.Fatalf("sync = %+v, %v", st, err)
+	}
+	if got := members(t, srv); !reflect.DeepEqual(got, []string{"a@example.com", "admin@example.com", "b@example.com"}) {
+		t.Errorf("members = %v, want the staff and the administrator only", got)
+	}
+	if !strings.Contains(st.Detail, "2 entries were skipped") {
+		t.Errorf("detail = %q", st.Detail)
+	}
 }
 
 // The members endpoint returns staff and leaves out a stranger kept on the
 // list.
-func TestMembersEndpointWithAndWithoutAllowList(t *testing.T) {
-	bothWays(t, func(t *testing.T, allowList bool) {
-		srv, _ := staffServer(t, allowList, "")
-		srv.members = newMembersAPI([]config.MemberReader{{App: "digest", Token: digestToken, Groups: []string{"coordinators"}}})
-		ctx := context.Background()
-		if err := srv.store.CreateGroup(ctx, "coordinators", ""); err != nil {
+func TestMembersEndpointReturnsStaff(t *testing.T) {
+	srv, _ := staffServer(t, "")
+	srv.members = newMembersAPI([]config.MemberReader{{App: "digest", Token: digestToken, Groups: []string{"coordinators"}}})
+	ctx := context.Background()
+	if err := srv.store.CreateGroup(ctx, "coordinators", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []string{"amy@example.com", strangerAddr, "admin@example.com"} {
+		if err := srv.store.AddGroupMember(ctx, "coordinators", e); err != nil {
 			t.Fatal(err)
 		}
-		for _, e := range []string{"amy@example.com", strangerAddr, "admin@example.com"} {
-			if err := srv.store.AddGroupMember(ctx, "coordinators", e); err != nil {
-				t.Fatal(err)
-			}
-		}
-		rec := membersGet(srv.MembersHandler(), "/v1/groups/coordinators/members", digestToken, nil)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("read = %d %s", rec.Code, rec.Body)
-		}
-		var got struct {
-			Members []string `json:"members"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-			t.Fatal(err)
-		}
-		slices.Sort(got.Members)
-		if !reflect.DeepEqual(got.Members, []string{"admin@example.com", "amy@example.com"}) {
-			t.Errorf("members = %v, want the staff and the administrator", got.Members)
-		}
-	})
+	}
+	rec := membersGet(srv.MembersHandler(), "/v1/groups/coordinators/members", digestToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read = %d %s", rec.Code, rec.Body)
+	}
+	var got struct {
+		Members []string `json:"members"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(got.Members)
+	if !reflect.DeepEqual(got.Members, []string{"admin@example.com", "amy@example.com"}) {
+		t.Errorf("members = %v, want the staff and the administrator", got.Members)
+	}
 }
 
 // A staff-only list (prototypes holds enquiries' Administrator role, and
 // BREAKGLASS_REFUSED_GROUPS names insights-admins) is dropped from a
 // stranger's and a member's groups, and kept in a member of staff's. A list
 // that holds only User (planka-users) is kept for everyone.
-func TestRefusedListsStrippedWithAndWithoutAllowList(t *testing.T) {
-	bothWays(t, func(t *testing.T, allowList bool) {
-		srv, _ := staffServer(t, allowList, "")
-		ctx := context.Background()
-		mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignPerson, Ref: "p@elsewhere.org", How: store.AssignedByAdmin})
-		for _, g := range []string{"prototypes", "insights-admins", "planka-users"} {
-			if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+func TestRefusedListsStrippedFromOutsiders(t *testing.T) {
+	srv, _ := staffServer(t, "")
+	ctx := context.Background()
+	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignPerson, Ref: "p@elsewhere.org", How: store.AssignedByAdmin})
+	for _, g := range []string{"prototypes", "insights-admins", "planka-users"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range []string{"amy@example.com", strangerAddr, "p@elsewhere.org"} {
+			if err := srv.store.AddGroupMember(ctx, g, e); err != nil {
 				t.Fatal(err)
 			}
-			for _, e := range []string{"amy@example.com", strangerAddr, "p@elsewhere.org"} {
-				if err := srv.store.AddGroupMember(ctx, g, e); err != nil {
-					t.Fatal(err)
-				}
-			}
 		}
-		mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignList, Ref: "prototypes"})
-		mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignList, Ref: "planka-users"})
-		if got := srv.computeGroups(ctx, "amy@example.com", authz.RoleUser); got != "user,insights-admins,planka-users,prototypes" {
-			t.Errorf("staff groups = %q", got)
+	}
+	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignList, Ref: "prototypes"})
+	mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignList, Ref: "planka-users"})
+	if got := srv.computeGroups(ctx, "amy@example.com", authz.RoleUser); got != "user,insights-admins,planka-users,prototypes" {
+		t.Errorf("staff groups = %q", got)
+	}
+	for _, e := range []string{strangerAddr, "p@elsewhere.org"} {
+		if got := srv.computeGroups(ctx, e, authz.RoleGuest); got != "guest,planka-users" {
+			t.Errorf("%s groups = %q, want guest,planka-users", e, got)
 		}
-		for _, e := range []string{strangerAddr, "p@elsewhere.org"} {
-			if got := srv.computeGroups(ctx, e, authz.RoleGuest); got != "guest,planka-users" {
-				t.Errorf("%s groups = %q, want guest,planka-users", e, got)
-			}
-		}
-	})
+	}
 }
 
 // The Groups page marks a stranger, and not a member of staff, as not staff.
-func TestGroupsPageMarksWithAndWithoutAllowList(t *testing.T) {
-	bothWays(t, func(t *testing.T, allowList bool) {
-		srv, sender := staffServer(t, allowList, "")
-		ctx := context.Background()
-		if err := srv.store.CreateGroup(ctx, "reviewers", ""); err != nil {
+func TestGroupsPageMarksOutsiders(t *testing.T) {
+	srv, sender := staffServer(t, "")
+	ctx := context.Background()
+	if err := srv.store.CreateGroup(ctx, "reviewers", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []string{"amy@example.com", strangerAddr} {
+		if err := srv.store.AddGroupMember(ctx, "reviewers", e); err != nil {
 			t.Fatal(err)
 		}
-		for _, e := range []string{"amy@example.com", strangerAddr} {
-			if err := srv.store.AddGroupMember(ctx, "reviewers", e); err != nil {
-				t.Fatal(err)
-			}
-		}
-		c := newClient(t, srv.Handler())
-		loginAs(t, c, sender, "admin@example.com", nil)
-		body := c.get("/admin/groups/reviewers", nil).Body.String()
-		if n := strings.Count(body, ">not staff</span>"); n != 1 {
-			t.Fatalf("want one mark, got %d", n)
-		}
-		i := strings.Index(body, "<span>"+strangerAddr)
-		if i < 0 || !strings.Contains(body[i:i+400], "not staff") {
-			t.Error("the mark is not in the stranger's row")
-		}
-	})
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	body := c.get("/admin/groups/reviewers", nil).Body.String()
+	if n := strings.Count(body, ">not staff</span>"); n != 1 {
+		t.Fatalf("want one mark, got %d", n)
+	}
+	i := strings.Index(body, "<span>"+strangerAddr)
+	if i < 0 || !strings.Contains(body[i:i+400], "not staff") {
+		t.Error("the mark is not in the stranger's row")
+	}
 }
 
-// Without the allow-list, a member whose domain a domain group takes on
+// A member whose domain a domain group takes on
 // becomes an ordinary session at the next request, and a member of staff
 // whose domain leaves every domain group but who still holds a role becomes
 // a member.
 func TestDomainGroupChangesTheTierAtTheNextRequest(t *testing.T) {
-	srv, sender := staffServer(t, false, "")
+	srv, sender := staffServer(t, "")
 	ctx := context.Background()
 	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignPerson, Ref: "p@elsewhere.org", How: store.AssignedByAdmin})
 	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignPerson, Ref: "amy@example.com", How: store.AssignedByAdmin})
@@ -348,39 +296,33 @@ func TestDomainGroupChangesTheTierAtTheNextRequest(t *testing.T) {
 // that the guest holds no role through it and stays a guest rather than a
 // member.
 func TestGuestStaysAGuestWhenItsDomainBecomesStaff(t *testing.T) {
-	bothWays(t, func(t *testing.T, allowList bool) {
-		srv, sender := staffServer(t, allowList, "")
-		ctx := context.Background()
-		const addr = "visitor@newdomain.org"
-		for _, g := range []string{"insights-admins", "planka-users"} {
-			if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
-				t.Fatal(err)
-			}
-			if err := srv.store.AddGroupMember(ctx, g, addr); err != nil {
-				t.Fatal(err)
-			}
+	srv, sender := staffServer(t, "")
+	ctx := context.Background()
+	const addr = "visitor@newdomain.org"
+	for _, g := range []string{"insights-admins", "planka-users"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
 		}
-		c := newClient(t, srv.Handler())
-		loginGuest(t, c, sender, addr)
-		if allowList {
-			srv.policy = authz.NewPolicy([]string{"example.com", "newdomain.org"}, srv.cfg.AdminEmails)
-		} else {
-			if err := srv.store.AddGroupDomain(ctx, "partner", "newdomain.org"); err != nil {
-				t.Fatal(err)
-			}
-			partnerRole(t, srv, true)
+		if err := srv.store.AddGroupMember(ctx, g, addr); err != nil {
+			t.Fatal(err)
 		}
-		if !srv.known(ctx, addr) {
-			t.Fatal("the address should now be staff")
-		}
-		wantDenied(t, "a guest on a staff-only list", c.get("/verify", groupGuard(t, srv, "insights-admins")))
-		if rec := c.get("/verify", groupGuard(t, srv, "planka-users")); rec.Code != http.StatusOK {
-			t.Errorf("a guest on an ordinary list it is in = %d, want 200", rec.Code)
-		}
-		if id := sessionOf(t, srv, c); id.Kind != session.KindGuest {
-			t.Errorf("session kind = %q, want guest", id.Kind)
-		}
-	})
+	}
+	c := newClient(t, srv.Handler())
+	loginGuest(t, c, sender, addr)
+	if err := srv.store.AddGroupDomain(ctx, "partner", "newdomain.org"); err != nil {
+		t.Fatal(err)
+	}
+	partnerRole(t, srv, true)
+	if !srv.known(ctx, addr) {
+		t.Fatal("the address should now be staff")
+	}
+	wantDenied(t, "a guest on a staff-only list", c.get("/verify", groupGuard(t, srv, "insights-admins")))
+	if rec := c.get("/verify", groupGuard(t, srv, "planka-users")); rec.Code != http.StatusOK {
+		t.Errorf("a guest on an ordinary list it is in = %d, want 200", rec.Code)
+	}
+	if id := sessionOf(t, srv, c); id.Kind != session.KindGuest {
+		t.Errorf("session kind = %q, want guest", id.Kind)
+	}
 }
 
 // A staff-only feed list is dropped from a person's session once
@@ -391,7 +333,7 @@ func TestFeedListStrippedAfterItsDomainGoes(t *testing.T) {
 	var hits atomic.Int32
 	body.Store(`["amy@example.com","bob@example.com"]`)
 	ts := feedEndpoint(t, &body, &hits)
-	srv, _ := staffServer(t, false, ts.URL)
+	srv, _ := staffServer(t, ts.URL)
 	ctx := context.Background()
 	if st, err := srv.syncFeed(ctx, "rch-consultants", "group feed", ""); err != nil || st.Status != store.GroupSyncOK {
 		t.Fatalf("sync = %+v, %v", st, err)
@@ -450,8 +392,7 @@ func TestDomainGroupChangesApplyAtOnce(t *testing.T) {
 	if err := os.WriteFile(path, []byte(testAppRolesWithPaths), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	srv, sender := testServerWith(t, func(c *config.Config) {
-		c.AllowedDomains = nil
+	srv, sender := testServerNoStaff(t, func(c *config.Config) {
 		c.AppRolesFile = path
 		c.AdminEmails = []string{"admin@example.com", "boss@example.com"}
 	})
@@ -518,7 +459,7 @@ func (assignmentsReadFail) ListRoleAssignments(context.Context, string) ([]store
 	return nil, errors.New("disk read error")
 }
 
-// Without the allow-list, while the role data has never been read the
+// While the role data has never been read the
 // gateway keeps every session, answers 503, sends no code, returns 503 from
 // the members endpoint, fails a feed sync and says so at start; once the
 // data can be read, the same session works.
@@ -527,7 +468,7 @@ func TestRoleDataNeverLoaded(t *testing.T) {
 	var hits atomic.Int32
 	body.Store(`["amy@example.com"]`)
 	ts := feedEndpoint(t, &body, &hits)
-	srv, sender := staffServer(t, false, ts.URL)
+	srv, sender := staffServer(t, ts.URL)
 	ctx := context.Background()
 	srv.members = newMembersAPI([]config.MemberReader{{App: "digest", Token: digestToken, Groups: []string{"coordinators"}}})
 	if err := srv.store.CreateGroup(ctx, "coordinators", ""); err != nil {
@@ -603,7 +544,7 @@ func clearNotices(s *captureSender, want int) {
 // A domain-group assignment for an app or role the manifest no longer
 // declares makes nobody staff.
 func TestUndeclaredAssignmentMakesNobodyStaff(t *testing.T) {
-	srv, _ := staffServer(t, false, "")
+	srv, _ := staffServer(t, "")
 	ctx := context.Background()
 	mustAssign(t, srv, store.RoleAssignment{App: "removed", Role: "user", Kind: store.AssignDomainGroup, Ref: "partner"})
 	mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "editor", Kind: store.AssignDomainGroup, Ref: "partner"})

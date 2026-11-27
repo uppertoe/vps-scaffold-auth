@@ -239,6 +239,10 @@ CREATE TABLE IF NOT EXISTS session_cutoffs (
 	key        TEXT PRIMARY KEY,
 	ended_at   INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS releases (
+	name       TEXT PRIMARY KEY,
+	first_run  INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS member_reads (
 	app        TEXT NOT NULL,
 	group_name TEXT NOT NULL,
@@ -1610,6 +1614,21 @@ func (s *SQLite) EndSessionsBefore(ctx context.Context, key string, at time.Time
 		`INSERT INTO session_cutoffs (key, ended_at) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET ended_at = MAX(ended_at, excluded.ended_at)`, key, at.Unix())
 	return err
+}
+
+// FirstRun returns when a release named name first ran on this database,
+// recording now if it never has. A later call, by this release or a later one,
+// returns the first time and changes nothing.
+func (s *SQLite) FirstRun(ctx context.Context, name string, now time.Time) (time.Time, error) {
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO releases (name, first_run) VALUES (?, ?) ON CONFLICT(name) DO NOTHING`, name, now.Unix()); err != nil {
+		return time.Time{}, err
+	}
+	var at int64
+	if err := s.db.QueryRowContext(ctx, `SELECT first_run FROM releases WHERE name = ?`, name).Scan(&at); err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(at, 0), nil
 }
 
 // ListSessionCutoffs returns every recorded cutoff, as Unix seconds by key.

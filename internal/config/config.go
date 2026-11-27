@@ -29,17 +29,14 @@ type Config struct {
 	BrandName       string // product/site name shown in the OTP email (defaults to Domain)
 	LoginNotice     string // optional operator-set instruction line on the sign-in page (plain text, auto-escaped)
 	OTPEmailSubject string // OTP email subject template; {code}/{brand} are substituted
-	AllowedDomains  []string
 	AdminEmails     []string
 	DefaultRedirect string
 
-	// OpenRegistrationHosts lists the hosts (DOMAIN or a subdomain of it) whose
-	// login admits strangers as guests: an OTP-verified address the allow-list
-	// does not permit is signed in with kind "guest" when the post-login
-	// destination is on one of these hosts. Guests reach only app roles held
-	// by guests, so openness is a property of the one app that needs it
-	// rather than of the whole server.
-	OpenRegistrationHosts []string
+	// RetiredSet names the retired settings that are still set
+	// (ALLOWED_EMAIL_DOMAINS, OPEN_REGISTRATION_HOSTS). Neither is read: the
+	// gateway logs a warning for each at start and otherwise ignores it.
+	// Remove this after one release.
+	RetiredSet []string
 
 	// AllowApexRedirect permits the bare server domain as a post-login
 	// destination. Default off: on a subdomain-only deployment the apex
@@ -65,7 +62,7 @@ type Config struct {
 	// AppRolesFile is the scaffold-rendered manifest of each app's roles
 	// ("app<TAB>role<TAB>label<TAB>hosts" lines). A guard that names an app
 	// (X-Auth-App) is decided by role assignments, and only against the apps
-	// and roles listed here. Empty turns the app-roles model off.
+	// and roles listed here. It is required.
 	AppRolesFile string
 
 	// NetworkRanges are named networks a role can be given to, so a request
@@ -222,7 +219,6 @@ func Load() (*Config, error) {
 		BrandName:       strings.TrimSpace(getenv("BRAND_NAME", "")),
 		LoginNotice:     strings.TrimSpace(getenv("LOGIN_NOTICE", "")),
 		OTPEmailSubject: strings.TrimSpace(getenv("OTP_EMAIL_SUBJECT", "")),
-		AllowedDomains:  splitLowerCSV(getenv("ALLOWED_EMAIL_DOMAINS", "")),
 		AdminEmails:     splitLowerCSV(getenv("ADMIN_EMAILS", "")),
 		DefaultRedirect: getenv("DEFAULT_REDIRECT", ""),
 		SessionSecret:   []byte(getenv("SESSION_SECRET", "")),
@@ -244,7 +240,11 @@ func Load() (*Config, error) {
 		BreakGlassPDFBody:      getenv("BREAKGLASS_PDF_BODY", "Scan this code to gain temporary emergency access. Every use is logged and an administrator is notified."),
 	}
 
-	c.OpenRegistrationHosts = splitLowerCSV(getenv("OPEN_REGISTRATION_HOSTS", ""))
+	for _, k := range RetiredSettings {
+		if getenv(k, "") != "" {
+			c.RetiredSet = append(c.RetiredSet, k)
+		}
+	}
 
 	var err error
 	if c.AllowApexRedirect, err = getbool("ALLOW_APEX_REDIRECT", false); err != nil {
@@ -528,27 +528,17 @@ func (c *Config) validate() error {
 	if n := distinctBytes(c.SessionSecret); n < 10 {
 		return fmt.Errorf("SESSION_SECRET looks low-entropy (%d distinct bytes); generate one with: openssl rand -hex 32", n)
 	}
-	if len(c.AllowedDomains) == 0 && len(c.AdminEmails) == 0 {
-		return fmt.Errorf("at least one of ALLOWED_EMAIL_DOMAINS or ADMIN_EMAILS must be set")
+	if len(c.AdminEmails) == 0 {
+		return fmt.Errorf("ADMIN_EMAILS must be set")
+	}
+	if c.AppRolesFile == "" {
+		return fmt.Errorf("APP_ROLES_FILE must be set: staff, members and guests are decided by the app roles")
 	}
 	if c.Domain == "" {
 		return fmt.Errorf("DOMAIN must be set")
 	}
 	if c.PublicURL == "" {
 		return fmt.Errorf("AUTH_PUBLIC_URL must be set")
-	}
-	// Each open host must be a bare hostname within DOMAIN. The host is compared
-	// against the post-login destination, which ValidateRedirect already confines
-	// to DOMAIN, so an out-of-domain entry could never match; refusing it at boot
-	// catches the typo (a URL, a port, a sibling domain) instead of leaving the
-	// operator wondering why registration is still closed.
-	for _, h := range c.OpenRegistrationHosts {
-		if !validHostname(h) {
-			return fmt.Errorf("OPEN_REGISTRATION_HOSTS: %q is not a bare hostname (no scheme, port, path, or wildcard)", h)
-		}
-		if h != c.Domain && !strings.HasSuffix(h, "."+c.Domain) {
-			return fmt.Errorf("OPEN_REGISTRATION_HOSTS: %q is not %s or a subdomain of it", h, c.Domain)
-		}
 	}
 	switch c.EmailBackend {
 	case "log":
@@ -610,25 +600,11 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// validHostname reports whether h is a plain lowercase DNS hostname: dot-
-// separated labels of a-z, 0-9 and hyphen, none empty, none starting or ending
-// with a hyphen. It rejects anything with a scheme, port, path, or "*".
-func validHostname(h string) bool {
-	if h == "" || len(h) > 253 {
-		return false
-	}
-	for _, l := range strings.Split(h, ".") {
-		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
-			return false
-		}
-		for _, r := range l {
-			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
-				return false
-			}
-		}
-	}
-	return true
-}
+// RetiredSettings are the settings this release no longer reads. Staff are
+// the administrators in ADMIN_EMAILS and the addresses at the domains of the
+// domain groups that hold an app role, and guest sign-in is open on the hosts
+// of each app whose User role is held by guests. Remove after one release.
+var RetiredSettings = []string{"ALLOWED_EMAIL_DOMAINS", "OPEN_REGISTRATION_HOSTS"}
 
 // gethexkey decodes an optional hex-encoded key. Empty yields a nil key; a
 // non-empty value must decode to exactly 32 bytes (AES-256).

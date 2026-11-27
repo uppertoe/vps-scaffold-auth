@@ -559,6 +559,34 @@ func TestChain(t *testing.T) {
 		appSees(t, b.get("https://app."+domain+"/", nil))
 	})
 
+	t.Run("a session from before the release that is no longer staff carries over as a guest's", func(t *testing.T) {
+		// As on p.stonn under ALLOWED_EMAIL_DOMAINS=*: a staff session of an
+		// address at no staff domain, begun before this gateway first ran.
+		// It is not signed out: it becomes a guest's, reaching the public app
+		// with the guests' role and nothing else.
+		now := time.Now()
+		m := session.NewManager([]byte(os.Getenv("E2E_SESSION_SECRET")), 10*time.Minute, 3*time.Second, "."+domain, false)
+		old, err := m.EncodeLegacySession(session.Identity{Email: "member.of.public@outside.example", Groups: "user", Iat: now.Unix(), Auth: now.Add(-time.Hour).Unix(), TTL: 600}, now.Add(10*time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := newBrowser(t)
+		u, _ := url.Parse(authHost + "/")
+		b.jar.SetCookies(u, []*http.Cookie{{Name: cookieKey, Value: old, Path: "/", Domain: domain}})
+		h := appSees(t, b.get("https://open."+domain+"/", nil))
+		if h.Get("Remote-User") != "member.of.public@outside.example" || h.Get("Remote-Roles") != "user" {
+			t.Fatalf("the carried-over session reached the public app as %q with %q", h.Get("Remote-User"), h.Get("Remote-Roles"))
+		}
+		for _, host := range []string{"app", "reports", "roles"} {
+			if r := b.get("https://"+host+"."+domain+"/", nil); !strings.HasPrefix(r.location(), authHost+"/denied?") {
+				t.Errorf("the carried-over guest at %s: %d to %q", host, r.status, r.location())
+			}
+		}
+		if r := b.get(authHost+"/sessions", nil); r.status != http.StatusOK {
+			t.Errorf("the guest's Your sessions: %d", r.status)
+		}
+	})
+
 	t.Run("each guard admits and refuses as its rule says", func(t *testing.T) {
 		admitted := map[string]bool{
 			"app": true, "public": true, "mixed": true, "open": true,
@@ -647,7 +675,31 @@ func TestChain(t *testing.T) {
 		}
 	})
 
+	t.Run("a stranger is sent no code where guests hold no role", func(t *testing.T) {
+		// Guests hold no role in Reports, so its host is not open to them: the
+		// stranger sees the ordinary code page and no mail is sent.
+		b := newBrowser(t)
+		before := mailsTo(t, "walker@outside.example")
+		r := b.requestCode(b.startAt("https://reports."+domain+"/"), "walker@outside.example", false)
+		if r.status != http.StatusOK {
+			t.Fatalf("code request on a closed host: %d", r.status)
+		}
+		time.Sleep(time.Second)
+		if mailsTo(t, "walker@outside.example") != before {
+			t.Fatal("a code was mailed to a stranger on a host where guests hold no role")
+		}
+		form := hidden(r.body)
+		form.Set("code", "00000000")
+		if r := b.submit("/verify-code", form); r.status == http.StatusFound {
+			t.Fatalf("a guessed code signed the stranger in: %q", r.location())
+		}
+		if r := b.get("https://reports."+domain+"/", nil); !strings.Contains(r.location(), "/login?") {
+			t.Errorf("the stranger reached reports: %d to %q", r.status, r.location())
+		}
+	})
+
 	t.Run("a guest reaches only the app open to the public", func(t *testing.T) {
+		// Guests hold the public app's User role, so its host is open to them.
 		g := newBrowser(t)
 		g.signIn("https://open."+domain+"/", "stranger@outside.example")
 		h := appSees(t, g.get("https://open."+domain+"/", nil))
