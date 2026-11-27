@@ -2,7 +2,7 @@
 # Overwrite X-Forwarded-For with the true peer address so a client cannot spoof
 # it: the auth service rate-limits per client IP, and Caddy otherwise preserves
 # any inbound X-Forwarded-For (appending the real peer), which a leftmost reader
-# would trust. Caddy faces clients directly here, so {remote_host} is the client.
+# would trust. Caddy faces clients directly here, so the remote host is the client.
 auth.{$DOMAIN} {
 	# The break-glass token rides in the URL path (/break/<token>), and so does
 	# an invitation's (/invite/<token>). Keep those requests out of the access
@@ -200,7 +200,7 @@ auth.{$DOMAIN} {
 # trust Remote-* because only Caddy sets them; this makes that guarantee explicit
 # rather than relying solely on copy_headers' overwrite-on-2xx (which leaves a
 # theoretical gap on non-2xx and is easy to misread). It MUST be imported inside a
-# route {} (as the guards above do) so it runs before forward_auth: Caddy's default
+# route block (as the guards above do) so it runs before forward_auth: Caddy's default
 # directive order otherwise places a bare request_header AFTER forward_auth, which
 # would delete the authoritative value instead. Verified against Caddy 2 with a
 # live forward_auth + whoami harness.
@@ -208,6 +208,10 @@ auth.{$DOMAIN} {
 	request_header -Remote-User
 	request_header -Remote-Email
 	request_header -Remote-Groups
+	# The gateway never sends Remote-Name, but another sign-in service such as
+	# Authelia does, and an app behind it may read it: a client must not be
+	# able to send one past a guard either.
+	request_header -Remote-Name
 	# Every guard strips a client-sent Remote-Roles too, not only the role
 	# guard: an app that reads Remote-Roles must never believe one a client
 	# sent through an older guard.
