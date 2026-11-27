@@ -16,12 +16,7 @@
 </form>
 {{if .Focus}}<div class="focus on"><span>{{.Focus}}</span><a href="/admin/apps{{if .Filter}}?q={{.Filter}}{{end}}">Clear</a></div>
 {{else}}<div class="focus off"><span>Check an address, or click a token, to see which roles it holds.</span></div>{{end}}
-{{if .Apps}}{{template "rolelist" .Apps}}{{else if not .Older}}<div class="focus off"><span>No app matches the filter.</span></div>{{end}}
-{{if .Older}}
-<h2 class="sec" id="older">{{.OlderHead}}</h2>
-<p class="secnote">{{.OlderNote}}</p>
-{{template "olderlist" .Older}}
-{{end}}
+{{if .Apps}}{{template "rolelist" .Apps}}{{else}}<div class="focus off"><span>No app matches the filter.</span></div>{{end}}
 {{with .Key}}
 <div class="rkey">
   <div><span>{{range .Amber}}{{template "token" .}}{{end}}</span><span>Amber tokens admit strangers, or people who have not signed in.</span></div>

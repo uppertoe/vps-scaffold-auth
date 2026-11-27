@@ -53,6 +53,9 @@ type roleState struct {
 	// domainRank orders every domain group's domains the same way, for the
 	// hints a role guard gives.
 	domainRank map[string]int
+	// closed are the lists that hold an app role other than User, which
+	// are closed to outsiders (closedLists).
+	closed map[string]bool
 }
 
 func roleKey(app, role string) string { return app + "\x00" + role }
@@ -141,6 +144,7 @@ func (s *Server) roleData(ctx context.Context) roleState {
 	}
 	st := roleState{assignments: as, domains: domains, cards: cards, invited: invited, invitedRoles: invitedRoles}
 	st.staff, st.staffOrder, st.domainRank = staffFromGroups(groups, domains, as, s.appRoles.Has)
+	st.closed = closedByRoles(as)
 	s.roleCache.state = st
 	s.roleCache.at = now
 	s.roleCache.ok = true
@@ -235,9 +239,9 @@ func (s *Server) roleRequestProblem(r *http.Request) (app, role, problem string)
 	case r.Header.Get("X-Auth-Policy") != "":
 		// Only an older guard sends a policy, and an older guard does not
 		// delete a client's X-Auth-App or X-Auth-Role, so the app and role on
-		// such a request may be the client's own. Every server has retired the
-		// older guards; until their snippets are gone from the servers'
-		// auth.caddy copies, a request that still carries one is refused.
+		// such a request may be the client's own. No server's auth.caddy
+		// defines an older guard any longer; the refusal stays so that one
+		// copied back by mistake fails closed.
 		return app, role, "the guard sends X-Auth-Policy, which only an older guard sends"
 	case !s.appRoles.Has(app, role):
 		return app, role, "not in the app roles manifest"
@@ -319,7 +323,9 @@ func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *sessio
 		s.redirectToDenied(w, r)
 		return
 	}
-	if id.Kind == session.KindGuest {
+	if id.Kind == session.KindGuest || id.Kind == session.KindMember {
+		// A guest or a member is an outsider, so a list that has closed
+		// since the session's groups were worked out is dropped now.
 		id.Groups = s.guestGroupsNow(r.Context(), id)
 	}
 	held := s.heldRoles(r, id, app)
@@ -360,10 +366,12 @@ func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *sessio
 }
 
 // blankIdentity sends each named identity header with an empty value. Apps
-// decide by Remote-Roles, and the gateway sends no groups. A server's copy of
-// auth.caddy may still copy a header the gateway does not send, and Caddy
-// then hands the app its placeholder text, "{http.reverse_proxy.header.…}",
-// rather than nothing; an empty header makes the copy empty too.
+// decide by Remote-Roles, and the gateway sends no groups. A guard that copies
+// a header the gateway does not send hands the app Caddy's placeholder text,
+// "{http.reverse_proxy.header.…}", rather than nothing; an empty header makes
+// the copy empty too. Remote-Groups is still sent empty because one inline
+// guard copies it (markbot's apps/pstonn/pstonn.caddy, November 2026); it can
+// stop once no guard on any server copies it.
 func blankIdentity(w http.ResponseWriter, names ...string) {
 	for _, n := range names {
 		w.Header()[n] = []string{""}
@@ -607,8 +615,8 @@ func (s *Server) logWhoSignsIn(ctx context.Context) {
 // loginRole is the sign-in decision: a known address (knownRole) as staff or
 // an administrator, and also an address that holds an app role, which signs
 // in as a member (and not as a guest, even on an open host). A member is
-// decided by its roles on a role guard, and is admitted by an older guard
-// only where a guest would be (see session.KindMember).
+// decided by its roles, and is an outsider: closed lists are dropped from its
+// groups (see withoutClosedListsForOutsider).
 //
 // While the role data has never been read and only a domain group could
 // admit the address, the answer is RoleDeny, never a guest; the sign-in

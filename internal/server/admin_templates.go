@@ -30,17 +30,13 @@ type adminData struct {
 	Groups []groupView
 	// Groups page: the Organisation name cell of a group without one.
 	NoOrgName string
-	// GroupsText is the Groups pages' wording for the move to roles.
+	// GroupsText is the Groups pages' wording for a group's uses.
 	GroupsText groupsCopy
 	// Group page: the one group shown, and the wording of its name field.
 	Group    *groupView
 	NameText groupNameCopy
-	// Groups page: groups the routes require that do not exist yet, and
-	// whether the route manifest (ROUTE_GROUPS_FILE) was read at all.
-	MissingGroups []missingGroupView
-	RouteGroupsOn bool
-	Codes         []codeView
-	Code          codeView
+	Codes    []codeView
+	Code     codeView
 	// Codes page: the groups offered as a card's target, refused ones marked.
 	TargetOptions []targetOptionView
 	Events        []store.BreakGlassEvent
@@ -132,10 +128,9 @@ type groupView struct {
 	Name    string
 	Label   string
 	Members []memberView
-	// Hosts whose routes require this group, from the route manifest.
-	Hosts []string
-	// Unused: the manifest was read, and nothing outside the group's roles
-	// uses it (see referencedGroups). NotUsed adds that it holds no role.
+	// Unused: nothing outside the group's roles uses it: no break-glass
+	// card targets it, no group includes it, and no setting or manifest
+	// names it (see referencedGroups). NotUsed adds that it holds no role.
 	Unused bool
 	// Includes are the groups whose members this group also admits;
 	// IncludedIn the groups that admit this group's members. IncludeOptions
@@ -171,10 +166,9 @@ type groupView struct {
 	IncludeRefs, IncludedInRefs, OptionRefs []groupRef
 	// HoldsText says that a group holding roles cannot be deleted.
 	HoldsText string
-	// Uses are the group's uses other than its roles: the older guards that
-	// name it, the groups that include it and the apps it is fed to.
-	// NotUsed is set when the route manifest was read and the group has no
-	// use at all.
+	// Uses are the group's uses other than its roles: the groups that
+	// include it and the apps it is fed to. NotUsed is set when the group
+	// has no use at all.
 	Uses    []groupUse
 	NotUsed bool
 	// ConfirmDomain is the domain whose removal is being confirmed
@@ -217,15 +211,12 @@ type feedRetryView struct {
 }
 
 // overviewView is the admin home page: counts, and the items that need an
-// administrator's attention. Break-glass target groups are left out of
-// MissingGroups, because a card needs no group to exist.
+// administrator's attention.
 type overviewView struct {
 	Apps              int // apps in the app-roles manifest
 	Groups            int
 	Members           int
 	ActiveCards       int
-	RouteGroupsOn     bool
-	MissingGroups     []string
 	UnusedGroups      []string
 	TOTPEnabled       bool
 	AdminsWithoutTOTP []string
@@ -248,16 +239,7 @@ type overviewView struct {
 
 // Attention reports whether anything on the overview needs action.
 func (o *overviewView) Attention() bool {
-	return len(o.Lines) > 0 || len(o.MissingGroups) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0 || len(o.FeedProblems) > 0 || len(o.FeedIncludes) > 0
-}
-
-// missingGroupView is a group a route requires that has not been created.
-// CardTarget marks a group a break-glass card targets, which needs no members
-// to work.
-type missingGroupView struct {
-	Name       string
-	Hosts      []string
-	CardTarget bool
+	return len(o.Lines) > 0 || len(o.UnusedGroups) > 0 || len(o.AdminsWithoutTOTP) > 0 || len(o.FeedProblems) > 0 || len(o.FeedIncludes) > 0
 }
 
 // memberView is one row of a group's member list. Permitted reports whether the

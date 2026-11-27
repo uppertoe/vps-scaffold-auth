@@ -28,7 +28,6 @@ const (
 	iconPerson  = "k-person"
 	iconCard    = "k-card"
 	iconLock    = "k-lock"
-	iconNone    = "k-none"
 	iconApp     = "k-app"
 )
 
@@ -488,11 +487,6 @@ type appBlockView struct {
 	OpenTitle         string
 	Rows              []roleRowView
 	Editable          bool
-	// PendingTag marks a pending app, whose site is still on an older
-	// guard, and PendingTitle says what that means; Older are the older
-	// guard's rows, drawn after the roles.
-	PendingTag, PendingTitle string
-	Older                    []roleRowView
 }
 
 // rowFocus decides how a row is marked while something is checked.

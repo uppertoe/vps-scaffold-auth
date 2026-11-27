@@ -643,16 +643,14 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ov := &overviewView{Apps: len(s.appRoles.Apps), Groups: len(groups), TOTPEnabled: s.cfg.TOTPEnabled}
-	cardTargets := map[string]bool{}
 	for _, c := range codes {
-		cardTargets[normalizeGroupName(c.TargetGroup)] = true
 		if c.Status == "active" {
 			ov.ActiveCards++
 		}
 	}
 	// The groups as the Groups pages see them, so that a group the Overview
 	// calls unused is one the Groups pages mark "Not used by any app".
-	view, missing, routeGroupsOn, err := s.groupViews(r)
+	view, err := s.groupViews(r)
 	if err == nil {
 		err = s.fillGroupRoles(r, view)
 	}
@@ -660,7 +658,6 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
-	ov.RouteGroupsOn = routeGroupsOn
 	for _, g := range view {
 		if g.NotYetCreated {
 			continue
@@ -668,11 +665,6 @@ func (s *Server) handleAdminHome(w http.ResponseWriter, r *http.Request) {
 		ov.Members += len(g.Members)
 		if g.NotUsed {
 			ov.UnusedGroups = append(ov.UnusedGroups, g.Name)
-		}
-	}
-	for _, m := range missing {
-		if !cardTargets[m.Name] {
-			ov.MissingGroups = append(ov.MissingGroups, m.Name)
 		}
 	}
 	includes, err := s.store.ListGroupIncludes(ctx)
@@ -749,7 +741,7 @@ func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
 // handleAdminGroups lists the groups. A link from before groups had their own
 // pages (?open=name) goes to that group's page.
 func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
-	view, missing, routeGroupsOn, err := s.groupViews(r)
+	view, err := s.groupViews(r)
 	if err == nil {
 		err = s.fillGroupRoles(r, view)
 	}
@@ -767,7 +759,6 @@ func (s *Server) handleAdminGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	s.renderAdmin(w, r, http.StatusOK, "admin_groups", adminData{
 		Title: "Groups", Groups: view, NoOrgName: msgNoOrgName, GroupsText: groupsText,
-		MissingGroups: missing, RouteGroupsOn: routeGroupsOn,
 	})
 }
 
@@ -777,31 +768,29 @@ func (s *Server) handleAdminGroup(w http.ResponseWriter, r *http.Request) {
 	s.renderGroup(w, r, http.StatusOK, normalizeGroupName(r.PathValue("name")), "")
 }
 
-// groupViews builds every group's view, the groups the routes require that
-// do not exist, and whether the route manifest was read.
-func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, bool, error) {
+// groupViews builds every group's view.
+func (s *Server) groupViews(r *http.Request) ([]groupView, error) {
 	groups, err := s.store.ListGroups(r.Context())
 	if err != nil {
-		return nil, nil, false, err
+		return nil, err
 	}
-	routeGroups, routeGroupsOn := s.routeGroups()
 	cardTargets := map[string]bool{}
-	if routeGroupsOn {
-		codes, err := s.store.ListBreakGlassCodes(r.Context())
-		if err != nil {
-			return nil, nil, false, err
-		}
-		for _, c := range codes {
+	codes, err := s.store.ListBreakGlassCodes(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range codes {
+		if c.TargetGroup != "" {
 			cardTargets[normalizeGroupName(c.TargetGroup)] = true
 		}
 	}
 	includes, err := s.store.ListGroupIncludes(r.Context())
 	if err != nil {
-		return nil, nil, false, err
+		return nil, err
 	}
 	syncStates, err := s.store.ListGroupSyncStates(r.Context())
 	if err != nil {
-		return nil, nil, false, err
+		return nil, err
 	}
 	includedIn := map[string][]string{}
 	for g, incs := range includes {
@@ -816,7 +805,7 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 		existing[g.Name] = true
 		members, err := s.store.ListGroupMembers(r.Context(), g.Name)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, err
 		}
 		var addedFrom map[string]string
 		if _, fed := s.feedFor(g.Name); fed {
@@ -827,7 +816,6 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 			ok := s.known(r.Context(), m)
 			mv = append(mv, memberView{Email: m, Permitted: ok, Guest: !ok, AddedFrom: addedFrom[m]})
 		}
-		hosts := routeGroups[g.Name]
 		inc := map[string]bool{}
 		for _, i := range includes[g.Name] {
 			inc[i] = true
@@ -842,8 +830,7 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 		view = append(view, groupView{
 			Feed: s.feedViewFor(g.Name, syncStates),
 			Name: g.Name, Label: g.Label, Members: mv,
-			Hosts:          hosts,
-			Unused:         routeGroupsOn && len(hosts) == 0 && !cardTargets[g.Name] && len(includedIn[g.Name]) == 0 && !referenced[g.Name],
+			Unused:         !cardTargets[g.Name] && len(includedIn[g.Name]) == 0 && !referenced[g.Name],
 			Includes:       includes[g.Name],
 			IncludedIn:     includedIn[g.Name],
 			IncludeOptions: options,
@@ -864,26 +851,17 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, []missingGroupView, b
 	for _, g := range unsynced {
 		view = append(view, groupView{
 			Feed: s.feedViewFor(g, syncStates), NotYetCreated: true,
-			Name: g, Members: []memberView{}, Hosts: routeGroups[g],
+			Name: g, Members: []memberView{},
 		})
-		existing[g] = true
 	}
-	missing := make([]missingGroupView, 0)
-	for name, hosts := range routeGroups {
-		if !existing[name] {
-			missing = append(missing, missingGroupView{Name: name, Hosts: hosts, CardTarget: cardTargets[name]})
-		}
-	}
-	sort.Slice(missing, func(i, j int) bool { return missing[i].Name < missing[j].Name })
-	return view, missing, routeGroupsOn, nil
+	return view, nil
 }
 
-// referencedGroups are the groups named by a setting or manifest other than
-// the route manifest and the role assignments: a feed fills it
-// (GROUP_FEEDS), an app reads its members (the member-readers manifest or
-// MEMBER_READERS), BREAKGLASS_REFUSED_GROUPS names it, or a site's rule in
-// ROUTE_ACCESS_FILE names it. Such a group is in use, so it is never offered
-// for deletion as unused.
+// referencedGroups are the groups named by a setting or manifest rather than
+// by the role assignments: a feed fills it (GROUP_FEEDS), an app reads its
+// members (the member-readers manifest or MEMBER_READERS), or the deprecated
+// BREAKGLASS_REFUSED_GROUPS names it. Such a group is in use, so it is never
+// offered for deletion as unused.
 func (s *Server) referencedGroups() map[string]bool {
 	out := map[string]bool{}
 	for g := range s.feeds.feeds {
@@ -896,15 +874,6 @@ func (s *Server) referencedGroups() map[string]bool {
 	}
 	for _, g := range s.cfg.BreakGlassRefusedGroups {
 		out[normalizeGroupName(g)] = true
-	}
-	for _, site := range s.readRouteAccess() {
-		for _, rule := range site.Rules {
-			if rule.Kind == "groups" {
-				for _, g := range rule.Values {
-					out[normalizeGroupName(g)] = true
-				}
-			}
-		}
 	}
 	return out
 }

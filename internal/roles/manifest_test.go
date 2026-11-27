@@ -139,42 +139,20 @@ func TestSampleManifestParsesCleanly(t *testing.T) {
 	}
 }
 
-// A site still on an older guard declares its roles with @pending and no
-// paths. The app is in the manifest as any other, marked pending.
-func TestManifestPending(t *testing.T) {
+// The scaffold no longer writes @pending. A manifest from an older scaffold
+// that still carries the line is read as if it were absent: the keyword is
+// logged as unknown, and the app is read as any other.
+func TestManifestPendingIsUnknown(t *testing.T) {
 	m, logs := parseLogged(t,
 		"planka\tuser\tUser\tplanka.{$DOMAIN}",
-		"planka\towner\tOwner\tplanka.{$DOMAIN}",
-		"@label\tplanka\tPlanka",
-		"@source\tplanka\tapps/planka/planka.caddy",
 		"@pending\tplanka",
-		"@pending\tplanka",          // twice
-		"@pending\tghost",           // undeclared app
-		"@pending\tplanka\textra",   // too many fields
-		"@card-page\tplanka\t/x\tX", // no path decides it: refused
-		"enq\tuser\tUser\tenq.{$DOMAIN}",
-		"@path\tenq\t*\tuser",
-		"both\tuser\tUser\tboth.{$DOMAIN}",
-		"@pending\tboth",
-		"@path\tboth\t*\tuser", // a path line means a guard names it
+		"@path\tplanka\t*\tuser",
 	)
 	p := m.Apps["planka"]
-	if p == nil || !p.Pending || p.Label != "Planka" || len(p.Paths) != 0 || len(p.CardPages) != 0 {
+	if p == nil || len(p.Paths) != 1 || !reflect.DeepEqual(p.Hosts, []string{"planka.example.org"}) {
 		t.Fatalf("planka = %+v", p)
 	}
-	if !m.Has("planka", "owner") || !reflect.DeepEqual(p.Hosts, []string{"planka.example.org"}) {
-		t.Errorf("a pending app's roles and hosts are read as a live app's: %+v", p)
-	}
-	if m.Apps["enq"].Pending {
-		t.Error("an app without @pending is pending")
-	}
-	if b := m.Apps["both"]; b == nil || b.Pending {
-		t.Errorf("an app with paths is still pending: %+v", b)
-	}
-	joined := strings.Join(logs, "\n")
-	for _, want := range []string{"pending twice", `names app "ghost"`, "@pending wants 2", "card page \"/x\"", "both is marked pending but declares paths"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("no log containing %q in:\n%s", want, joined)
-		}
+	if joined := strings.Join(logs, "\n"); !strings.Contains(joined, `unknown keyword "@pending"`) {
+		t.Errorf("@pending is not logged as unknown:\n%s", joined)
 	}
 }

@@ -90,21 +90,20 @@ not reveal who holds a role.
 The allow-list predates app roles, and the department's server still sets it
 to the hospital's and the institute's domains. The domain groups for RCH and
 MCRI staff carry the same two domains and each holds a role, and every tool on
-the department's server now uses app roles, so removing the allow-list there
-would change no one's sign-in. A server may remove its allow-list only once
-none of its tools uses an older guard, because an older guard admits staff, and
-a domain group holding a role in any tool would then open such a tool to
-everyone at its domains. On a server where some tools still use the older
-guards, those guards admit a member only where they would admit a guest.
+the department's server uses app roles, so removing the allow-list there
+would change no one's sign-in.
 
 The same test of who is staff decides which addresses a roster feed keeps,
 which members a tool reading a list is given, and which members the Groups
-page marks as not staff. A person who is not staff is never counted as a
-member of a list that the server's settings close to outsiders, and the
-gateway drops such a list from that person's session. On the department's server these are the
-administrators lists of the airway database, the enquiries page, the project
-boards and the roster insights, and the prototypes list. An administrator can
-still give such a person the role by name.
+page marks as not staff. A list that holds any role other than User in some
+tool, such as an Administrator or Board owner role, is closed to people who
+are not staff. The gateway does not add such a person to a closed list, never
+counts them as its member, and drops the list from their session at their next
+request. A list closes as soon as it is given such a role. On the department's
+server the closed lists are the administrators lists of the airway database,
+the enquiries page, the project boards and the roster insights, and the
+prototypes list. An administrator can still give such a person the role by
+name.
 
 ## Signing in for a domain
 

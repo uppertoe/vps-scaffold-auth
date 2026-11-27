@@ -33,9 +33,7 @@ passkey. The second step is asked for only at the admin door, which an
 administrator reaches by opening the gateway's admin pages. An
 administrator's roles in the apps do not depend on the second step: an
 administrator who has been given an app's Administrator role holds it from
-the moment of signing in, as anyone else given that role does. The `admin`
-entry in the older groups header still reaches an app only after the second
-step.
+the moment of signing in, as anyone else given that role does.
 
 The second step lasts twelve hours, however long the session lasts. After
 twelve hours, the admin door asks again; with a passkey, that is a single

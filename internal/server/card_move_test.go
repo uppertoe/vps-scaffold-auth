@@ -25,11 +25,11 @@ const testMoveLive = testCardManifest +
 	"neverdrugs\tadmin\tAdministrator\tneverdrugs.{$DOMAIN}\n" +
 	"@path\tneverdrugs\t/admin/*\tadmin\n"
 
-// NeverDrugs still on its older guard; Caffeine live.
-const testMovePending = "neverdrugs\tuser\tUser\tneverdrugs.{$DOMAIN}\n" +
+// NeverDrugs with no card pages yet; Caffeine as before.
+const testMoveNoPages = "neverdrugs\tuser\tUser\tneverdrugs.{$DOMAIN}\n" +
 	"neverdrugs\tadmin\tAdministrator\tneverdrugs.{$DOMAIN}\n" +
 	"@label\tneverdrugs\tNeverDrugs\n" +
-	"@pending\tneverdrugs\n" +
+	"@path\tneverdrugs\t*\tuser\n" +
 	"caffeine\tuser\tUser\tcaffeine.{$DOMAIN}\n" +
 	"@label\tcaffeine\tCaffeine\n" +
 	"@path\tcaffeine\t*\tuser\n"
@@ -221,23 +221,22 @@ func TestMoveCardCSRFAndAdminOnly(t *testing.T) {
 	}
 }
 
-// While NeverDrugs is still on its older guard, the move is refused: a moved
-// card's scan carries no group, so the older guard would refuse it. The card
-// keeps working there. Once NeverDrugs moves to roles, the move is offered
-// and the moved card is admitted by the role guard.
+// While NeverDrugs's snippet names no card page, the move to it is refused
+// and the card keeps its group. Once the snippet names card pages, the move
+// is offered and the moved card is admitted by the role guard.
 func TestMoveCardOnlyOnceTheAppIsLive(t *testing.T) {
 	for _, order := range []string{"move then switch", "switch then move"} {
 		t.Run(order, func(t *testing.T) {
-			srv, _, c, id, token := moveAdmin(t, testMovePending)
+			srv, _, c, id, token := moveAdmin(t, testMoveNoPages)
 			sid := strconv.FormatInt(id, 10)
 			if order == "move then switch" {
 				body := html.UnescapeString(c.get("/admin/break/"+sid+"?confirm=move", nil).Body.String())
-				if !strings.Contains(body, fmt.Sprintf(msgMoveAppPending, "NeverDrugs")) {
-					t.Errorf("the pending app is offered:\n%s", body)
+				if !strings.Contains(body, msgCardNoPages) {
+					t.Errorf("an app without card pages is offered:\n%s", body)
 				}
 				rec := postMove(t, c, id, "neverdrugs", "/")
-				if rec.Code != http.StatusBadRequest || !strings.Contains(html.UnescapeString(rec.Body.String()), fmt.Sprintf(msgMoveRefusedPending, "NeverDrugs")) {
-					t.Fatalf("move to a pending app = %d", rec.Code)
+				if rec.Code != http.StatusBadRequest || !strings.Contains(html.UnescapeString(rec.Body.String()), msgCardNoPage) {
+					t.Fatalf("move to an app without card pages = %d", rec.Code)
 				}
 				if got := getCard(t, srv, id); got.App != "" || got.TargetGroup != "bg_nd" {
 					t.Fatalf("card = %+v", got)

@@ -60,7 +60,7 @@
 <dl class="facts">
   <div><dt>Members</dt><dd>{{if .NotYetCreated}}<span class="pill tag" title="The feed has not answered yet. The group is created by its first successful sync.">not created yet</span>{{else}}{{len .Members}}{{end}}</dd></div>
   <div><dt>Membership</dt><dd>{{if .Feed}}Filled from a feed{{else}}Managed here{{end}}</dd></div>
-  <div><dt>Used by</dt>{{if $.RolesOn}}{{if or .UsedBy .Uses}}<dd>{{if .UsedBy}}<div>{{.UsedBy}}</div>{{end}}{{range .Uses}}<div>{{if .Href}}<a href="{{.Href}}">{{.Label}}</a>{{else}}{{.Label}}{{end}}</div>{{end}}</dd>{{else if .NotUsed}}<dd><span class="pill tag" title="{{$.GroupsText.NotUsedTitle}}">Not used by any app</span></dd>{{else}}<dd class="none">No roles</dd>{{end}}{{else if .Hosts}}<dd>{{range $i, $h := .Hosts}}{{if $i}}<br>{{end}}{{$h}}{{end}}</dd>{{else if .Unused}}<dd><span class="pill tag" title="{{$.GroupsText.NotUsedTitle}}">Not used by any app</span></dd>{{else}}<dd class="none">No app</dd>{{end}}</div>
+  <div><dt>Used by</dt>{{if or .UsedBy .Uses}}<dd>{{if .UsedBy}}<div>{{.UsedBy}}</div>{{end}}{{range .Uses}}<div>{{if .Href}}<a href="{{.Href}}">{{.Label}}</a>{{else}}{{.Label}}{{end}}</div>{{end}}</dd>{{else if .NotUsed}}<dd><span class="pill tag" title="{{$.GroupsText.NotUsedTitle}}">Not used by any app</span></dd>{{else}}<dd class="none">No roles</dd>{{end}}</div>
   <div><dt>Also admitted by</dt>{{if .IncludedInRefs}}<dd>{{range $i, $g := .IncludedInRefs}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g.Name}}">{{$g.Label}}</a>{{end}}</dd>{{else}}<dd class="none">No other group</dd>{{end}}</div>
 </dl>
 {{end}}

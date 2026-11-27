@@ -51,7 +51,7 @@ func Honoured(a store.RoleAssignment) bool {
 // Held returns the roles subject holds in app, sorted, from that app's
 // assignments (assignments for other apps are ignored).
 //
-// The rules, which keep the old guards' invariants:
+// The rules:
 //   - a network assignment admits anyone inside the network, signed in or not,
 //     to the user role only, as a guests assignment does;
 //   - a request with no session holds nothing else;

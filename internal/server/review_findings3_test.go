@@ -5,33 +5,35 @@ package server
 import (
 	"context"
 	"net/http"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
+	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
-// P8: a guest keeps a group that becomes an app role after sign-in, until
-// the next scheduled renewal; a routes change is not a membership change.
-func TestReviewGuestKeepsGroupThatBecomesAppRole(t *testing.T) {
-	srv, sender := appRoleServer(t, func(c *config.Config) {
+// P8: a guest keeps a list that closes after sign-in, until the next
+// scheduled renewal; a role change is not a membership change. The list is
+// dropped at the guest's next request instead.
+func TestReviewOutsiderLosesAListThatCloses(t *testing.T) {
+	srv, sender := testServerWith(t, func(c *config.Config) {
 		c.OpenRegistrationHosts = []string{"apply.example.com"}
 	})
 	ctx := context.Background()
 	_ = srv.store.CreateGroup(ctx, "reviewers", "")
 	_, _ = srv.store.AddGroupMembers(ctx, "reviewers", []string{strangerAddr})
+	guard := groupGuard(t, srv, "reviewers")
 	g := newClient(t, srv.Handler())
 	loginGuest(t, g, sender, strangerAddr)
-	t.Logf("guest groups at sign-in: %q", sessionOf(t, srv, g).Groups)
-	b, _ := os.ReadFile(srv.cfg.RouteAccessFile)
-	_ = os.WriteFile(srv.cfg.RouteAccessFile, append(b, []byte("rev.{$DOMAIN}\tgroups\treviewers admin\n")...), 0o600)
-	if !srv.appRoleGroups()["reviewers"] {
-		t.Fatal("reviewers not an app role after the routes change")
+	if rec := g.get("/verify", guard); rec.Code != http.StatusOK {
+		t.Fatalf("guest on an open list = %d, want 200", rec.Code)
 	}
-	rec := g.get("/verify", groupGuard(t, srv, "reviewers"))
-	t.Logf("after routes change: %d groups=%q", rec.Code, sessionOf(t, srv, g).Groups)
-	if rec.Code == http.StatusOK && strings.Contains(sessionOf(t, srv, g).Groups, "reviewers") {
-		t.Errorf("guest still carries 'reviewers' after it became an app role")
+	mustAssign(t, srv, store.RoleAssignment{App: appForGroup("reviewers"), Role: "admin", Kind: store.AssignList, Ref: "reviewers"})
+	if closed, _ := srv.closedLists(ctx); !closed["reviewers"] {
+		t.Fatal("reviewers is not closed once it holds Administrator")
+	}
+	// The member's only role came through reviewers, so the refusal ends
+	// the session as well.
+	if rec := g.get("/verify", guard); rec.Code == http.StatusOK {
+		t.Errorf("guest still reaches the app through reviewers after it closed")
 	}
 }

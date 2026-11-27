@@ -134,7 +134,7 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 		v.LegacyN = msgLegacyNoteNoRoles
 	}
 	groups := map[string]*cardAppGroup{}
-	refused := s.refusedTargets()
+	refused := s.refusedTargets(ctx)
 	sortCards(codes)
 	v.Attention = cardLines(codes, stats)
 	for _, c := range codes {
@@ -511,7 +511,7 @@ func (s *Server) renderNewCard(w http.ResponseWriter, r *http.Request, status in
 		for _, g := range groups {
 			names = append(names, g.Name)
 		}
-		v.Targets = s.targetOptions(names)
+		v.Targets = s.targetOptions(ctx, names)
 	}
 	for _, d := range designs {
 		v.Designs = append(v.Designs, designChoice{ID: d.ID, Name: d.Name, Size: d.Size, Caption: d.Size + ", " + sizeText(d.Size),
@@ -676,7 +676,7 @@ func (s *Server) createGroupCard(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if reason, refused := s.targetRefusal(group); refused {
+	if reason, refused := s.targetRefusal(r.Context(), group); refused {
 		msg := "A break-glass code cannot target \"" + group + "\", because an application reads that group as one of its own roles and a card would admit whoever carries it in that role."
 		if reason == refusedFeed {
 			msg = "A break-glass code cannot target \"" + group + "\", because its members come from a feed and a card would admit whoever carries it alongside them."

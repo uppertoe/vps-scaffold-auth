@@ -6,7 +6,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -72,36 +71,34 @@ func TestReviewDoorUpgradesPasskeyOfPlantedSession(t *testing.T) {
 	}
 }
 
-// P4: the guest filter fails open when the manifest cannot be read.
-func TestReviewGuestFilterFailsOpenOnUnreadableManifest(t *testing.T) {
-	srv, sender := appRoleServer(t, func(c *config.Config) {
+// P4: the guest filter fails closed while the role data cannot be read: an
+// outsider keeps none of the lists, and keeps the leading guest role.
+func TestReviewGuestFilterFailsClosedWhileRolesUnread(t *testing.T) {
+	srv, _ := closedListServer(t, func(c *config.Config) {
 		c.OpenRegistrationHosts = []string{"apply.example.com"}
 	})
 	ctx := context.Background()
-	for _, g := range []string{"prototypes", "collaborators"} {
-		_ = srv.store.CreateGroup(ctx, g, "")
-	}
+	_ = srv.store.CreateGroup(ctx, "collaborators", "")
 	_, _ = srv.store.AddGroupMembers(ctx, "collaborators", []string{strangerAddr})
+	_, _ = srv.store.AddGroupMembers(ctx, "planka-users", []string{strangerAddr})
 	_ = srv.store.AddGroupInclude(ctx, "prototypes", "collaborators")
-	if !srv.appRoleGroups()["prototypes"] {
-		t.Skip("prototypes is not an app role in the fixture")
+	good := srv.store
+	srv.store = assignmentsReadFail{good}
+	srv.roleCache.mu.Lock()
+	srv.roleCache.ok, srv.roleCache.have, srv.roleCache.state = false, false, roleState{}
+	srv.roleCache.mu.Unlock()
+	if _, loaded := srv.closedLists(ctx); loaded {
+		t.Fatal("the role data reads as loaded")
 	}
-	_ = os.Remove(srv.cfg.RouteGroupsFile)
-	_ = os.Remove(srv.cfg.RouteAccessFile)
-	g := newClient(t, srv.Handler())
-	loginGuest(t, g, sender, strangerAddr)
-	id := sessionOf(t, srv, g)
-	t.Logf("guest groups with manifests unreadable: %q", id.Groups)
-	if strings.Contains(id.Groups, "prototypes") {
-		t.Errorf("guest holds app role 'prototypes' while the manifests cannot be read")
+	got := srv.computeGroups(ctx, strangerAddr, "guest")
+	t.Logf("guest groups with the role data unreadable: %q", got)
+	if got != "guest" {
+		t.Errorf("guest groups = %q, want the leading guest role alone", got)
 	}
-	if !strings.HasPrefix(id.Groups, "guest") {
-		t.Errorf("guest groups = %q: the leading guest role was dropped", id.Groups)
-	}
-	// The per-request filter keeps the leading guest role that apps read.
-	rec := g.get("/verify", anyGuard(t, srv))
-	if rec.Code != http.StatusOK || !strings.HasPrefix(sessionOf(t, srv, g).Groups, "guest") {
-		t.Errorf("guest at an open app = %d groups=%q, want the leading guest role", rec.Code, sessionOf(t, srv, g).Groups)
+	srv.store = good
+	srv.forgetRoles()
+	if got := srv.computeGroups(ctx, strangerAddr, "guest"); got != "guest,collaborators,planka-users" {
+		t.Errorf("guest groups once the data can be read = %q", got)
 	}
 }
 
@@ -122,43 +119,5 @@ func TestReviewBreakGlassChargesTwice(t *testing.T) {
 	t.Logf("second person, same IP, limit 2: scan = %d", rec.Code)
 	if rec.Code == http.StatusTooManyRequests {
 		t.Errorf("one use spends two limiter tokens")
-	}
-}
-
-// P1: an administrator's app-level admin roles (a DB group an app reads as
-// its administrator) do not ride on the email code alone: they are held only
-// after the admin second step.
-func TestReviewAppAdminRoleWithoutSecondStep(t *testing.T) {
-	srv, sender := appRoleServer(t, nil)
-	srv.cfg.TOTPEnabled = true
-	secret := provisionTOTP(t, srv, "admin@example.com")
-	ctx := context.Background()
-	if err := srv.store.CreateGroup(ctx, "airdb_admin", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := srv.store.AddGroupMember(ctx, "airdb_admin", "admin@example.com"); err != nil {
-		t.Fatal(err)
-	}
-	c := newClient(t, srv.Handler())
-	loginAs(t, c, sender, "admin@example.com", nil) // inbox only
-	guard := groupGuard(t, srv, "airdb_admin")
-	rec := c.get("/verify", guard)
-	if rec.Code == http.StatusOK || strings.Contains(sessionOf(t, srv, c).Groups, "airdb_admin") {
-		t.Errorf("inbox-only sign-in of an administrator reaches the app's admin role: %d groups=%q", rec.Code, sessionOf(t, srv, c).Groups)
-	}
-	// After the door, the role is held.
-	page := c.get("/totp", nil).Body.String()
-	c.postForm("/totp", url.Values{"code": {totpNow(t, secret, time.Now())}, "csrf": {extractCSRF(t, page)}})
-	if rec := c.get("/verify", guard); rec.Code != http.StatusOK || !strings.Contains(sessionOf(t, srv, c).Groups, "airdb_admin") {
-		t.Errorf("after the door: %d groups=%q, want airdb_admin", rec.Code, sessionOf(t, srv, c).Groups)
-	}
-	// Staff in the same group are unaffected: they have no second factor.
-	if err := srv.store.AddGroupMember(ctx, "airdb_admin", "staff@example.com"); err != nil {
-		t.Fatal(err)
-	}
-	st := newClient(t, srv.Handler())
-	loginAs(t, st, sender, "staff@example.com", nil)
-	if rec := st.get("/verify", guard); rec.Code != http.StatusOK {
-		t.Errorf("staff member of airdb_admin = %d, want 200", rec.Code)
 	}
 }

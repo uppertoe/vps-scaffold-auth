@@ -42,15 +42,11 @@ func staffServer(t *testing.T, allowList bool, feedURL string) (*Server, *captur
 		return p
 	}
 	rolesFile := write("app-roles.tsv", testAppRoles)
-	groups := write("route-groups.tsv", appRoleRouteGroups)
-	access := write("route-access.tsv", appRoleRouteAccess)
 	srv, sender := testServerWith(t, func(c *config.Config) {
 		if !allowList {
 			c.AllowedDomains = nil
 		}
 		c.AppRolesFile = rolesFile
-		c.RouteGroupsFile = groups
-		c.RouteAccessFile = access
 		c.BreakGlassRefusedGroups = []string{"insights-admins", "rch-consultants"}
 		c.OpenRegistrationHosts = []string{"apply.example.com"}
 		if feedURL != "" {
@@ -252,8 +248,10 @@ func TestMembersEndpointWithAndWithoutAllowList(t *testing.T) {
 	})
 }
 
-// A list that the settings or a manifest close to outsiders is dropped from
-// a stranger's and a member's groups, and kept in a member of staff's.
+// A closed list (prototypes holds enquiries' Administrator role, and
+// BREAKGLASS_REFUSED_GROUPS names insights-admins) is dropped from a
+// stranger's and a member's groups, and kept in a member of staff's. A list
+// that holds only User (planka-users) is kept for everyone.
 func TestRefusedListsStrippedWithAndWithoutAllowList(t *testing.T) {
 	bothWays(t, func(t *testing.T, allowList bool) {
 		srv, _ := staffServer(t, allowList, "")
@@ -269,6 +267,8 @@ func TestRefusedListsStrippedWithAndWithoutAllowList(t *testing.T) {
 				}
 			}
 		}
+		mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignList, Ref: "prototypes"})
+		mustAssign(t, srv, store.RoleAssignment{App: "caffeine", Role: "user", Kind: store.AssignList, Ref: "planka-users"})
 		if got := srv.computeGroups(ctx, "amy@example.com", authz.RoleUser); got != "user,insights-admins,planka-users,prototypes" {
 			t.Errorf("staff groups = %q", got)
 		}
@@ -344,13 +344,15 @@ func TestDomainGroupChangesTheTierAtTheNextRequest(t *testing.T) {
 
 // A guest session stays a stranger's: when the guest's domain later becomes
 // a staff domain, the session still loses the lists closed to outsiders until its person
-// signs in again.
+// signs in again. insights-admins is closed by BREAKGLASS_REFUSED_GROUPS, so
+// that the guest holds no role through it and stays a guest rather than a
+// member.
 func TestGuestStaysAGuestWhenItsDomainBecomesStaff(t *testing.T) {
 	bothWays(t, func(t *testing.T, allowList bool) {
 		srv, sender := staffServer(t, allowList, "")
 		ctx := context.Background()
 		const addr = "visitor@newdomain.org"
-		for _, g := range []string{"prototypes", "planka-users"} {
+		for _, g := range []string{"insights-admins", "planka-users"} {
 			if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
 				t.Fatal(err)
 			}
@@ -371,7 +373,7 @@ func TestGuestStaysAGuestWhenItsDomainBecomesStaff(t *testing.T) {
 		if !srv.known(ctx, addr) {
 			t.Fatal("the address should now be staff")
 		}
-		wantDenied(t, "a guest on a list closed to outsiders", c.get("/verify", groupGuard(t, srv, "prototypes")))
+		wantDenied(t, "a guest on a list closed to outsiders", c.get("/verify", groupGuard(t, srv, "insights-admins")))
 		if rec := c.get("/verify", groupGuard(t, srv, "planka-users")); rec.Code != http.StatusOK {
 			t.Errorf("a guest on an ordinary list it is in = %d, want 200", rec.Code)
 		}

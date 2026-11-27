@@ -225,7 +225,8 @@ type AdminEvent struct {
 	CreatedAt time.Time
 }
 
-// Group is a named, DB-managed group surfaced via Remote-Groups.
+// Group is a named, DB-managed group: a domain group or a list, given app
+// roles on the Apps pages.
 type Group struct {
 	Name  string
 	Label string

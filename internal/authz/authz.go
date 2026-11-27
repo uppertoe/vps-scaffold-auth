@@ -9,7 +9,8 @@ import (
 	"strings"
 )
 
-// Roles emitted to downstream apps via the Remote-Groups header.
+// The base roles. A session's groups begin with one of them (see
+// BuildGroups); apps never see them, since apps decide by Remote-Roles.
 const (
 	RoleAdmin = "admin"
 	RoleUser  = "user"
@@ -171,11 +172,11 @@ func (p *Policy) Allowed(email string) bool {
 	return p.Role(email) != RoleDeny
 }
 
-// BuildGroups composes the comma-separated Remote-Groups value baked into a
-// session: the base role (admin/user) first, followed by any DB-managed group
-// names, de-duplicated and with blanks dropped. Keeping the role in the set
-// preserves compatibility with existing role-equality Caddy matchers and the
-// admin-UI gate.
+// BuildGroups composes the comma-separated groups baked into a session: the
+// base role (admin, user or guest) first, followed by any DB-managed group
+// names, de-duplicated and with blanks dropped. The gateway reads the base
+// role for the admin gate and the session's tier, and the lists for list
+// assignments; the value is never sent to an app.
 func BuildGroups(role string, dbGroups []string) string {
 	seen := make(map[string]struct{})
 	var out []string
@@ -193,7 +194,7 @@ func BuildGroups(role string, dbGroups []string) string {
 	add(role)
 	for _, g := range dbGroups {
 		// A stored group named after a role (legacy data, manual SQL) must
-		// never confer that role through Remote-Groups.
+		// never confer that role through a session's groups.
 		if IsReservedGroup(g) {
 			continue
 		}
@@ -204,13 +205,13 @@ func BuildGroups(role string, dbGroups []string) string {
 
 // IsReservedGroup reports whether name collides with a base role. A DB group or
 // a break-glass target group with such a name would be indistinguishable from
-// the role in the Remote-Groups set, silently conferring admin/user privilege,
+// the role in a session's groups, silently conferring admin/user privilege,
 // so callers must reject these names.
 //
-// "guest" is reserved for the same reason in the other direction: apps may read
-// a leading "guest" in Remote-Groups as "this is a stranger", so a DB group of
-// that name must not be able to stamp it onto a regular user, nor a break-glass
-// card make itself look like one.
+// "guest" is reserved for the same reason in the other direction: the gateway
+// reads a leading "guest" in a session's groups as "this is a stranger", so a
+// DB group of that name must not be able to stamp it onto a regular user, nor
+// a break-glass card make itself look like one.
 func IsReservedGroup(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case RoleAdmin, RoleUser, RoleGuest:
@@ -221,11 +222,11 @@ func IsReservedGroup(name string) bool {
 
 // ValidGroupName reports whether name is a safe group identifier: a non-empty
 // run of lowercase letters, digits, hyphen, and underscore. The constraint is a
-// security boundary, not cosmetics: group names are joined with "," into the
-// Remote-Groups set (see BuildGroups) and split back out on "," (and, in app
-// matchers, on whitespace/";" too). A name carrying a separator would smuggle an
-// extra token into that set — e.g. a group "x,admin" injects the "admin" role —
-// slipping past IsReservedGroup, which only matches whole names. Callers must
+// security boundary, not cosmetics: group names are joined with "," into a
+// session's groups (see BuildGroups) and split back out on ",". A name
+// carrying a separator would smuggle an extra token into that set — e.g. a
+// group "x,admin" injects the "admin" role — slipping past IsReservedGroup,
+// which only matches whole names. Callers must
 // reject names that fail this before persisting them. Human-friendly display
 // text belongs in a group's separate label field, which has no such constraint.
 func ValidGroupName(name string) bool {

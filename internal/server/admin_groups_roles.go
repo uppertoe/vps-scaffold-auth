@@ -151,9 +151,7 @@ func (s *Server) fillGroupRoles(r *http.Request, view []groupView) error {
 		if g.RoleCount > 0 {
 			g.UsedBy = capFirst(countWords(g.RoleCount, "role", "roles")) + " in " + countWords(g.AppCount, "app", "apps")
 		}
-		if s.rolesOn() {
-			g.Uses = s.groupUses(g, readers)
-		}
+		g.Uses = s.groupUses(g, readers)
 		g.NotUsed = g.Unused && g.RoleCount == 0 && len(g.Uses) == 0
 		if g.Label == "" {
 			// A group without a label is named by its slug, drawn as a slug.
@@ -165,7 +163,7 @@ func (s *Server) fillGroupRoles(r *http.Request, view []groupView) error {
 
 // renderGroup shows one group's page, with an optional warning.
 func (s *Server) renderGroup(w http.ResponseWriter, r *http.Request, status int, name, warning string) {
-	view, _, _, err := s.groupViews(r)
+	view, err := s.groupViews(r)
 	if err != nil {
 		s.adminError(w, r)
 		return
@@ -466,4 +464,88 @@ func (s *Server) handleAdminGroupOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auditAdmin(r, store.AdminActionGroupOrg, group, org)
 	s.redirectDone(w, r, "/admin/groups", "org-saved", group)
+}
+
+// --- Groups: every use of a group ---
+
+// The Groups pages' wording for a group's uses. Each is kept here, once.
+const (
+	msgUseIncluded   = "Included in %s"
+	msgUseFeed       = "Feed to %s"
+	msgOtherUsesHead = "Also used by"
+	msgNoNameSet     = "No name set"
+	msgNotUsedTitle  = "This group holds no app role. No feed, app, setting, other group or break-glass card names it, so the group may be left over from an app that has been removed."
+)
+
+// groupsCopy is the Groups pages' wording for a group's uses.
+type groupsCopy struct {
+	NoName, OtherUses, NotUsedTitle string
+}
+
+var groupsText = groupsCopy{NoName: msgNoNameSet, OtherUses: msgOtherUsesHead, NotUsedTitle: msgNotUsedTitle}
+
+// groupUse is one use of a group other than its roles: a group that
+// includes it, or an app it is fed to.
+type groupUse struct {
+	Label, Href, Icon string
+}
+
+// groupUses lists the uses of a group other than its roles, in that order:
+// the groups that include it, and the apps that read its members.
+func (s *Server) groupUses(g *groupView, readers map[string][]string) []groupUse {
+	var out []groupUse
+	for _, ref := range g.IncludedInRefs {
+		out = append(out, groupUse{Label: fmt.Sprintf(msgUseIncluded, ref.Label), Href: "/admin/groups/" + ref.Name, Icon: "list"})
+	}
+	var apps []string
+	for app, groups := range readers {
+		for _, gr := range groups {
+			if gr == g.Name {
+				apps = append(apps, app)
+			}
+		}
+	}
+	sort.Strings(apps)
+	for _, app := range apps {
+		label := capFirst(app)
+		if a, ok := s.appRoles.Apps[app]; ok {
+			label = a.Label
+		}
+		out = append(out, groupUse{Label: fmt.Sprintf(msgUseFeed, label), Href: appFeedsPath, Icon: "feed"})
+	}
+	return out
+}
+
+// readerGroups are the groups each app reads from the members endpoint, from
+// the readers file and MEMBER_READERS, usable or not.
+func (s *Server) readerGroups() map[string][]string {
+	out := map[string][]string{}
+	for app, gs := range s.cfg.MemberReadersFilePairs {
+		out[app] = append(out[app], gs...)
+	}
+	for _, r := range s.members.readers {
+		if !r.fromFile {
+			out[r.app] = append(out[r.app], r.groups...)
+		}
+	}
+	for _, u := range s.cfg.UnusableMemberReaders {
+		if _, listed := s.cfg.MemberReadersFilePairs[u.App]; !listed {
+			out[u.App] = append(out[u.App], u.Groups...)
+		}
+	}
+	for app, gs := range out {
+		sort.Strings(gs)
+		out[app] = compactStrings(gs)
+	}
+	return out
+}
+
+func compactStrings(xs []string) []string {
+	var out []string
+	for i, x := range xs {
+		if i == 0 || x != xs[i-1] {
+			out = append(out, x)
+		}
+	}
+	return out
 }

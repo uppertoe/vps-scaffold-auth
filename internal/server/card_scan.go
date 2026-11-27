@@ -327,10 +327,10 @@ func (s *Server) handleBreakGlassScan(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusNotFound, "break_confirm", pageData{Scan: v})
 		return
 	}
-	// A card whose group has become an application role shows the same page
+	// A card whose group has become a closed list shows the same page
 	// as any card that is not active; the grant records and reports it.
 	if code.App == "" {
-		if _, refused := s.targetRefusal(code.TargetGroup); refused {
+		if _, refused := s.targetRefusal(ctx, code.TargetGroup); refused {
 			s.cardNotAvailable(w)
 			return
 		}

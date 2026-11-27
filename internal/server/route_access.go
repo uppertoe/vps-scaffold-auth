@@ -18,12 +18,12 @@ const (
 
 // siteAccessView is one row of the overview's "who can reach what" table.
 type siteAccessView struct {
-	Host  string
+	Host string
+	// Rules are the site's paths open by design ("public" in the file).
 	Rules []accessRuleView
-	// Roles is set when a role guard ("roles" in the file) guards some of
-	// the site. RoleApps are the apps whose roles guard it, in the file's
-	// order, each listed once; the overview's table points to each app's page.
-	Roles    bool
+	// RoleApps are the apps whose roles guard the site ("roles" in the
+	// file), in the file's order, each listed once; the overview's table
+	// points to each app's page.
 	RoleApps []siteRoleApp
 }
 
@@ -35,16 +35,13 @@ type siteRoleApp struct {
 	Before, After     string
 }
 
-// accessRuleView is one access rule on a site. Kind is one of groups, domains,
-// signed-in, guests, network or public; Values holds the groups, domains or
-// network name, and Reason the public marker's explanation.
+// accessRuleView is a site's open paths: Kind is "public", and Reason the
+// public marker's explanation. The scaffold writes no other kind of rule
+// since it refuses the older guards; a line of any other kind is skipped.
 type accessRuleView struct {
 	Kind   string
-	Values []string
 	Reason string
 }
-
-var accessKindOrder = map[string]int{"public": 0, "network": 1, "guests": 2, "signed-in": 3, "domains": 4, "groups": 5}
 
 // routeAccess reads ROUTE_ACCESS_FILE for the overview's table, which lists
 // every site with a rule, a role guard included. It returns nil when the
@@ -64,9 +61,8 @@ func (s *Server) routeAccess() []siteAccessView {
 	return out
 }
 
-// readRouteAccess reads every site in ROUTE_ACCESS_FILE, sorted by host, a
-// site guarded by roles included. It returns nil when the feature is off or
-// the file cannot be read.
+// readRouteAccess reads every site in ROUTE_ACCESS_FILE, sorted by host. It
+// returns nil when the feature is off or the file cannot be read.
 func (s *Server) readRouteAccess() []siteAccessView {
 	path := s.cfg.RouteAccessFile
 	if path == "" {
@@ -91,22 +87,12 @@ func (s *Server) readRouteAccess() []siteAccessView {
 			continue
 		}
 		kind := strings.TrimSpace(parts[1])
-		_, known := accessKindOrder[kind]
-		if !known && kind != "roles" {
+		if kind != "public" && kind != "roles" {
 			continue
 		}
 		value := ""
 		if len(parts) == 3 {
 			value = strings.TrimSpace(parts[2])
-		}
-		rule := accessRuleView{Kind: kind}
-		switch kind {
-		case "public":
-			rule.Reason = value
-		case "network":
-			rule.Values = []string{strings.ToUpper(value)}
-		case "groups", "domains":
-			rule.Values = strings.Fields(value)
 		}
 		for _, h := range strings.Split(parts[0], ",") {
 			h = strings.TrimSpace(strings.ReplaceAll(h, "{$DOMAIN}", s.cfg.Domain))
@@ -119,13 +105,12 @@ func (s *Server) readRouteAccess() []siteAccessView {
 				byHost[h] = v
 			}
 			if kind == "roles" {
-				v.Roles = true
 				if app, _, _ := strings.Cut(value, " "); app != "" {
 					v.addRoleApp(s.roleAppRef(app))
 				}
 				continue
 			}
-			v.Rules = append(v.Rules, rule)
+			v.Rules = append(v.Rules, accessRuleView{Kind: kind, Reason: value})
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -134,7 +119,6 @@ func (s *Server) readRouteAccess() []siteAccessView {
 	}
 	out := make([]siteAccessView, 0, len(byHost))
 	for _, v := range byHost {
-		sort.SliceStable(v.Rules, func(i, j int) bool { return accessKindOrder[v.Rules[i].Kind] < accessKindOrder[v.Rules[j].Kind] })
 		out = append(out, *v)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
