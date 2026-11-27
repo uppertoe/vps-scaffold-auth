@@ -717,3 +717,60 @@ func TestAdminGradePasskeyOfAFormerAdministratorGivesNoSecondStep(t *testing.T) 
 		t.Errorf("former administrator's passkey session = %+v, want staff with no second step", id)
 	}
 }
+
+// A guests assignment left behind for an app that was already gone at the
+// previous start does not keep guest sessions: once an administrator takes
+// guests off the last declared app, a guest is signed out, not answered 503.
+func TestRecheckStrandedWithOrphanAfterAdminRemoval(t *testing.T) {
+	now := time.Now()
+	srv, _ := rchShapedServer(t, now.Add(-time.Hour))
+	srv.now = func() time.Time { return now }
+	mustAssign(t, srv, store.RoleAssignment{App: "old-app", Role: "user", Kind: store.AssignGuests})
+	g := mintSession(t, srv, session.Identity{Email: "applicant@gmail.com", Groups: authz.RoleGuest, Kind: session.KindGuest, Auth: now.Add(-time.Minute).Unix()}, 24*time.Hour)
+	if rec := g.get("/verify", guardFor("enquiries")); rec.Code != http.StatusOK {
+		t.Fatalf("guest before = %d", rec.Code)
+	}
+	if err := srv.store.RemoveRoleAssignment(context.Background(), "enquiries", "user", store.AssignGuests, ""); err != nil {
+		t.Fatal(err)
+	}
+	srv.forgetRoles()
+	if srv.guestsStranded(context.Background()) {
+		t.Error("an assignment for an app gone before the previous start counts as stranded")
+	}
+	rec := g.get("/verify", guardFor("enquiries"))
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") || liveCount(srv, "applicant@gmail.com") != 0 {
+		t.Errorf("guest after guests were taken off enquiries = %d to %q, %d live; want signed out", rec.Code, rec.Header().Get("Location"), liveCount(srv, "applicant@gmail.com"))
+	}
+}
+
+// Each start records the apps its manifest declares and reports those the
+// previous start declared that it does not.
+func TestDeclaredAppsAreRecordedAtEachStart(t *testing.T) {
+	st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	start := func(manifest string) *Server {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "app-roles.tsv")
+		if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		srv, err := New(&config.Config{PublicURL: "https://auth.example.com", Domain: "example.com", AdminEmails: []string{"admin@example.com"},
+			SessionSecret: []byte("0123456789abcdef0123456789abcdef"), AppRolesFile: path, SessionTTL: time.Hour}, st, newCaptureSender())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return srv
+	}
+	if s := start("a\tuser\tUser\ta.{$DOMAIN}\nb\tuser\tUser\tb.{$DOMAIN}\n"); len(s.lostApps) != 0 {
+		t.Errorf("first start lost %v", s.lostApps)
+	}
+	if s := start("a\tuser\tUser\ta.{$DOMAIN}\n"); len(s.lostApps) != 1 || !s.lostApps["b"] {
+		t.Errorf("second start lost %v, want b", s.lostApps)
+	}
+	if s := start("a\tuser\tUser\ta.{$DOMAIN}\n"); len(s.lostApps) != 0 {
+		t.Errorf("third start lost %v, want nothing", s.lostApps)
+	}
+}

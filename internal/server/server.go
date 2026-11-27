@@ -67,6 +67,9 @@ type Server struct {
 	// guestsReleasedAt is when the release that retired the allow-list first
 	// ran on this database (carriedOverAsGuest). Remove after 1 March 2027.
 	guestsReleasedAt time.Time
+	// lostApps are the apps the previous start's manifest declared and this
+	// one does not (guestsStranded).
+	lostApps map[string]bool
 }
 
 // New constructs a Server from its dependencies.
@@ -142,6 +145,9 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 	}
 	if err := s.refuseAuthHostApps(); err != nil {
 		return nil, err
+	}
+	if s.lostApps, err = s.recordDeclaredApps(context.Background()); err != nil {
+		return nil, fmt.Errorf("recording the declared apps: %w", err)
 	}
 	if s.guestsReleasedAt, err = st.FirstRun(context.Background(), guestsFromRolesRelease, time.Now()); err != nil {
 		return nil, fmt.Errorf("recording the release: %w", err)

@@ -205,7 +205,10 @@ signs in on the way to one of them and their address is not staff and holds no
 app role, the gateway sends them a code as usual and, once they enter it, signs
 them in as a **guest**. A sign-in that names no destination (a direct visit to
 the sign-in page), or names one of the gateway's own pages such as Your
-sessions, is decided as one to `DEFAULT_REDIRECT`. A member of staff,
+sessions, is decided as one to `DEFAULT_REDIRECT`. Where that address is not
+on a host open to guests (RCH's is the apex), a signed-out guest who follows a
+Your sessions or passkey link is not sent a code, and must start from the
+app's own address. A member of staff,
 an administrator or a member signs in with their usual role on such a host as
 anywhere else. The review step on the app's page says that saving opens
 sign-in on the app's hosts, and saving emails the other administrators.
@@ -333,9 +336,10 @@ holds no role through a list or by name, becomes a guest session at its next
 request while some app's role is held by guests, instead of ending. This keeps
 p.stonn's users signed in when markbot drops `ALLOWED_EMAIL_DOMAINS=*`. The rule
 applies only to sessions from before the release, so it lapses with them, and
-is to be removed after 1 March 2027. If a restart's manifest loses the app
-guests hold a role in, guest sessions are kept and answered 503 until the app
-is declared again, since that is more likely a mistake than a decision.
+is to be removed after 1 March 2027. If a restart's manifest loses an app
+that the previous start declared and that guests hold a role in, guest
+sessions are kept and answered 503 until the app is declared again or the
+gateway starts again, since that is more likely a mistake than a decision.
 
 ### Passkeys (optional)
 

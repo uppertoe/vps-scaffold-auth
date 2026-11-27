@@ -680,23 +680,50 @@ func (s *Server) guestsAnywhere(ctx context.Context) bool {
 	return false
 }
 
-// guestsStranded reports whether a guests assignment names an app the
-// manifest no longer declares while no declared app's role is held by
-// guests: the manifest has lost the app that admits guests, so every guest
-// session, and every session carried over as one, would end. That is taken
-// for a fault in the configuration (a snippet renamed or dropped by
-// mistake), so renewSessionWith keeps those sessions and answers 503 until
-// the app is declared again; each still ends at SESSION_MAX_AGE. The admin
-// pages show only declared apps, so the assignment cannot be removed there
-// meanwhile. Taking guests off an app on its admin page is a decision, and
-// ends the sessions as before.
+// recordDeclaredApps records the apps this start's manifest declares and
+// returns those the previous start declared that this one does not.
+func (s *Server) recordDeclaredApps(ctx context.Context) (map[string]bool, error) {
+	now := make([]string, 0, len(s.appRoles.Apps))
+	for name := range s.appRoles.Apps {
+		now = append(now, name)
+	}
+	sort.Strings(now)
+	previous, err := s.store.ReplaceDeclaredApps(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	lost := map[string]bool{}
+	for _, a := range previous {
+		if _, ok := s.appRoles.Apps[a]; !ok {
+			lost[a] = true
+		}
+	}
+	return lost, nil
+}
+
+// guestsStranded reports whether this start's manifest has lost the app
+// guests hold a role in: a guests assignment names an app the previous
+// start declared and this one does not, and no declared app's role is held
+// by guests. Every guest session, and every session carried over as one,
+// would then end. That is taken for a fault in the configuration (a snippet
+// renamed or dropped by mistake), so renewSessionWith keeps those sessions
+// and answers 503 until the app is declared again; each still ends at
+// SESSION_MAX_AGE. The admin pages show only declared apps, so the
+// assignment cannot be removed there meanwhile. A guests assignment for an
+// app already gone at the previous start counts for nothing, so taking
+// guests off a declared app on its admin page is a decision, and ends the
+// sessions as before. The fault lasts until the next start, which records
+// the manifest it starts with.
 func (s *Server) guestsStranded(ctx context.Context) bool {
+	if len(s.lostApps) == 0 {
+		return false
+	}
 	st, ok := s.roleDataLoaded(ctx)
 	if !ok || s.guestsAnywhere(ctx) {
 		return false
 	}
 	for _, a := range st.assignments {
-		if a.Kind == store.AssignGuests && !s.appRoles.Has(a.App, roles.UserRole) {
+		if a.Kind == store.AssignGuests && s.lostApps[a.App] {
 			return true
 		}
 	}

@@ -675,6 +675,9 @@ type Store interface {
 	// FirstRun returns when the release name first ran on this database,
 	// recording now if it never has.
 	FirstRun(ctx context.Context, name string, now time.Time) (time.Time, error)
+	// ReplaceDeclaredApps records the apps the manifest declares at this
+	// start and returns those the previous start recorded.
+	ReplaceDeclaredApps(ctx context.Context, apps []string) (previous []string, err error)
 	// GroupKind returns a group's kind (GroupKindList or GroupKindDomain);
 	// exists is false for a group that does not exist.
 	GroupKind(ctx context.Context, group string) (kind string, exists bool, err error)

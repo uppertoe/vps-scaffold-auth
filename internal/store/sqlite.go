@@ -243,6 +243,9 @@ CREATE TABLE IF NOT EXISTS releases (
 	name       TEXT PRIMARY KEY,
 	first_run  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS declared_apps (
+	name       TEXT PRIMARY KEY
+);
 CREATE TABLE IF NOT EXISTS member_reads (
 	app        TEXT NOT NULL,
 	group_name TEXT NOT NULL,
@@ -1614,6 +1617,41 @@ func (s *SQLite) EndSessionsBefore(ctx context.Context, key string, at time.Time
 		`INSERT INTO session_cutoffs (key, ended_at) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET ended_at = MAX(ended_at, excluded.ended_at)`, key, at.Unix())
 	return err
+}
+
+// ReplaceDeclaredApps records the apps the manifest declares at this start
+// and returns those the previous start recorded, in one transaction.
+func (s *SQLite) ReplaceDeclaredApps(ctx context.Context, apps []string) (previous []string, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM declared_apps ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		previous = append(previous, n)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM declared_apps`); err != nil {
+		return nil, err
+	}
+	for _, a := range apps {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO declared_apps (name) VALUES (?)`, a); err != nil {
+			return nil, err
+		}
+	}
+	return previous, tx.Commit()
 }
 
 // FirstRun returns when a release named name first ran on this database,
