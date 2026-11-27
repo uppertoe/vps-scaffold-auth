@@ -45,9 +45,22 @@ that app (e.g. `user,admin`). The session carries the person's groups, which
 decide the roles held through lists; they are computed at login and again when
 a session renews, and at a session's next request after any membership change,
 so a change (an addition or a removal) takes effect at the person's next
-request. The gateway sends `Remote-Groups` empty: apps decide by `Remote-Roles`,
-and a server's older copy of `auth.caddy` that still copies the header passes
-the app an empty value.
+request. Apps decide by `Remote-Roles` and never see the groups. The gateway
+still sends `Remote-Groups` empty, because one inline guard (markbot's
+`pstonn.caddy`) copies the header, and a copy of a header the gateway does not
+send would hand the app Caddy's placeholder text.
+
+**Staff-only lists.** A list that holds any app role other than User (an
+app's Administrator or Board owner, say) is staff only; any other list takes
+any address. Someone the gateway does not count as staff (a guest, a member
+who is not staff, or a card) is never added to a staff-only list, and never
+counted as its member, in a session or by the members endpoint; a role held
+only through one is no reason for them to sign in. A staff-only list, and any
+group it includes, cannot be a break-glass card's target, and the admin pages
+refuse to add someone who is not staff to one by hand, in bulk or through an
+include. The rule is read from the role assignments, so a list becomes staff
+only as soon as it is given such a role. While the gateway cannot read the
+role data, it treats every list as staff only.
 
 Sessions are **stateless signed cookies** — no session store. Persisted state
 (single-use OTP codes, admin TOTP secrets, DB-managed groups, and break-glass
@@ -290,7 +303,7 @@ for the annotated list. Key ones:
 | `MEMBER_READERS_FILE` | The scaffold-rendered list of the groups each app may read (`.generated/caddy/member-readers.tsv`, mounted read-only at `/etc/vps-auth/member-readers.tsv`); see [Group members for apps](#group-members-for-apps) |
 | `MEMBER_READERS` | The same list written as `app=group,group` entries, for a deployment without the renderer; used together with the file |
 | `MEMBER_READER_TOKEN_<APP>` | Each reading app's own bearer token, from `openssl rand -hex 32` |
-| `BREAKGLASS_REFUSED_GROUPS` | Groups an app reads as its own role (space or comma separated); never a card's target or a guest's membership. Added to those learned from the route manifests |
+| `BREAKGLASS_REFUSED_GROUPS` | **Deprecated; read for one release only.** Lists to make staff only as well as those the role rule makes staff only (space or comma separated). The gateway logs at start that the setting is deprecated, and names each list that only the setting makes staff only. Remove it once that line names nothing you need closed |
 | `DOMAIN` | The server domain (provided by the server `.env`) |
 
 The gateway refuses to start when neither `ALLOWED_EMAIL_DOMAINS` nor `ADMIN_EMAILS` is set.
@@ -302,7 +315,7 @@ empty. The gateway then counts as staff the administrators in `ADMIN_EMAILS` and
 every address at a domain of a domain group that holds at least one app role the
 manifest declares. A domain group that holds no role admits nobody, and the
 sign-in page does not name its domains. Staff sign in as before, feeds and the members endpoint keep them,
-and the lists closed to outsiders are kept in their sessions. Anyone else signs in
+and the staff-only lists are kept in their sessions. Anyone else signs in
 as a member when they hold a role through a list, by name or by an invitation, or
 as a guest on an open host. While `ALLOWED_EMAIL_DOMAINS` is set, it alone decides
 who is staff, and a domain group adds no one. Without it, giving a domain group
@@ -484,9 +497,8 @@ still reach an app during a time-critical event (e.g. a code stroke).
 - **Cards made before app roles named a group.** A role guard admits no such
   card, so a group card opens nothing; the card's page offers to move it to an
   app, keeping its printed token. The gateway still refuses a group card whose
-  group an app reads as one of its own roles (`BREAKGLASS_REFUSED_GROUPS`, and
-  the groups the route manifests name), and refuses to add an address that is
-  not staff (a guest) as a member of such a group.
+  group is a staff-only list (one that holds an app role other than User, or
+  that the deprecated `BREAKGLASS_REFUSED_GROUPS` names).
 - **Scanning is an instant grant**: the token in the QR URL is the only
   credential, by design. The scan is rate-limited, **logged synchronously**
   (label, client IP, user-agent, time), and **notifies admins** out of band via

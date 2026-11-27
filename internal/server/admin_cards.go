@@ -134,7 +134,7 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 		v.LegacyN = msgLegacyNoteNoRoles
 	}
 	groups := map[string]*cardAppGroup{}
-	refused := s.refusedTargets()
+	refused := s.refusedTargets(ctx)
 	sortCards(codes)
 	v.Attention = cardLines(codes, stats)
 	for _, c := range codes {
@@ -149,7 +149,7 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 		}
 		if c.App == "" {
 			row.Group = c.TargetGroup
-			row.Refused = refused[normalizeGroupName(c.TargetGroup)]
+			row.Refused, _ = refused.reason(c.TargetGroup)
 			v.Legacy = append(v.Legacy, row)
 			continue
 		}
@@ -511,7 +511,7 @@ func (s *Server) renderNewCard(w http.ResponseWriter, r *http.Request, status in
 		for _, g := range groups {
 			names = append(names, g.Name)
 		}
-		v.Targets = s.targetOptions(names)
+		v.Targets = s.targetOptions(ctx, names)
 	}
 	for _, d := range designs {
 		v.Designs = append(v.Designs, designChoice{ID: d.ID, Name: d.Name, Size: d.Size, Caption: d.Size + ", " + sizeText(d.Size),
@@ -676,14 +676,19 @@ func (s *Server) createGroupCard(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if reason, refused := s.targetRefusal(group); refused {
-		msg := "A break-glass code cannot target \"" + group + "\", because an application reads that group as one of its own roles and a card would admit whoever carries it in that role."
-		if reason == refusedFeed {
-			msg = "A break-glass code cannot target \"" + group + "\", because its members come from a feed and a card would admit whoever carries it alongside them."
+	if reason, refused := s.targetRefusal(r.Context(), group); refused {
+		title, msg := "Staff-only list", "A break-glass code cannot target \""+group+"\", because it is a staff-only list, and a card would admit whoever carries it in that list's roles."
+		switch reason {
+		case refusedFeed:
+			title, msg = "Group filled from a feed", "A break-glass code cannot target \""+group+"\", because its members come from a feed and a card would admit whoever carries it alongside them."
+		case refusedIncluded:
+			title, msg = "Group included in a staff-only list", "A break-glass code cannot target \""+group+"\", because a staff-only list includes it."
+		case refusedUnreadable:
+			title, msg = "Group not checked", "A break-glass code cannot target \""+group+"\" now, because every group is staff only while the gateway cannot read the app roles."
 		}
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
-			Title:   "Group " + reason,
-			Message: msg + " Choose a group that an app's sign-in rule names only to grant entry.",
+			Title:   title,
+			Message: msg + " Choose another group.",
 		})
 		return
 	}

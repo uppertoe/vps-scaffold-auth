@@ -92,7 +92,10 @@ func TestBreakGlassCardRefusedOnceTargetIsAppRole(t *testing.T) {
 		c.BreakGlassNotifyEmails = []string{"admin@example.com"}
 	})
 	token := mintGroupCode(t, srv, "Lab 1", "airdb_admin")
-	srv.cfg.BreakGlassRefusedGroups = []string{"airdb_admin"}
+	// The list becomes staff only after the card was made: it is given AIR-DB's
+	// Administrator role.
+	_ = srv.store.CreateGroupOfKind(context.Background(), "airdb_admin", "", store.GroupKindList)
+	mustAssign(t, srv, store.RoleAssignment{App: "air-db", Role: "admin", Kind: store.AssignList, Ref: "airdb_admin"})
 
 	c := newClient(t, srv.Handler())
 	// The scan's page already shows the card as not available.
@@ -152,12 +155,16 @@ func TestBreakGlassCardRefusedOnceTargetIsAppRole(t *testing.T) {
 	// Activation from the denial page goes through the same refusal.
 	signedIn := newClient(t, srv.Handler())
 	loginAs(t, signedIn, sender, "user@example.com", nil)
-	srv.cfg.BreakGlassRefusedGroups = nil
+	// The list opens for the scan and closes again before the activation.
+	if err := srv.store.RemoveRoleAssignment(context.Background(), "air-db", "admin", store.AssignList, "airdb_admin"); err != nil {
+		t.Fatal(err)
+	}
+	srv.forgetRoles()
 	if rec := signedIn.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan while signed in = %d, want the redirect with an offer", rec.Code)
 	}
 	csrf := extractCSRF(t, signedIn.get("/denied?rd=https://app.example.com/", nil).Body.String())
-	srv.cfg.BreakGlassRefusedGroups = []string{"airdb_admin"}
+	mustAssign(t, srv, store.RoleAssignment{App: "air-db", Role: "admin", Kind: store.AssignList, Ref: "airdb_admin"})
 	rec = signedIn.postForm("/break/activate", url.Values{"csrf": {csrf}})
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("activate = %d, want the neutral page", rec.Code)

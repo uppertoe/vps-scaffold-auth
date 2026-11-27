@@ -120,7 +120,7 @@ func listenPort(addr string) int {
 // groups in file order, without repeats, the apps in file order, and whether
 // the whole file was read.
 //
-// Like the other rendered manifests (APP_ROLES_FILE, ROUTE_GROUPS_FILE), the
+// Like the other rendered manifests (APP_ROLES_FILE, ROUTE_ACCESS_FILE), the
 // file never stops the gateway from starting: a missing or unreadable file is
 // logged and read as empty, and a malformed row, a bad name or a base role is
 // logged and skipped. A gateway that refused to start would take sign-in away

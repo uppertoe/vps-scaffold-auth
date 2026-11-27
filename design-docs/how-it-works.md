@@ -58,9 +58,9 @@ identity, their email address and, in `Remote-Roles`, the roles they hold in
 that tool, such as `user,admin`. A request admitted because it comes from the
 hospital network, with no session, carries the roles and no identity.
 
-Caddy also still passes the older groups header, which begins with the kind of
-session (`admin`, `user` or `guest`) and then names the person's lists. The
-groups header will be removed once no tool reads it.
+No tool is told which lists the person is on. The gateway still sends the
+older groups header, empty, because one route on another server copies it;
+the header will be dropped once no route copies it.
 
 A tool can trust these headers because Caddy deletes any copy the browser
 sent, `Remote-Roles` included, before it asks the gateway, and because only

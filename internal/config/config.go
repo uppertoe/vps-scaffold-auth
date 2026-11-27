@@ -57,13 +57,6 @@ type Config struct {
 	// form, resolved once at load (always non-nil).
 	DisplayTimezone string
 
-	// RouteGroupsFile is the path of the scaffold-rendered manifest of the
-	// gateway groups each route requires ("group<TAB>host" lines,
-	// .generated/caddy/route-groups.tsv). When set, the Groups page lists the
-	// groups the routes use, offers to create missing ones, and marks groups no
-	// route uses. Empty turns the feature off.
-	RouteGroupsFile string
-
 	// RouteAccessFile is the scaffold-rendered manifest of each site's access
 	// rules ("host<TAB>kind<TAB>value", .generated/caddy/route-access.tsv).
 	// When set, the admin overview shows a "who can reach what" table.
@@ -179,11 +172,10 @@ type Config struct {
 	BreakGlassWebhookTimeout time.Duration
 	BreakGlassNotifyEmails   []string // recipients of use-notifications
 	// BreakGlassRefusedGroups (BREAKGLASS_REFUSED_GROUPS, space or comma
-	// separated) are groups an application reads as one of its own roles, so
-	// a break-glass card may not target them and an address outside the
-	// allow-list may not be made a member. The gateway also learns such
-	// groups from the route manifests; this list is for deployments without
-	// them, or for a role the manifests cannot see.
+	// separated) is deprecated and read for one release only. A list that
+	// holds any app role other than User is staff only (staffOnlyLists); the
+	// lists named here are staff only as well, and the gateway logs at start
+	// that the setting is deprecated.
 	BreakGlassRefusedGroups []string
 	BreakGlassPDFHeader     string
 	BreakGlassPDFBody       string
@@ -293,7 +285,6 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	c.DisplayTimezone = strings.TrimSpace(getenv("DISPLAY_TIMEZONE", ""))
-	c.RouteGroupsFile = strings.TrimSpace(getenv("ROUTE_GROUPS_FILE", ""))
 	c.BreakGlassRefusedGroups = splitLowerList(getenv("BREAKGLASS_REFUSED_GROUPS", ""))
 	c.RouteAccessFile = strings.TrimSpace(getenv("ROUTE_ACCESS_FILE", ""))
 	c.AppRolesFile = strings.TrimSpace(getenv("APP_ROLES_FILE", ""))

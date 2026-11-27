@@ -25,9 +25,10 @@ type bulkPlan struct {
 	Already []string     // already members
 	Invalid []string     // not an email address
 	TooMany bool         // the paste was cut at maxBulkAddresses
-	// Refused are addresses the allow-list does not admit, which the gateway
-	// will not add to this group because the group is an application role
-	// (RefusedReason says which kind); see refusedTargets.
+	// Refused are addresses the gateway does not count as staff, which it
+	// will not add to this group because the group is staff only,
+	// included in a staff-only list, or filled from a feed, or because the
+	// gateway cannot yet tell (RefusedReason says which); see refusedTargets.
 	Refused       []string
 	RefusedReason string
 }
@@ -62,7 +63,7 @@ func (s *Server) groupExists(r *http.Request, name string) bool {
 // from mail clients.
 func (s *Server) planBulkAdd(r *http.Request, group, raw string) (*bulkPlan, error) {
 	plan := &bulkPlan{Group: group, Label: group}
-	plan.RefusedReason, _ = s.targetRefusal(group)
+	plan.RefusedReason, _ = s.targetRefusal(r.Context(), group)
 	if gs, err := s.store.ListGroups(r.Context()); err == nil {
 		for _, g := range gs {
 			if g.Name == group && g.Label != "" {
@@ -126,10 +127,10 @@ func (s *Server) handleAdminConfirmMembers(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
-	// The confirmation page never offers a stranger for a group that is an
-	// application role, but the check is made here as well, so a request made
-	// without the page cannot add one.
-	_, refused := s.targetRefusal(group)
+	// The confirmation page never offers a stranger for a staff-only list, but
+	// the check is made here as well, so a request made without the page
+	// cannot add one.
+	_, refused := s.targetRefusal(r.Context(), group)
 	var emails []string
 	dropped := false
 	for _, e := range r.PostForm["add"] {
@@ -189,7 +190,7 @@ func (s *Server) handleAdminAddInclude(w http.ResponseWriter, r *http.Request) {
 		s.redirectDone(w, r, "/admin/groups", "group-synced", group)
 		return
 	}
-	before, err := s.appRoleOutsiders(r)
+	before, err := s.staffOnlyListOutsiders(r)
 	if err != nil {
 		s.adminError(w, r)
 		return
@@ -203,12 +204,12 @@ func (s *Server) handleAdminAddInclude(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// An include must not bring an address that is not known (knownRole)
-	// into a group an application reads as one of its own roles, directly or
-	// through groups that include this one. Sessions drop such groups for
-	// those addresses anyway (withoutAppRolesForOutsider); refusing the
+	// into a staff-only list, directly or through groups that include this one.
+	// Sessions drop staff-only lists for those addresses anyway
+	// (withoutStaffOnlyListsForOutsider); refusing the
 	// include keeps the groups pages truthful. A failure to check undoes the
 	// include rather than keep one that could not be checked.
-	after, err := s.appRoleOutsiders(r)
+	after, err := s.staffOnlyListOutsiders(r)
 	if err != nil || gainedOutsider(before, after) {
 		if rmErr := s.store.RemoveGroupInclude(r.Context(), group, included); rmErr != nil {
 			log.Printf("undo include %s <- %s: %v", group, included, rmErr)
@@ -225,11 +226,20 @@ func (s *Server) handleAdminAddInclude(w http.ResponseWriter, r *http.Request) {
 	s.redirectDone(w, r, "/admin/groups", "include-added", group)
 }
 
-// appRoleOutsiders lists, for each hand-managed application-role group, the
-// addresses it admits through includes that are not known (knownRole).
-func (s *Server) appRoleOutsiders(r *http.Request) (map[string]map[string]bool, error) {
+// errRolesUnavailable is returned while the role data has never been read.
+var errRolesUnavailable = errors.New("role data has never been read")
+
+// staffOnlyListOutsiders lists, for each hand-managed staff-only list, the
+// addresses it admits through includes that are not known (knownRole). It
+// fails while the role data has never been read, so an include is not kept
+// unchecked.
+func (s *Server) staffOnlyListOutsiders(r *http.Request) (map[string]map[string]bool, error) {
 	out := map[string]map[string]bool{}
-	for g := range s.appRoleGroups() {
+	staffOnly, loaded := s.staffOnlyLists(r.Context())
+	if !loaded {
+		return nil, errRolesUnavailable
+	}
+	for g := range staffOnly {
 		if _, feed := s.feedFor(g); feed {
 			continue
 		}

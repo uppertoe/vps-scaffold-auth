@@ -39,9 +39,9 @@ group.
 ## Cards made before app roles
 
 A card made before app roles opens the sites of one group, as it always did.
-Such a card cannot name a group that an app reads as one of its own roles, or
-a group filled from a feed. A card whose group has since become a role grants
-nothing: the person scanning it sees the same page as for a withdrawn card,
+Such a card cannot name a staff-only list, a group that a staff-only list
+includes, or a group filled from a feed. A card whose list has become staff
+only since the card was made grants nothing: the person scanning it sees the same page as for a withdrawn card,
 the scan is recorded as refused, and the chosen administrators are notified.
 
 An administrator can move a card of this kind onto an app whose site now uses

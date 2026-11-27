@@ -135,6 +135,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		log.Printf("authz: guest sign-in open for %s: an OTP-verified address that is not known (the allow-list, or without one a domain group) and holds no app role becomes a guest, admitted only by app roles held by guests.", strings.Join(cfg.OpenRegistrationHosts, ", "))
 	}
 	s.logWhoSignsIn(context.Background())
+	s.logRefusedGroupsDeprecated(context.Background())
 	s.logDomainGroupReads(context.Background())
 	s.clearStaleReaderApprovals(context.Background())
 	s.handler = s.routes()

@@ -104,7 +104,7 @@ func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups st
 		return "", false
 	}
 	tier := s.tierRole(id, role)
-	return authz.BuildGroups(tier, s.withoutAdminPairedGroups(id.Email, tier, s.withoutAppRolesForOutsider(r.Context(), id.Email, tier, dbGroups))), true
+	return authz.BuildGroups(tier, s.withoutStaffOnlyListsForOutsider(r.Context(), id.Email, tier, dbGroups)), true
 }
 
 // handleVerify is the forward_auth target. Caddy calls it on every request to a
@@ -1185,8 +1185,8 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, emailAddr
 	groups := s.computeGroups(r.Context(), emailAddr, s.tierRole(&session.Identity{TOTP: grant.TOTP, Step: grant.Step}, role))
 	// The kind follows the role: a guest login is marked so /verify confines it
 	// to routes that opt in, and renewal keeps it a guest. A member (signed in
-	// by an app role) is marked so an older guard treats it as a guest would
-	// be treated, while a role guard decides it by its roles.
+	// by an app role) is marked so that a role guard decides it by its roles
+	// and drops the staff-only lists from its groups at every request.
 	kind := ""
 	switch role {
 	case authz.RoleGuest:
@@ -1268,9 +1268,8 @@ func (s *Server) adminStepFresh(id *session.Identity) bool {
 // site that admits staff admits them at once, and only the admin pages and
 // admin-only routes send them to the admin door.
 //
-// A member's groups carry the guest tier token: an app behind an older guard
-// that admits guests reads the leading "guest" as someone outside the
-// department, which a member is.
+// A member's groups carry the guest tier token, since a member is someone
+// outside the department, and so are built as an outsider's.
 func (s *Server) tierRole(id *session.Identity, role string) string {
 	if role == authz.RoleAdmin && !s.adminStepFresh(id) {
 		return authz.RoleUser
@@ -1395,14 +1394,15 @@ func (s *Server) isOpenHost(rd string) bool {
 	return false
 }
 
-// computeGroups returns the comma-separated Remote-Groups value for an email:
-// the base role plus any DB-managed group memberships.
+// computeGroups returns a session's comma-separated groups for an email: the
+// base role plus the lists the address belongs to, less any staff-only list for
+// an outsider.
 func (s *Server) computeGroups(ctx context.Context, emailAddr, role string) string {
 	dbGroups, err := s.store.GroupsForEmail(ctx, emailAddr)
 	if err != nil {
 		log.Printf("groups for %s: %v", emailAddr, err)
 	}
-	return authz.BuildGroups(role, s.withoutAdminPairedGroups(emailAddr, role, s.withoutAppRolesForOutsider(ctx, emailAddr, role, dbGroups)))
+	return authz.BuildGroups(role, s.withoutStaffOnlyListsForOutsider(ctx, emailAddr, role, dbGroups))
 }
 
 // getTOTPSecret reads and decrypts the stored TOTP secret. A legacy plaintext
@@ -1535,8 +1535,8 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// A card made before its group became an application role must not hand
-	// that role out. grantBreakGlass checks again for the one-tap activation;
+	// A card whose group has become staff only since it was made must not
+	// grant a session. grantBreakGlass checks again for the one-tap activation;
 	// checking here as well keeps the denial page from offering such a card.
 	if s.refuseRetargetedCard(w, r, code, ip, ua, now) {
 		return
@@ -1622,15 +1622,15 @@ func (s *Server) cardNotAvailable(w http.ResponseWriter) {
 	})
 }
 
-// refuseRetargetedCard refuses a card whose group has become one an
-// application reads as its own role (or one filled from a feed) since the
-// card was made. A card is refused such a target when it is made, but the set
-// grows with every routes change, and a card is a credential that anyone who
+// refuseRetargetedCard refuses a card whose group has become a staff-only list
+// (or one filled from a feed) since the card was made. A card is refused such
+// a target when it is made, but a list becomes staff only as soon as it is given an app
+// role other than User, and a card is a credential that anyone who
 // photographs it can use. The scan is audited and the administrators are
 // told, so that they replace the card; the person scanning sees the same
 // neutral page as for a revoked card. It reports whether it refused.
 func (s *Server) refuseRetargetedCard(w http.ResponseWriter, r *http.Request, code store.BreakGlassCode, ip, ua string, now time.Time) bool {
-	if _, refused := s.targetRefusal(code.TargetGroup); !refused {
+	if _, refused := s.targetRefusal(r.Context(), code.TargetGroup); !refused {
 		return false
 	}
 	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{

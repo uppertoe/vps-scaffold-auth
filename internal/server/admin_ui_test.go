@@ -14,7 +14,7 @@ import (
 )
 
 func TestAdminHomeOverview(t *testing.T) {
-	srv, sender := routeGroupsServer(t, testRouteGroups)
+	srv, sender := testServer(t)
 	ctx := context.Background()
 	if err := srv.store.CreateGroup(ctx, "old-group", ""); err != nil {
 		t.Fatal(err)
@@ -32,14 +32,14 @@ func TestAdminHomeOverview(t *testing.T) {
 		t.Fatalf("overview = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"planka-users", "prototypes", "old-group", `aria-current="page">Overview`, "admin@example.com"} {
+	for _, want := range []string{"No app uses this group", "/admin/groups/old-group", `aria-current="page">Overview`, "admin@example.com"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("overview missing %q", want)
 		}
 	}
-	// A break-glass target needs no group, so it is not reported as missing.
+	// A card's target group that does not exist is not reported at all.
 	if strings.Contains(body, "bg_ward") {
-		t.Error("card-only group reported as missing")
+		t.Error("card-only group reported")
 	}
 }
 

@@ -16,12 +16,9 @@ import (
 // when the card names its app (roles.Held). Moving the card keeps its token,
 // so the printed card keeps working without being printed and placed again.
 //
-// A move is offered only for an app whose snippet names card pages, which
-// the manifest allows only once the app is live (a card page must lie under
-// a user @path line, and an app with path lines is not pending). A moved
-// card's scan carries no group, as a card made for the app does, so the
-// older guard of a pending app would refuse it; refusing the move until the
-// app is live keeps the card working under whichever guard its site uses.
+// A move is offered only for an app whose snippet names card pages (a card
+// page must lie under a user @path line). A moved card's scan carries no
+// group, as a card made for the app does.
 //
 // Sessions already started from the card keep the group in their cookie
 // until they end (at most the break-glass session TTL), and a role guard
@@ -42,10 +39,6 @@ const (
 	// %s is the break-glass session length, such as "8 hours".
 	msgMoveSessions = "Sessions already started from the card keep the group's sites until they end, at most %s after the scan that started them."
 	msgMoveButton   = "Move the card"
-	// %[1]s is the app's label.
-	msgMoveAppPending = "You can move the card to %[1]s once %[1]s uses app roles."
-	// %[1]s is the app's label.
-	msgMoveRefusedPending = "The card has not been moved, because %[1]s does not use app roles yet. You can move the card once %[1]s uses app roles."
 	// The card's location, then the app's label.
 	msgCardMoveSubj = "The break-glass card for %s has been moved to %s."
 )
@@ -86,19 +79,16 @@ func (s *Server) cardMoveView(ctx context.Context, c store.BreakGlassCode, app, 
 		} else {
 			na.Disabled = true
 			na.Cards = msgCardNoPages
-			if a.Pending {
-				na.Cards = fmt.Sprintf(msgMoveAppPending, a.Label)
-			}
 		}
 		v.Apps = append(v.Apps, na)
 	}
 	return v
 }
 
-// movable reports whether a card can be moved to a: a live app whose
-// snippet names a page for a scan to open, on a host the manifest names.
+// movable reports whether a card can be moved to a: an app whose snippet
+// names a page for a scan to open, on a host the manifest names.
 func movable(a *roles.App) bool {
-	return !a.Pending && len(a.CardPages) > 0 && len(a.Hosts) > 0
+	return len(a.CardPages) > 0 && len(a.Hosts) > 0
 }
 
 // handleAdminBreakMove moves a card that opens a group onto an app's user
@@ -126,10 +116,6 @@ func (s *Server) handleAdminBreakMove(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.appRoles.Apps[app]
 	if !ok || !s.appRoles.Has(app, roles.UserRole) {
 		refuse(msgCardNoApp)
-		return
-	}
-	if a.Pending {
-		refuse(fmt.Sprintf(msgMoveRefusedPending, a.Label))
 		return
 	}
 	// A scan may open only a page the app's snippet offers to cards.

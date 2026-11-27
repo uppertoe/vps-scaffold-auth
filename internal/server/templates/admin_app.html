@@ -10,10 +10,8 @@
 <dl class="meta">
   <div><dt>Roles</dt><dd>{{.RolesText}}</dd></div>
   <div><dt>Declared in</dt><dd class="mono" title="{{.Source}}">{{if .Source}}{{.Source}}{{else}}Not given{{end}}</dd></div>
-  {{if .PendingApp}}<div><dt>{{.StateHead}}</dt><dd><span class="pendtag">{{.StateText}}</span></dd></div>
-  {{else}}<div><dt>Open by design</dt><dd>{{.OpenText}}</dd></div>{{end}}
+  <div><dt>Open by design</dt><dd>{{.OpenText}}</dd></div>
 </dl>
-{{if .PendingApp}}<div class="focus on pendnote"><span>{{.PendingNote}}</span></div>{{end}}
 
 <form id="roles-form" method="post" action="/admin/apps/{{$app}}/review">
   <input type="hidden" name="csrf" value="{{$csrf}}">
@@ -102,12 +100,6 @@
   <div class="rrow"><div>{{.Role}}</div><div data-label="Held by">{{template "token" .Token}}</div><div><form method="post" action="/admin/apps/{{$app}}/review"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="take" value="{{.Value}}"><button type="submit" class="link">Remove</button></form></div></div>
   {{end}}
 </div>
-{{end}}
-
-{{if .PendingApp}}
-<h2 class="sec" id="older">{{.OlderHead}}</h2>
-{{if .OlderNote}}<p class="secnote">{{.OlderNote}}</p>{{end}}
-{{if .Older}}{{template "olderlist" .Older}}{{end}}
 {{end}}
 
 {{if .Paths}}

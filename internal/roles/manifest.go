@@ -33,19 +33,6 @@ import (
 //	@path<TAB>app<TAB>paths<TAB>role  paths that need role
 //	@open<TAB>app<TAB>paths<TAB>reason  paths open by design, and why
 //	@card-page<TAB>app<TAB>path<TAB>label  a page a break-glass card may open
-//	@pending<TAB>app                  no guard names the app yet
-//
-// A pending app is one whose site still uses an older guard
-// (protected_domains, protected_groups and the like) but whose snippet
-// already declares its roles with a "# scaffold-app:" marker, so that
-// administrators can give the roles before the site moves to "import role".
-// The scaffold emits @pending, and no @path or @open line, for such an app.
-// Its roles are assigned exactly as a live app's are, and /verify decides
-// them the same way, but no guard names the app until the site moves, so
-// its assignments admit nobody until then. Once the site moves, the scaffold
-// stops emitting @pending and emits the paths, and the assignments already
-// made take effect with no gap. An app with both @pending and paths is logged
-// and taken as live, since a path line means a guard names it.
 //
 // paths is one or more space-separated patterns. A pattern is an exact path
 // ("/faq") or a prefix ending in "*" ("/admin/*"); a lone "*" stands for
@@ -64,7 +51,6 @@ const (
 	linePath     = "@path"
 	lineOpen     = "@open"
 	lineCardPage = "@card-page"
-	linePending  = "@pending"
 )
 
 // App is one app in the manifest.
@@ -79,9 +65,6 @@ type App struct {
 	Source    string     // the snippet file, from @source; "" when not given
 	Paths     []Path     // @path and @open lines, in file order
 	CardPages []CardPage // @card-page lines, in file order
-	// Pending is set by an @pending line: the site still uses an older
-	// guard, so no guard names the app yet (see the format above).
-	Pending bool
 }
 
 // Path is one @path or @open line: a set of patterns and what they need.
@@ -316,17 +299,11 @@ func ParseManifest(r io.Reader, domain string, logf func(format string, args ...
 	for _, k := range cards {
 		parseKeyword(apps, k, logf)
 	}
-	for name, a := range apps {
-		if a.Pending && len(a.Paths) > 0 {
-			logf("app roles: %s is marked pending but declares paths, so it is taken as live", name)
-			a.Pending = false
-		}
-	}
 	return Manifest{Apps: apps}
 }
 
 // keywordFields is how many fields each keyword line has.
-var keywordFields = map[string]int{lineLabel: 3, lineSource: 3, linePath: 4, lineOpen: 4, lineCardPage: 4, linePending: 2}
+var keywordFields = map[string]int{lineLabel: 3, lineSource: 3, linePath: 4, lineOpen: 4, lineCardPage: 4}
 
 func parseKeyword(apps map[string]*App, k keywordLine, logf func(string, ...any)) {
 	want, known := keywordFields[k.f[0]]
@@ -348,12 +325,6 @@ func parseKeyword(apps map[string]*App, k keywordLine, logf func(string, ...any)
 		return
 	}
 	switch f[0] {
-	case linePending:
-		if a.Pending {
-			logf("app roles: line %d: %s is marked pending twice", k.n, a.Name)
-			return
-		}
-		a.Pending = true
 	case lineLabel:
 		if f[2] == "" || a.Label != a.Name {
 			logf("app roles: line %d: %s needs one non-empty label", k.n, f[0])

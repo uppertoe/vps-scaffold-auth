@@ -16,11 +16,6 @@
   {{if .Attention}}
   <ul class="todo">
     {{range .Lines}}<li{{if .Bad}} class="bad"{{end}}>{{.Before}}{{if .Link}}<a href="{{.Link}}">{{.Name}}</a>{{end}}{{.After}}</li>{{end}}
-    {{if .MissingGroups}}
-    <li>Apps require {{if eq (len .MissingGroups) 1}}a group that has{{else}}groups that have{{end}} not been created:
-      {{range $i, $g := .MissingGroups}}{{if $i}}, {{end}}<code class="mono">{{$g}}</code>{{end}}.
-      Nobody can be admitted through a group until it exists. <a href="/admin/groups">Create it on the Groups page</a>.</li>
-    {{end}}
     {{if .UnusedGroups}}
     <li>No app uses {{if eq (len .UnusedGroups) 1}}this group{{else}}these groups{{end}}:
       {{range $i, $g := .UnusedGroups}}{{if $i}}, {{end}}<a href="/admin/groups/{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}.
@@ -45,9 +40,6 @@
   {{else}}
   <p class="muted" style="margin:0">Nothing needs attention.</p>
   {{end}}
-  {{if and (not .RouteGroupsOn) (not $.RolesOn)}}
-  <p class="muted" style="margin:12px 0 0">The gateway has not been given the list of groups the apps use (ROUTE_GROUPS_FILE), so it cannot check for missing or unused groups.</p>
-  {{end}}
 </div>
 
 {{if .Sites}}
@@ -63,17 +55,7 @@
         <td><code class="mono">{{.Host}}</code></td>
         <td data-label="Who can reach it">
           {{range .RoleApps}}<div>{{.Before}}{{if .Href}}<a href="{{.Href}}">{{.Label}}</a>{{else}}{{.Label}}{{end}}{{.After}}</div>{{end}}
-          {{range .Rules}}
-          <div>
-            {{if eq .Kind "public"}}Open to everyone{{if .Reason}}: <span class="muted">{{.Reason}}</span>{{end}}
-            {{else if eq .Kind "network"}}Anyone on the {{index .Values 0}} network
-            {{else if eq .Kind "guests"}}Anyone signed in, including guests
-            {{else if eq .Kind "signed-in"}}Anyone signed in
-            {{else if eq .Kind "domains"}}Anyone signed in with an address at {{range $i, $d := .Values}}{{if $i}}, {{end}}{{$d}}{{end}}
-            {{else if eq .Kind "groups"}}{{range $i, $g := .Values}}{{if $i}}, {{end}}{{if eq $g "admin"}}Administrators{{else}}{{if not $i}}Members of {{end}}<a href="/admin/groups/{{$g}}"><code class="mono">{{$g}}</code></a>{{end}}{{end}}
-            {{end}}
-          </div>
-          {{end}}
+          {{range .Rules}}<div>Open to everyone{{if .Reason}}: <span class="muted">{{.Reason}}</span>{{end}}</div>{{end}}
         </td>
       </tr>
     {{end}}

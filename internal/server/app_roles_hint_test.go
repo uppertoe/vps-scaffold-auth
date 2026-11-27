@@ -219,13 +219,15 @@ func TestRoleGuardDeclinesEarlyForDomainGroupsOnly(t *testing.T) {
 // reveal who holds the role.
 func TestRoleGuardWithOtherHoldersDoesNotDecline(t *testing.T) {
 	srv, sender := rolesServer(t, "")
-	assignDomains(t, srv, "enquiries", "admin", "rch", "rch.org.au")
+	// The list holds User: a list that holds any other role is closed to an
+	// outsider such as x@partner.org, who would then hold no role at all.
+	assignDomains(t, srv, "enquiries", "user", "rch", "rch.org.au")
 	mustListGroup(t, srv, "exec")
 	if err := srv.store.AddGroupMember(context.Background(), "exec", "x@partner.org"); err != nil {
 		t.Fatal(err)
 	}
-	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignList, Ref: "exec"})
-	q := roleLoginURL(t, srv, "enquiries", "admin")
+	mustAssign(t, srv, store.RoleAssignment{App: "enquiries", Role: "user", Kind: store.AssignList, Ref: "exec"})
+	q := roleLoginURL(t, srv, "enquiries", "user")
 	c := newClient(t, srv.Handler())
 
 	page := c.get("/login?"+q.Encode(), nil).Body.String()
