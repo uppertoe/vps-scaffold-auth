@@ -369,6 +369,18 @@ func (s *Server) shouldOfferPasskey(r *http.Request, role string, pk int64) bool
 	return mayHoldPasskey(role)
 }
 
+// adminGradeFor decides whether a passkey being added stands in for the admin
+// second step: only an administrator's, with TOTP on, straight after an
+// authenticator code (confirmed) or while the admin step is fresh. The role
+// is checked first and on its own, so a guest's, a member's or staff's
+// passkey is never admin grade whatever the session or challenge says.
+func adminGradeFor(role string, totpOn, confirmed, stepFresh bool) bool {
+	if role != authz.RoleAdmin {
+		return false
+	}
+	return totpOn && (confirmed || stepFresh)
+}
+
 // mayHoldPasskey reports whether a sign-in with this role may add and use a
 // passkey: staff, an administrator, a member or a guest, under the same
 // rules. A guest's passkey is never admin grade (only an administrator's
@@ -663,7 +675,7 @@ func (s *Server) handlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
 	// Admin grade means the administrator passed the second factor to add
 	// this passkey. With TOTP off there was no second factor to pass, so a
 	// passkey added then must not stand in for one once TOTP is turned on.
-	adminGrade := role == authz.RoleAdmin && s.cfg.TOTPEnabled && (ch.Confirmed || s.adminStepFresh(id))
+	adminGrade := adminGradeFor(role, s.cfg.TOTPEnabled, ch.Confirmed, s.adminStepFresh(id))
 
 	reg, ok := parseRegistration(r)
 	if !ok {

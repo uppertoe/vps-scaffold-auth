@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -70,20 +71,27 @@ type roleCache struct {
 	have bool
 }
 
-// loadAppRoles reads APP_ROLES_FILE once at start. A missing or unreadable
-// file leaves the manifest empty, so every guard that names an app is refused
-// until it is fixed; an empty setting turns the model off.
-func loadAppRoles(path, domain string) roles.Manifest {
+// loadAppRoles reads APP_ROLES_FILE once at start; the gateway never reads
+// it again while it runs. A file that cannot be read, such as the directory
+// Docker makes when a bind mount's source is missing, or that declares no
+// app, is an error, and the gateway refuses to start: with no app, nobody
+// would be staff or a guest, and every session but an administrator's would
+// end at its next request. (config.Load refuses an empty setting; an empty
+// path here is a hand-built configuration and gives an empty manifest.)
+func loadAppRoles(path, domain string) (roles.Manifest, error) {
 	if path == "" {
-		return roles.Manifest{}
+		return roles.Manifest{}, nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		log.Printf("app roles: %v; every guard that names an app will be refused", err)
-		return roles.Manifest{}
+		return roles.Manifest{}, fmt.Errorf("APP_ROLES_FILE: %w", err)
 	}
 	defer f.Close()
-	return roles.ParseManifest(f, domain, log.Printf)
+	m := roles.ParseManifest(f, domain, log.Printf)
+	if len(m.Apps) == 0 {
+		return m, fmt.Errorf("APP_ROLES_FILE: %s declares no app (is it a directory, or empty?)", path)
+	}
+	return m, nil
 }
 
 // rolesOn reports whether the app-roles model is configured.
@@ -618,6 +626,9 @@ func (s *Server) logWhoSignsIn(ctx context.Context) {
 	if hosts := s.guestHosts(st); len(hosts) > 0 {
 		log.Printf("authz: guest sign-in is open on %s, the hosts of the apps whose User role is held by guests: an address that is not staff and holds no app role signs in there as a guest", strings.Join(hosts, ", "))
 	}
+	if s.guestsStranded(ctx) {
+		log.Printf("warning: authz: guests hold a role in an app that APP_ROLES_FILE no longer declares, and in no app it does: guest sessions are kept and answered 503 until the app is declared again")
+	}
 }
 
 // guestsHold reports whether guests hold app's User role: a guest who has
@@ -663,6 +674,29 @@ func (s *Server) guestsAnywhere(ctx context.Context) bool {
 	}
 	for name := range s.appRoles.Apps {
 		if s.guestsHold(st, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// guestsStranded reports whether a guests assignment names an app the
+// manifest no longer declares while no declared app's role is held by
+// guests: the manifest has lost the app that admits guests, so every guest
+// session, and every session carried over as one, would end. That is taken
+// for a fault in the configuration (a snippet renamed or dropped by
+// mistake), so renewSessionWith keeps those sessions and answers 503 until
+// the app is declared again; each still ends at SESSION_MAX_AGE. The admin
+// pages show only declared apps, so the assignment cannot be removed there
+// meanwhile. Taking guests off an app on its admin page is a decision, and
+// ends the sessions as before.
+func (s *Server) guestsStranded(ctx context.Context) bool {
+	st, ok := s.roleDataLoaded(ctx)
+	if !ok || s.guestsAnywhere(ctx) {
+		return false
+	}
+	for _, a := range st.assignments {
+		if a.Kind == store.AssignGuests && !s.appRoles.Has(a.App, roles.UserRole) {
 			return true
 		}
 	}

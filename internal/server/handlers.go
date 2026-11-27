@@ -42,6 +42,14 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 		return false
 	}
 	role := s.renewalRole(id)
+	if role == authz.RoleDeny && s.guestsStranded(r.Context()) && s.keptOnlyByGuests(id) {
+		// The manifest has lost the app whose role guests hold: a fault in
+		// the configuration, not a decision to close guest sign-in. A
+		// session only guests would keep is left as it is, as while the
+		// role data cannot be read.
+		s.renderUnavailable(w, s.reconstructOriginalURL(r))
+		return false
+	}
 	if role == authz.RoleDeny {
 		s.endThisSession(w, r, id)
 		s.redirectToLogin(w, r)
@@ -85,7 +93,7 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups string, ok bool) {
 	role := s.renewalRole(id)
 	if role == authz.RoleDeny {
-		return "", true // renewSessionWith ends the session
+		return "", true // renewSessionWith ends the session, or answers 503
 	}
 	dbGroups, err := s.store.GroupsForEmail(r.Context(), id.Email)
 	if err != nil {
@@ -1401,29 +1409,67 @@ const guestsFromRolesRelease = "guests-from-roles"
 // does: removing a domain from a domain group still ends its sessions, and a
 // member is never made a guest.
 func (s *Server) carriedOverAsGuest(ctx context.Context, id *session.Identity) bool {
+	return s.mayCarryOver(id) && s.guestsAnywhere(ctx)
+}
+
+// mayCarryOver is carriedOverAsGuest without asking whether guests hold a
+// role anywhere: a staff session from before the release with a plausible
+// address.
+func (s *Server) mayCarryOver(id *session.Identity) bool {
 	return id.Kind == "" && id.Auth > 1 && !s.guestsReleasedAt.IsZero() && id.Auth <= s.guestsReleasedAt.Unix() &&
-		authz.GuestEligible(id.Email) && s.guestsAnywhere(ctx)
+		authz.GuestEligible(id.Email)
+}
+
+// keptOnlyByGuests reports whether, of all the reasons a session could go
+// on, only guests holding a role could keep it: it is a guest's, or a staff
+// session that would carry over as one. Asked only once renewalRole has
+// refused the session.
+func (s *Server) keptOnlyByGuests(id *session.Identity) bool {
+	return (id.Kind == session.KindGuest && authz.GuestEligible(id.Email)) || s.mayCarryOver(id)
 }
 
 // isOpenHost reports whether a sign-in's destination is on a host open to
 // guests (openToGuests), where an address that is not staff and holds no
-// role may sign in as a guest. The destination is rd, or DEFAULT_REDIRECT
-// when the sign-in names none (a direct visit to the sign-in page), and must
-// be on the domain; the auth host is never an app's host (the manifest is
-// refused at start if it names it), so it is never open.
+// role may sign in as a guest. The destination is rd, and must be on the
+// domain. A sign-in that names none (a direct visit to the sign-in page), or
+// names one of the gateway's own pages (Your sessions, Your passkeys, the
+// links in its emails), is decided as one to DEFAULT_REDIRECT, so a guest
+// signed out there can sign in again where a direct visit could. The auth
+// host itself is never an app's host (the manifest is refused at start if it
+// names it). The host decides only where a stranger may start, never what a
+// guest reaches.
 func (s *Server) isOpenHost(ctx context.Context, rd string) bool {
-	if rd == "" {
-		rd = s.cfg.DefaultRedirect
+	host := s.destinationHost(rd)
+	if host == "" || host == s.authHost() {
+		host = s.destinationHost(s.cfg.DefaultRedirect)
 	}
+	if host == s.authHost() {
+		return false
+	}
+	return s.openToGuests(ctx, host)
+}
+
+// destinationHost is the lower-case host of a destination on the domain, or
+// "" for one that ValidateRedirect refuses.
+func (s *Server) destinationHost(rd string) string {
 	target, ok := authz.ValidateRedirect(rd, s.cfg.Domain)
 	if !ok {
-		return false
+		return ""
 	}
 	u, err := url.Parse(target)
 	if err != nil {
-		return false
+		return ""
 	}
-	return s.openToGuests(ctx, strings.ToLower(u.Hostname()))
+	return strings.ToLower(u.Hostname())
+}
+
+// authHost is the gateway's own host, from AUTH_PUBLIC_URL.
+func (s *Server) authHost() string {
+	u, err := url.Parse(s.cfg.PublicURL)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
 }
 
 // computeGroups returns a session's comma-separated groups for an email: the

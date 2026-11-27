@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -223,13 +224,19 @@ func testServerNoStaff(t *testing.T, adjust func(*config.Config)) (*Server, *cap
 	if adjust != nil {
 		adjust(cfg)
 	}
+	// The gateway refuses to start without a manifest that declares an app,
+	// so a test that names none gets one declaring only staffHarnessApp.
+	// Tests add apps of their own in memory (testGuardApp).
+	if cfg.AppRolesFile == "" {
+		cfg.AppRolesFile = filepath.Join(t.TempDir(), "app-roles.tsv")
+		if err := os.WriteFile(cfg.AppRolesFile, []byte(staffHarnessApp+"\tuser\tUser\t"+staffHarnessApp+".{$DOMAIN}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	sender := newCaptureSender()
 	srv, err := New(cfg, st, sender)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if srv.cfg.AppRolesFile == "" {
-		srv.cfg.AppRolesFile = "test"
 	}
 	// The transitional rule (carriedOverAsGuest) is off unless a test turns
 	// it on, so a session a test starts on a fake clock is never taken for

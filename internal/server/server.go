@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	texttemplate "text/template"
 	"time"
@@ -126,7 +125,6 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		emailTmpl:     emailTmpl,
 		now:           time.Now,
 		loc:           loc,
-		appRoles:      loadAppRoles(cfg.AppRolesFile, cfg.Domain),
 	}
 	// Anti-replay reads the clock through s.now so tests sharing a fake clock stay
 	// consistent with the rest of the server.
@@ -139,6 +137,9 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		return ""
 	}
 	s.passkeyChallenges = newChallengeGuard(st, func() time.Time { return s.now() })
+	if s.appRoles, err = loadAppRoles(cfg.AppRolesFile, cfg.Domain); err != nil {
+		return nil, err
+	}
 	if err := s.refuseAuthHostApps(); err != nil {
 		return nil, err
 	}
@@ -336,11 +337,10 @@ func logRetiredSettings(set []string) {
 // there would let an app's roles, and a Guests assignment's open sign-in,
 // reach those pages.
 func (s *Server) refuseAuthHostApps() error {
-	u, err := url.Parse(s.cfg.PublicURL)
-	if err != nil {
-		return fmt.Errorf("AUTH_PUBLIC_URL: %w", err)
+	host := s.authHost()
+	if host == "" {
+		return fmt.Errorf("AUTH_PUBLIC_URL: no host in %q", s.cfg.PublicURL)
 	}
-	host := strings.ToLower(u.Hostname())
 	for _, a := range s.appRoles.Sorted() {
 		if a.ServesHost(host) {
 			return fmt.Errorf("APP_ROLES_FILE: app %q names the auth host %s as one of its hosts; the auth host serves no app", a.Name, host)

@@ -116,7 +116,7 @@ jobs:
       - name: Smoke test — image boots and serves /healthz
         run: |
           set -e
-          docker run -d --name vps-scaffold-auth-smoke -p 8899:8080 -e SESSION_SECRET=$(openssl rand -hex 32) -e DOMAIN=example.com -e AUTH_PUBLIC_URL=https://auth.example.com -e ADMIN_EMAILS=admin@example.com -e APP_ROLES_FILE=/etc/vps-auth/none.tsv -e EMAIL_BACKEND=log -e COOKIE_INSECURE=true vps-scaffold-auth:ci
+          docker run -d --name vps-scaffold-auth-smoke -p 8899:8080 -e SESSION_SECRET=$(openssl rand -hex 32) -e DOMAIN=example.com -e AUTH_PUBLIC_URL=https://auth.example.com -e ADMIN_EMAILS=admin@example.com -v "$PWD/deploy/app-roles.sample.tsv:/etc/vps-auth/app-roles.tsv:ro" -e APP_ROLES_FILE=/etc/vps-auth/app-roles.tsv -e EMAIL_BACKEND=log -e COOKIE_INSECURE=true vps-scaffold-auth:ci
           code=000
           for i in $(seq 1 40); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8899/healthz || true)

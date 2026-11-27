@@ -204,7 +204,8 @@ A role held by guests opens guest sign-in on that app's hosts. When someone
 signs in on the way to one of them and their address is not staff and holds no
 app role, the gateway sends them a code as usual and, once they enter it, signs
 them in as a **guest**. A sign-in that names no destination (a direct visit to
-the sign-in page) is decided as one to `DEFAULT_REDIRECT`. A member of staff,
+the sign-in page), or names one of the gateway's own pages such as Your
+sessions, is decided as one to `DEFAULT_REDIRECT`. A member of staff,
 an administrator or a member signs in with their usual role on such a host as
 anywhere else. The review step on the app's page says that saving opens
 sign-in on the app's hosts, and saving emails the other administrators.
@@ -303,7 +304,9 @@ for the annotated list. Key ones:
 | `BREAKGLASS_REFUSED_GROUPS` | **Deprecated; read for one release only.** Lists to make staff only as well as those the role rule makes staff only (space or comma separated). The gateway logs at start that the setting is deprecated, and names each list that only the setting makes staff only. Remove it once that line names nothing you need closed |
 | `DOMAIN` | The server domain (provided by the server `.env`) |
 
-The gateway refuses to start without `ADMIN_EMAILS` or `APP_ROLES_FILE`.
+The gateway refuses to start without `ADMIN_EMAILS` or `APP_ROLES_FILE`, and
+when the manifest cannot be read, declares no app, or gives an app the auth
+host. The manifest is read only at start.
 `ALLOWED_EMAIL_DOMAINS` and `OPEN_REGISTRATION_HOSTS` are no longer read: if
 either is still set, the gateway logs a warning at start and ignores it.
 
@@ -330,7 +333,9 @@ holds no role through a list or by name, becomes a guest session at its next
 request while some app's role is held by guests, instead of ending. This keeps
 p.stonn's users signed in when markbot drops `ALLOWED_EMAIL_DOMAINS=*`. The rule
 applies only to sessions from before the release, so it lapses with them, and
-is to be removed after 1 March 2027.
+is to be removed after 1 March 2027. If a restart's manifest loses the app
+guests hold a role in, guest sessions are kept and answered 503 until the app
+is declared again, since that is more likely a mistake than a decision.
 
 ### Passkeys (optional)
 

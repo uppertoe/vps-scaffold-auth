@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	pqtotp "github.com/pquerna/otp/totp"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
@@ -432,5 +435,285 @@ func TestGuestPasskeys(t *testing.T) {
 	}
 	if rec := c.get("/passkeys", computerOnNet); !strings.Contains(rec.Body.String(), networkRefusal) {
 		t.Error("the passkeys page does not tell a guest on the network why it cannot add one")
+	}
+}
+
+// Must-fix 1. A manifest that cannot be read (a directory, as Docker makes
+// for a missing bind-mount source, or a missing file) or declares no app
+// stops start-up, rather than starting with nobody staff and every session
+// ending at its next request.
+func TestManifestUnreadableOrEmptyRefusesStart(t *testing.T) {
+	dir := t.TempDir()
+	asDir := filepath.Join(dir, "as-dir.tsv")
+	if err := os.Mkdir(asDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(dir, "empty.tsv")
+	if err := os.WriteFile(empty, []byte("# no apps\n\nbroken line\n@label\tx\tX\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{"a directory": asDir, "a missing file": filepath.Join(dir, "missing.tsv"), "no app": empty} {
+		st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "auth.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := &config.Config{PublicURL: "https://auth.example.com", Domain: "example.com", AdminEmails: []string{"admin@example.com"},
+			SessionSecret: []byte("0123456789abcdef0123456789abcdef"), AppRolesFile: path, SessionTTL: time.Hour}
+		if _, err := New(cfg, st, newCaptureSender()); err == nil || !strings.Contains(err.Error(), "APP_ROLES_FILE") {
+			t.Errorf("%s: New = %v, want a refusal naming APP_ROLES_FILE", name, err)
+		}
+		st.Close()
+	}
+}
+
+// Must-fix 1. A restart whose manifest has lost the app guests hold a role
+// in is a configuration fault: guest sessions, and staff sessions that would
+// carry over as guests', are kept and answered 503, not ended. Declaring
+// the app again brings them back; taking guests off the app on purpose ends
+// them as before.
+func TestGuestsStrandedByTheManifestAreKept(t *testing.T) {
+	now := time.Now()
+	released := now.Add(-time.Hour)
+	srv, sender := pstonnServer(t, released)
+	srv.now = func() time.Time { return now }
+	old := mintSession(t, srv, session.Identity{Email: "reader@gmail.com", Groups: authz.RoleUser, Auth: released.Add(-time.Hour).Unix()}, time.Hour)
+	g := newClient(t, srv.Handler())
+	sender.reset()
+	g.postForm("/request", url.Values{"email": {"guest@gmail.com"}, "rd": {"https://p.example.com/"}})
+	g.postForm("/verify-code", url.Values{"code": {sender.code()}, "rd": {"https://p.example.com/"}})
+	if id := sessionOf(t, srv, g); id.Kind != session.KindGuest {
+		t.Fatalf("guest kind %q", id.Kind)
+	}
+
+	restart := func(manifest string) *Server {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "app-roles.tsv")
+		if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg := *srv.cfg
+		cfg.AppRolesFile = path
+		next, err := New(&cfg, srv.store, newCaptureSender())
+		if err != nil {
+			t.Fatal(err)
+		}
+		next.now = srv.now
+		next.guestsReleasedAt = released
+		return next
+	}
+	other := restart("other\tuser\tUser\tother.{$DOMAIN}\n")
+	if !other.guestsStranded(context.Background()) {
+		t.Fatal("the lost app's guests assignment is not seen as stranded")
+	}
+	for name, c := range map[string]*client{"guest": g, "carried over": old} {
+		c2 := clientWith(t, other, c.cookies[session.SessionCookie])
+		if rec := c2.get("/verify", guardFor("other")); rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s with the app gone from the manifest = %d, want 503", name, rec.Code)
+		}
+	}
+	if liveCount(other, "guest@gmail.com") != 1 || liveCount(other, "reader@gmail.com") != 1 {
+		t.Fatal("a session was ended while the manifest had lost the guests' app")
+	}
+
+	back := restart("p\tuser\tUser\tp.{$DOMAIN}\n")
+	for name, c := range map[string]*client{"guest": g, "carried over": old} {
+		c2 := clientWith(t, back, c.cookies[session.SessionCookie])
+		if rec := c2.get("/verify", guardFor("p")); rec.Code != http.StatusOK {
+			t.Errorf("%s once the app is declared again = %d, want 200", name, rec.Code)
+		}
+	}
+	// Taking guests off the app is a decision: the guest session ends.
+	noGuestsAnywhere(t, back)
+	c2 := clientWith(t, back, g.cookies[session.SessionCookie])
+	if rec := c2.get("/verify", guardFor("p")); rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
+		t.Errorf("guest once guests were taken off p = %d to %q, want sign-in", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// Must-fix 2. A sign-in towards one of the gateway's own pages (Your
+// sessions, Your passkeys, the links in its emails) is decided as one to
+// DEFAULT_REDIRECT, so a signed-out guest can sign in again there when a
+// direct visit could; the person lands back on the page. Where
+// DEFAULT_REDIRECT is closed to guests, so is the auth host.
+func TestGuestSignsInTowardsTheGatewaysOwnPages(t *testing.T) {
+	srv, sender := pstonnServer(t, time.Now().Add(-time.Hour))
+	// A signed-out visit to Your sessions is sent to sign in with the page
+	// as its destination.
+	if rec := newClient(t, srv.Handler()).get("/sessions", nil); !strings.Contains(rec.Header().Get("Location"), url.QueryEscape("https://auth.example.com/sessions")) {
+		t.Fatalf("signed-out /sessions = %d to %q", rec.Code, rec.Header().Get("Location"))
+	}
+	for _, rd := range []string{"https://auth.example.com/sessions", "https://auth.example.com/passkeys"} {
+		c := newClient(t, srv.Handler())
+		if !requestCodeAt(t, srv, sender, c, "reader@gmail.com", rd) {
+			t.Fatalf("no code for a guest signing in towards %s", rd)
+		}
+		rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}, "rd": {rd}})
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != rd {
+			t.Errorf("guest sign-in towards %s = %d to %q", rd, rec.Code, rec.Header().Get("Location"))
+		}
+		if id := sessionOf(t, srv, c); id.Kind != session.KindGuest {
+			t.Errorf("towards %s: kind %q, want guest", rd, id.Kind)
+		}
+	}
+	// The admin pages still refuse the guest.
+	c := newClient(t, srv.Handler())
+	requestCodeAt(t, srv, sender, c, "nosy@gmail.com", "https://auth.example.com/admin/")
+	c.postForm("/verify-code", url.Values{"code": {sender.code()}, "rd": {"https://auth.example.com/admin/"}})
+	if rec := c.get("/admin/", nil); rec.Code == http.StatusOK {
+		t.Error("a guest reached the admin pages")
+	}
+
+	rch, rsender := rchShapedServer(t, time.Now().Add(-time.Hour))
+	if requestCodeAt(t, rch, rsender, newClient(t, rch.Handler()), "reader@gmail.com", "https://auth.example.com/sessions") {
+		t.Error("a stranger was sent a code towards the auth host where DEFAULT_REDIRECT is closed to guests")
+	}
+}
+
+// rchShapedServer is shaped like RCH: staff at example.com through a domain
+// group that holds home's User role, guests holding enquiries' User role,
+// and DEFAULT_REDIRECT the apex, which no app gives guests.
+func rchShapedServer(t *testing.T, released time.Time) (*Server, *captureSender) {
+	t.Helper()
+	srv, sender := testServerWith(t, func(c *config.Config) {
+		c.DefaultRedirect = "https://example.com/"
+		c.SessionTTL = 24 * time.Hour
+		c.SessionRememberTTL = 30 * 24 * time.Hour
+		c.SessionMaxAge = 30 * 24 * time.Hour
+	})
+	openToGuestsForTest(t, srv, "enquiries")
+	testGuardApp(t, srv, "home")
+	mustAssign(t, srv, store.RoleAssignment{App: "home", Role: "user", Kind: store.AssignDomainGroup, Ref: staffHarnessGroup})
+	srv.guestsReleasedAt = released
+	srv.forgetRoles()
+	return srv, sender
+}
+
+// On an RCH-shaped server the upgrade changes nothing: staff stay staff with
+// their remembered lifetime, a guest stays a guest at enquiries only, and the
+// administrator keeps the admin tier.
+func TestRCHShapedUpgradeChangesNothing(t *testing.T) {
+	now := time.Now()
+	released := now.Add(-time.Minute)
+	srv, _ := rchShapedServer(t, released)
+	srv.now = func() time.Time { return now }
+	before := released.Add(-5 * 24 * time.Hour).Unix()
+	staff := mintSession(t, srv, session.Identity{Email: "amy@example.com", Groups: authz.RoleUser, Auth: before}, 30*24*time.Hour)
+	guest := mintSession(t, srv, session.Identity{Email: "applicant@gmail.com", Groups: authz.RoleGuest, Kind: session.KindGuest, Auth: before}, 24*time.Hour)
+	admin := mintSession(t, srv, session.Identity{Email: "admin@example.com", Groups: authz.RoleAdmin, Auth: before}, 30*24*time.Hour)
+	for _, tc := range []struct {
+		name, guard, kind string
+		c                 *client
+		code              int
+	}{
+		{"staff at home", "home", "", staff, http.StatusOK},
+		{"staff at enquiries", "enquiries", "", staff, http.StatusOK},
+		{"guest at enquiries", "enquiries", session.KindGuest, guest, http.StatusOK},
+		{"guest at home", "home", session.KindGuest, guest, http.StatusFound},
+		{"admin at home", "home", "", admin, http.StatusOK},
+	} {
+		rec := tc.c.get("/verify", guardFor(tc.guard))
+		if id := sessionOf(t, srv, tc.c); rec.Code != tc.code || id.Kind != tc.kind {
+			t.Errorf("%s: %d kind %q, want %d kind %q", tc.name, rec.Code, id.Kind, tc.code, tc.kind)
+		}
+	}
+	if id := sessionOf(t, srv, staff); id.TTL != int64((30 * 24 * time.Hour).Seconds()) {
+		t.Errorf("staff remembered lifetime changed: %d", id.TTL)
+	}
+	if !isAdminSession(sessionOf(t, srv, admin)) {
+		t.Error("the administrator lost the admin tier")
+	}
+	for _, e := range []string{"amy@example.com", "applicant@gmail.com", "admin@example.com"} {
+		if liveCount(srv, e) != 1 {
+			t.Errorf("%s has %d sessions, want 1", e, liveCount(srv, e))
+		}
+	}
+}
+
+// Only the open app's own hosts are open: not a subdomain of one, not a
+// look-alike, not another scheme, and not a host whose app gives guests
+// nothing. Case and a port do not matter, as a browser reads them.
+func TestOpenHostVariants(t *testing.T) {
+	srv, sender := rchShapedServer(t, time.Now().Add(-time.Hour))
+	i := 0
+	for rd, want := range map[string]bool{
+		"https://enquiries.example.com/x":           true,
+		"https://ENQUIRIES.example.com/":            true,
+		"https://enquiries.example.com:8443/":       true,
+		"https://enquiries.example.com./":           false,
+		"https://a.enquiries.example.com/":          false,
+		"https://auth.example.com/":                 false,
+		"https://example.com/":                      false,
+		"":                                          false,
+		"http://enquiries.example.com/":             false,
+		"https://enquiries.example.com.evil.org/":   false,
+		"https://evil.org/?x=enquiries.example.com": false,
+		"//enquiries.example.com/":                  false,
+		"https://home.example.com/":                 false,
+	} {
+		i++
+		if got := requestCodeAt(t, srv, sender, newClient(t, srv.Handler()), fmt.Sprintf("nobody%d@gmail.com", i), rd); got != want {
+			t.Errorf("rd %q: code sent %v, want %v", rd, got, want)
+		}
+	}
+}
+
+// A code asked for on the way to the open host, entered with a closed host
+// as the destination, makes no session: the verify step decides afresh.
+func TestRequestOpenVerifyClosedMakesNoSession(t *testing.T) {
+	srv, sender := rchShapedServer(t, time.Now().Add(-time.Hour))
+	c := newClient(t, srv.Handler())
+	if !requestCodeAt(t, srv, sender, c, "nobody@gmail.com", "https://enquiries.example.com/") {
+		t.Fatal("no code on the open host")
+	}
+	rec := c.postForm("/verify-code", url.Values{"code": {sender.code()}, "rd": {"https://home.example.com/"}})
+	if c.cookies[session.SessionCookie] != nil {
+		t.Errorf("a session was made towards a closed host: %d", rec.Code)
+	}
+}
+
+// A guest's passkey is never admin grade: the role is checked on its own,
+// before the second factor and the admin step, so neither a confirmed
+// challenge nor a fresh step makes a non-administrator's passkey admin grade.
+func TestOnlyAnAdministratorsPasskeyIsAdminGrade(t *testing.T) {
+	for _, role := range []string{authz.RoleGuest, authz.RoleMember, authz.RoleUser, authz.RoleDeny} {
+		if adminGradeFor(role, true, true, true) {
+			t.Errorf("a %q passkey is admin grade", role)
+		}
+	}
+	if !adminGradeFor(authz.RoleAdmin, true, true, false) || !adminGradeFor(authz.RoleAdmin, true, false, true) {
+		t.Error("an administrator's passkey after the second step is not admin grade")
+	}
+	if adminGradeFor(authz.RoleAdmin, false, true, true) || adminGradeFor(authz.RoleAdmin, true, false, false) {
+		t.Error("an administrator's passkey is admin grade without TOTP or the second step")
+	}
+}
+
+// A passkey sign-in gives the second step only to a current administrator:
+// an admin-grade passkey whose person has left ADMIN_EMAILS signs in as
+// staff, with no second step recorded.
+func TestAdminGradePasskeyOfAFormerAdministratorGivesNoSecondStep(t *testing.T) {
+	srv, sender := pkServer(t, func(c *config.Config) { c.TOTPEnabled = true })
+	secret := provisionTOTP(t, srv, "admin@example.com")
+	start := time.Now()
+	srv.now = func() time.Time { return start }
+	c := newClient(t, srv.Handler())
+	phoneSignIn(t, c, sender, "admin@example.com")
+	door := c.get("/totp", phone).Body.String()
+	code, _ := pqtotp.GenerateCode(secret, start)
+	offer := c.postWith("/totp", url.Values{"code": {code}, "csrf": {extractCSRF(t, door)}}, phone)
+	a := passkeytest.New()
+	if rec := register(t, c, a, offer.Body.String(), nil); rec.Code != http.StatusOK {
+		t.Fatalf("admin register: %d", rec.Code)
+	}
+	if list, _ := srv.store.ListPasskeys(context.Background(), "admin@example.com"); len(list) != 1 || !list[0].AdminGrade {
+		t.Fatalf("passkey = %+v, want one admin grade", list)
+	}
+	srv.policy = authz.NewPolicy(nil) // no longer an administrator; still staff
+	p := newClient(t, srv.Handler())
+	if rec := signInWith(t, p, a); rec.Code != http.StatusFound {
+		t.Fatalf("former administrator's passkey sign-in = %d", rec.Code)
+	}
+	if id := readSession(t, srv, p); id.TOTP || id.Kind != "" || strings.Contains(id.Groups, authz.RoleAdmin) {
+		t.Errorf("former administrator's passkey session = %+v, want staff with no second step", id)
 	}
 }
