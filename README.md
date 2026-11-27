@@ -346,7 +346,8 @@ marked by the `__Host-vps_auth_pk_here` cookie (unprefixed only with
 at sign-in, only for those passkeys, and only by the button, never in the
 email field. Passkeys are bound to the auth host (the relying-party ID is the host of
 `AUTH_PUBLIC_URL`), accept only ES256 with user verification and no
-attestation, and need no new dependency: the verifier is `internal/passkey`.
+attestation. The verifier is `internal/passkey`; its one dependency is
+fxamacker/cbor, which decodes the credential's COSE key.
 
 - Adding a passkey needs an emailed-code sign-in within the last 15 minutes
   (a passkey sign-in never counts); an administrator also needs a recent
