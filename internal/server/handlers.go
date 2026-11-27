@@ -1068,9 +1068,15 @@ func (s *Server) handleTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// The session gains the admin tier under a new token (startSession
 	// replaces the old one), keeping its sign-in time and passkey.
-	next := session.Identity{Email: id.Email, TOTP: true, Step: now.Unix(), PK: id.PK, Auth: id.Auth}
+	// SID names the session being replaced: if it has been ended while the
+	// code was checked, no new session starts.
+	next := session.Identity{Email: id.Email, TOTP: true, Step: now.Unix(), PK: id.PK, Auth: id.Auth, SID: id.SID}
 	next.Groups = s.computeGroups(r.Context(), id.Email, authz.RoleAdmin)
-	if err := s.startSession(w, r, next, s.sessions.SessionTTL(id), now); err != nil {
+	if err := s.startSession(w, r, next, s.sessions.SessionTTL(id), now); errors.Is(err, errGrantGone) {
+		s.sessions.ClearSession(w)
+		http.Redirect(w, r, s.loginURL(s.stepUpURL(rd)), http.StatusFound)
+		return
+	} else if err != nil {
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Something went wrong", Redirect: rd})
 		return
 	}

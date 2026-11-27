@@ -67,7 +67,9 @@ func liveCount(srv *Server, email string) int { return len(srv.liveSessionsNow(e
 // subject; the notices are sent off the request.
 func waitNotice(t *testing.T, sender *captureSender, to, subject string) email.Message {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	// Generous, so a loaded machine under -race cannot make it flake; a
+	// notice that is never sent still fails.
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		sender.mu.Lock()
 		for _, m := range sender.notices {
@@ -563,7 +565,10 @@ func TestConversionRacingARevocation(t *testing.T) {
 		select {
 		case err := <-done:
 			done <- err
-		case <-time.After(300 * time.Millisecond):
+		// Long enough for the revocation to finish on a loaded machine if
+		// it did not wait for the conversion (the bug); with the fix it
+		// always waits the full time, which only slows this test.
+		case <-time.After(2 * time.Second):
 		}
 	}
 	ck := legacyCookie(t, srv, session.Identity{Email: "amy@example.com", Groups: "user", Iat: now.Unix(), Auth: now.Add(-time.Hour).Unix()}, now.Add(time.Hour))
@@ -785,7 +790,10 @@ func TestRefusedOldCookieNeverTakesTheLock(t *testing.T) {
 				if ok {
 					t.Errorf("%s: admitted", name)
 				}
-			case <-time.After(time.Second):
+			// A refusal takes microseconds; one that waits on the lock never
+			// returns while the test holds it, so a long bound proves the
+			// same and cannot flake.
+			case <-time.After(10 * time.Second):
 				t.Fatalf("%s: a refused old cookie waited on the write lock (restarted=%v)", name, g == again)
 			}
 		}
