@@ -92,7 +92,7 @@ func TestBreakGlassCardRefusedOnceTargetIsAppRole(t *testing.T) {
 		c.BreakGlassNotifyEmails = []string{"admin@example.com"}
 	})
 	token := mintGroupCode(t, srv, "Lab 1", "airdb_admin")
-	// The list closes after the card was made: it is given AIR-DB's
+	// The list becomes staff only after the card was made: it is given AIR-DB's
 	// Administrator role.
 	_ = srv.store.CreateGroupOfKind(context.Background(), "airdb_admin", "", store.GroupKindList)
 	mustAssign(t, srv, store.RoleAssignment{App: "air-db", Role: "admin", Kind: store.AssignList, Ref: "airdb_admin"})

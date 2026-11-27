@@ -74,7 +74,7 @@ func TestReviewDoorUpgradesPasskeyOfPlantedSession(t *testing.T) {
 // P4: the guest filter fails closed while the role data cannot be read: an
 // outsider keeps none of the lists, and keeps the leading guest role.
 func TestReviewGuestFilterFailsClosedWhileRolesUnread(t *testing.T) {
-	srv, _ := closedListServer(t, func(c *config.Config) {
+	srv, _ := staffOnlyListServer(t, func(c *config.Config) {
 		c.OpenRegistrationHosts = []string{"apply.example.com"}
 	})
 	ctx := context.Background()
@@ -87,7 +87,7 @@ func TestReviewGuestFilterFailsClosedWhileRolesUnread(t *testing.T) {
 	srv.roleCache.mu.Lock()
 	srv.roleCache.ok, srv.roleCache.have, srv.roleCache.state = false, false, roleState{}
 	srv.roleCache.mu.Unlock()
-	if _, loaded := srv.closedLists(ctx); loaded {
+	if _, loaded := srv.staffOnlyLists(ctx); loaded {
 		t.Fatal("the role data reads as loaded")
 	}
 	got := srv.computeGroups(ctx, strangerAddr, "guest")

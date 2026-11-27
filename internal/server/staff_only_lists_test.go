@@ -21,15 +21,17 @@ import (
 // The lists BREAKGLASS_REFUSED_GROUPS names on RCH and MCH in November 2026,
 // with the roles each holds as the servers' snippets and design documents
 // describe them (rch-server-image apps/air-db, apps/fellows; mch-server-image
-// design-docs/the-login-wall.md). Every list the setting names stays closed,
-// because the setting is still read; the role rule alone closes every RCH
-// list, and on MCH every list but planka-users and cms-editors, which hold
-// only User.
+// design-docs/the-login-wall.md). cms-editors holds the CMS's Editor role,
+// which the owner decided to add (a separate change); until that change
+// ships it holds the CMS's User role, and the setting keeps it staff only.
+// Every list the setting names stays staff only, because the setting is
+// still read; the role rule alone makes every RCH list staff only, and on MCH
+// every list but planka-users, which holds only User.
 var serverLists = []struct {
 	server  string
 	setting []string
 	holds   []store.RoleAssignment
-	// byRoles are the lists the role rule closes without the setting.
+	// byRoles are the lists the role rule makes staff only without the setting.
 	byRoles []string
 }{
 	{
@@ -52,9 +54,9 @@ var serverLists = []struct {
 			{App: "planka", Role: "admin", Ref: "planka-admins"},
 			{App: "planka", Role: "owner", Ref: "planka-owners"},
 			{App: "planka", Role: "user", Ref: "planka-users"},
-			{App: "cms", Role: "user", Ref: "cms-editors"},
+			{App: "cms", Role: "editor", Ref: "cms-editors"},
 		},
-		byRoles: []string{"planka-admins", "planka-owners"},
+		byRoles: []string{"cms-editors", "planka-admins", "planka-owners"},
 	},
 }
 
@@ -81,42 +83,42 @@ func serverListsServer(t *testing.T, i int, withSetting bool) *Server {
 	return srv
 }
 
-// Every list the setting names on RCH and MCH today is closed under the new
-// rule with the setting still read, and the role rule alone closes the lists
-// listed in byRoles.
-func TestRefusedGroupsSettingStillClosedOnRCHAndMCH(t *testing.T) {
+// Every list the setting names on RCH and MCH today is staff only under the new
+// rule with the setting still read, and the role rule alone makes the lists
+// in byRoles staff only.
+func TestRefusedGroupsSettingStillStaffOnlyOnRCHAndMCH(t *testing.T) {
 	for i, sl := range serverLists {
 		t.Run(sl.server, func(t *testing.T) {
 			ctx := context.Background()
 			srv := serverListsServer(t, i, true)
-			closed, loaded := srv.closedLists(ctx)
+			staffOnly, loaded := srv.staffOnlyLists(ctx)
 			if !loaded {
 				t.Fatal("the role data was not read")
 			}
 			for _, g := range sl.setting {
-				if !closed[g] {
-					t.Errorf("%s is open with the setting read", g)
+				if !staffOnly[g] {
+					t.Errorf("%s is not staff only with the setting read", g)
 				}
 				if reason, _ := srv.targetRefusal(ctx, g); reason != refusedAppRole {
 					t.Errorf("%s is a card target: reason %q", g, reason)
 				}
 			}
 			alone := serverListsServer(t, i, false)
-			closed, _ = alone.closedLists(ctx)
+			staffOnly, _ = alone.staffOnlyLists(ctx)
 			var got []string
-			for g := range closed {
+			for g := range staffOnly {
 				got = append(got, g)
 			}
 			sort.Strings(got)
 			if !reflect.DeepEqual(got, sl.byRoles) {
-				t.Errorf("the role rule alone closes %v, want %v", got, sl.byRoles)
+				t.Errorf("the role rule alone makes %v staff only, want %v", got, sl.byRoles)
 			}
 		})
 	}
 }
 
-// The start log says the setting is deprecated and names each list it closes
-// that the role rule does not: on MCH, cms-editors and planka-users.
+// The start log says the setting is deprecated and names each list that only
+// the setting makes staff only: on MCH, planka-users.
 func TestRefusedGroupsSettingLogsDeprecation(t *testing.T) {
 	srv := serverListsServer(t, 1, true)
 	var buf bytes.Buffer
@@ -124,7 +126,7 @@ func TestRefusedGroupsSettingLogsDeprecation(t *testing.T) {
 	srv.logRefusedGroupsDeprecated(context.Background())
 	log.SetOutput(os.Stderr)
 	out := buf.String()
-	for _, want := range []string{"BREAKGLASS_REFUSED_GROUPS is deprecated", "alone closes cms-editors, planka-users,"} {
+	for _, want := range []string{"BREAKGLASS_REFUSED_GROUPS is deprecated", "alone makes planka-users staff only,"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("start log lacks %q:\n%s", want, out)
 		}
@@ -134,8 +136,8 @@ func TestRefusedGroupsSettingLogsDeprecation(t *testing.T) {
 	log.SetOutput(&buf)
 	rch.logRefusedGroupsDeprecated(context.Background())
 	log.SetOutput(os.Stderr)
-	if strings.Contains(buf.String(), "alone closes") {
-		t.Errorf("RCH's start log names a list the role rule leaves open:\n%s", buf.String())
+	if strings.Contains(buf.String(), "alone makes") {
+		t.Errorf("RCH's start log names a list the role rule leaves open to any address:\n%s", buf.String())
 	}
 	none, _ := testServer(t)
 	buf.Reset()
@@ -147,12 +149,12 @@ func TestRefusedGroupsSettingLogsDeprecation(t *testing.T) {
 	}
 }
 
-// An outsider on a closed list is never counted as its member: not in a
+// An outsider on a staff-only list is never counted as its member: not in a
 // session, whether a guest's, a member's or a card's, and not by the members
 // endpoint. A member of staff on the same list is counted. The Groups page
 // marks the outsider as not staff.
-func TestOutsiderIsNeverAMemberOfAClosedList(t *testing.T) {
-	srv, sender := closedListServer(t, func(c *config.Config) {
+func TestOutsiderIsNeverAMemberOfAStaffOnlyList(t *testing.T) {
+	srv, sender := staffOnlyListServer(t, func(c *config.Config) {
 		c.OpenRegistrationHosts = []string{"apply.example.com"}
 		c.MemberReaders = []config.MemberReader{{App: "digest", Token: digestToken, Groups: []string{"planka-admins", "planka-users"}}}
 	})
@@ -196,9 +198,9 @@ func TestOutsiderIsNeverAMemberOfAClosedList(t *testing.T) {
 }
 
 // A member who stays signed in loses a list at the next request once the
-// list closes, and keeps the roles held another way.
-func TestMemberLosesAListAtTheNextRequestOnceItCloses(t *testing.T) {
-	srv, sender := closedListServer(t, func(c *config.Config) {
+// list becomes staff only, and keeps the roles held another way.
+func TestMemberLosesAListAtTheNextRequestOnceItIsStaffOnly(t *testing.T) {
+	srv, sender := staffOnlyListServer(t, func(c *config.Config) {
 		c.OpenRegistrationHosts = []string{"apply.example.com"}
 	})
 	ctx := context.Background()
@@ -215,55 +217,55 @@ func TestMemberLosesAListAtTheNextRequestOnceItCloses(t *testing.T) {
 	}
 	mustAssign(t, srv, store.RoleAssignment{App: "planka", Role: "owner", Kind: store.AssignList, Ref: "planka-users"})
 	if rec := c.get("/verify", roleGuard("planka", "")); rec.Code == http.StatusOK {
-		t.Error("the member still reaches Planka through planka-users once it is closed")
+		t.Error("the member still reaches Planka through planka-users once it is staff only")
 	}
 	if rec := c.get("/verify", roleGuard("caffeine", "")); rec.Code != http.StatusOK {
 		t.Errorf("the member's role held another way = %d %q, want 200", rec.Code, rec.Header().Get("Location"))
 	}
 }
 
-// An outsider whose only role comes through a closed list holds no role: the
+// An outsider whose only role comes through a staff-only list holds no role: the
 // sign-in sends no code and shows the same page as for any address that may
 // not sign in, rather than signing the person in and ending the session at
 // once. An outsider on a list that holds only User still signs in as a member.
-func TestOutsiderWithOnlyAClosedListIsSentNoCode(t *testing.T) {
-	srv, sender := closedListServer(t, nil)
+func TestOutsiderWithOnlyAStaffOnlyListIsSentNoCode(t *testing.T) {
+	srv, sender := staffOnlyListServer(t, nil)
 	ctx := context.Background()
-	const closedOnly, openToo = "contractor@partner.org", "visitor@partner.org"
-	if _, err := srv.store.AddGroupMembers(ctx, "planka-admins", []string{closedOnly, openToo}); err != nil {
+	const staffOnlyMember, anyAddressMember = "contractor@partner.org", "visitor@partner.org"
+	if _, err := srv.store.AddGroupMembers(ctx, "planka-admins", []string{staffOnlyMember, anyAddressMember}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := srv.store.AddGroupMembers(ctx, "planka-users", []string{openToo}); err != nil {
+	if _, err := srv.store.AddGroupMembers(ctx, "planka-users", []string{anyAddressMember}); err != nil {
 		t.Fatal(err)
 	}
 	testGuardApp(t, srv, "planka")
-	if got := srv.loginRole(ctx, closedOnly, false); got != authz.RoleDeny {
-		t.Errorf("loginRole(%s) = %q, want no role", closedOnly, got)
+	if got := srv.loginRole(ctx, staffOnlyMember, false); got != authz.RoleDeny {
+		t.Errorf("loginRole(%s) = %q, want no role", staffOnlyMember, got)
 	}
-	if got := srv.loginRole(ctx, openToo, false); got != authz.RoleMember {
-		t.Errorf("loginRole(%s) = %q, want a member", openToo, got)
+	if got := srv.loginRole(ctx, anyAddressMember, false); got != authz.RoleMember {
+		t.Errorf("loginRole(%s) = %q, want a member", anyAddressMember, got)
 	}
-	// A session that still carries the closed list gives no reason to stay.
-	if srv.mayHoldRoleSnapshot(ctx, &session.Identity{Email: closedOnly, Groups: "guest,planka-admins", Kind: session.KindMember}) {
-		t.Error("a closed list in a member's session counts as a reason to sign in")
+	// A session that still carries the staff-only list gives no reason to stay.
+	if srv.mayHoldRoleSnapshot(ctx, &session.Identity{Email: staffOnlyMember, Groups: "guest,planka-admins", Kind: session.KindMember}) {
+		t.Error("a staff-only list in a member's session counts as a reason to sign in")
 	}
 	sender.reset()
 	c := newClient(t, srv.Handler())
-	page := c.postForm("/request", url.Values{"email": {closedOnly}})
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), closedOnly) || sentCount(sender) != 0 {
-		t.Errorf("request for %s = %d with %d codes sent; want the ordinary page and no code", closedOnly, page.Code, sentCount(sender))
+	page := c.postForm("/request", url.Values{"email": {staffOnlyMember}})
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), staffOnlyMember) || sentCount(sender) != 0 {
+		t.Errorf("request for %s = %d with %d codes sent; want the ordinary page and no code", staffOnlyMember, page.Code, sentCount(sender))
 	}
-	newClient(t, srv.Handler()).postForm("/request", url.Values{"email": {openToo}})
+	newClient(t, srv.Handler()).postForm("/request", url.Values{"email": {anyAddressMember}})
 	if sentCount(sender) != 1 {
-		t.Errorf("request for %s sent %d codes, want 1", openToo, sentCount(sender))
+		t.Errorf("request for %s sent %d codes, want 1", anyAddressMember, sentCount(sender))
 	}
 }
 
-// An outsider is not added to an open list that a closed list includes,
-// directly or through another group, since the closed list would then admit
+// An outsider is not added to an any-address list that a staff-only list includes,
+// directly or through another group, since the staff-only list would then admit
 // them; nor can a card target such a list. Staff are added as usual.
-func TestOutsiderRefusedOnAListAClosedListIncludes(t *testing.T) {
-	srv, sender := closedListServer(t, nil)
+func TestOutsiderRefusedOnAListAStaffOnlyListIncludes(t *testing.T) {
+	srv, sender := staffOnlyListServer(t, nil)
 	ctx := context.Background()
 	for _, g := range []string{"middle", "inner"} {
 		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
@@ -282,7 +284,7 @@ func TestOutsiderRefusedOnAListAClosedListIncludes(t *testing.T) {
 		}
 	}
 	if _, refused := srv.targetRefusal(ctx, "bg_ward"); refused {
-		t.Error("a list no closed list includes is refused")
+		t.Error("a list no staff-only list includes is refused")
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
@@ -315,7 +317,7 @@ func neverLoaded(srv *Server) {
 // target and for a hand-added outsider, and an include is not kept, while
 // staff are still added.
 func TestNeverLoadedRefusesTargetsOutsidersAndIncludes(t *testing.T) {
-	srv, sender := closedListServer(t, nil)
+	srv, sender := staffOnlyListServer(t, nil)
 	ctx := context.Background()
 	for _, g := range []string{"collaborators", "staff-list"} {
 		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {

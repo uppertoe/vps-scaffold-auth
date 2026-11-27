@@ -248,7 +248,7 @@ func TestMembersEndpointWithAndWithoutAllowList(t *testing.T) {
 	})
 }
 
-// A closed list (prototypes holds enquiries' Administrator role, and
+// A staff-only list (prototypes holds enquiries' Administrator role, and
 // BREAKGLASS_REFUSED_GROUPS names insights-admins) is dropped from a
 // stranger's and a member's groups, and kept in a member of staff's. A list
 // that holds only User (planka-users) is kept for everyone.
@@ -343,8 +343,8 @@ func TestDomainGroupChangesTheTierAtTheNextRequest(t *testing.T) {
 }
 
 // A guest session stays a stranger's: when the guest's domain later becomes
-// a staff domain, the session still loses the lists closed to outsiders until its person
-// signs in again. insights-admins is closed by BREAKGLASS_REFUSED_GROUPS, so
+// a staff domain, the session still loses the staff-only lists until its person
+// signs in again. insights-admins is staff only through BREAKGLASS_REFUSED_GROUPS, so
 // that the guest holds no role through it and stays a guest rather than a
 // member.
 func TestGuestStaysAGuestWhenItsDomainBecomesStaff(t *testing.T) {
@@ -373,7 +373,7 @@ func TestGuestStaysAGuestWhenItsDomainBecomesStaff(t *testing.T) {
 		if !srv.known(ctx, addr) {
 			t.Fatal("the address should now be staff")
 		}
-		wantDenied(t, "a guest on a list closed to outsiders", c.get("/verify", groupGuard(t, srv, "insights-admins")))
+		wantDenied(t, "a guest on a staff-only list", c.get("/verify", groupGuard(t, srv, "insights-admins")))
 		if rec := c.get("/verify", groupGuard(t, srv, "planka-users")); rec.Code != http.StatusOK {
 			t.Errorf("a guest on an ordinary list it is in = %d, want 200", rec.Code)
 		}
@@ -383,7 +383,7 @@ func TestGuestStaysAGuestWhenItsDomainBecomesStaff(t *testing.T) {
 	})
 }
 
-// A feed list closed to outsiders is dropped from a person's session once
+// A staff-only feed list is dropped from a person's session once
 // their domain stops being a staff domain, before the next sync takes them
 // off it, and from any session on the guest tier.
 func TestFeedListStrippedAfterItsDomainGoes(t *testing.T) {

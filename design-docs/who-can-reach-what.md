@@ -96,14 +96,14 @@ would change no one's sign-in.
 The same test of who is staff decides which addresses a roster feed keeps,
 which members a tool reading a list is given, and which members the Groups
 page marks as not staff. A list that holds any role other than User in some
-tool, such as an Administrator or Board owner role, is closed to people who
-are not staff. The gateway does not add such a person to a closed list, never
-counts them as its member, and drops the list from their session at their next
-request. A list closes as soon as it is given such a role. On the department's
-server the closed lists are the administrators lists of the airway database,
-the enquiries page, the project boards and the roster insights, and the
-prototypes list. An administrator can still give such a person the role by
-name.
+tool, such as an Administrator or Board owner role, is staff only. The
+gateway does not add someone who is not staff to a staff-only list, never
+counts them as its member, and removes the list from their session at their
+next request. Any other list takes any address. A list becomes staff only as
+soon as it is given such a role. On the department's server the staff-only
+lists include the administrators lists of the airway database, the enquiries
+page, the project boards and the roster insights, and the prototypes list. An
+administrator can still give someone who is not staff a role by name.
 
 ## Signing in for a domain
 

@@ -53,9 +53,9 @@ type roleState struct {
 	// domainRank orders every domain group's domains the same way, for the
 	// hints a role guard gives.
 	domainRank map[string]int
-	// closed are the lists that hold an app role other than User, which
-	// are closed to outsiders (closedLists).
-	closed map[string]bool
+	// staffOnly are the lists that hold an app role other than User, which
+	// are staff only (staffOnlyLists).
+	staffOnly map[string]bool
 }
 
 func roleKey(app, role string) string { return app + "\x00" + role }
@@ -144,7 +144,7 @@ func (s *Server) roleData(ctx context.Context) roleState {
 	}
 	st := roleState{assignments: as, domains: domains, cards: cards, invited: invited, invitedRoles: invitedRoles}
 	st.staff, st.staffOrder, st.domainRank = staffFromGroups(groups, domains, as, s.appRoles.Has)
-	st.closed = closedByRoles(as)
+	st.staffOnly = staffOnlyByRoles(as)
 	s.roleCache.state = st
 	s.roleCache.at = now
 	s.roleCache.ok = true
@@ -324,8 +324,9 @@ func (s *Server) verifyByRole(w http.ResponseWriter, r *http.Request, id *sessio
 		return
 	}
 	if id.Kind == session.KindGuest || id.Kind == session.KindMember {
-		// A guest or a member is an outsider, so a list that has closed
-		// since the session's groups were worked out is dropped now.
+		// A guest or a member is an outsider, so a list that has become
+		// staff only since the session's groups were worked out is dropped
+		// now.
 		id.Groups = s.guestGroupsNow(r.Context(), id)
 	}
 	held := s.heldRoles(r, id, app)
@@ -467,8 +468,8 @@ func rankOf(rank map[string]int, d string) int {
 
 // mayHoldRoleNow reports whether email holds a role through a domain group,
 // a list or a current person assignment, reading its lists from the store.
-// It is asked only about an address that is not staff, so a closed list
-// gives no reason to sign in (openListsForOutsider).
+// It is asked only about an address that is not staff, so a staff-only list
+// gives no reason to sign in (anyAddressListsOf).
 // With invitations, an open invitation counts too; sign-in never passes it,
 // since an invitation lets its address in only through its own code step,
 // which accepts it (and so gives the role) before the session is made.
@@ -485,7 +486,7 @@ func (s *Server) mayHoldRoleNow(ctx context.Context, email string, invitations b
 	for _, l := range lists {
 		set[l] = true
 	}
-	set = s.openListsForOutsider(ctx, set)
+	set = s.anyAddressListsOf(ctx, set)
 	st := s.roleData(ctx)
 	return (invitations && st.invited[email]) || roles.MaySignIn(email, set, st.assignments, s.roleEnv(st))
 }
@@ -498,21 +499,21 @@ func (s *Server) mayHoldRoleSnapshot(ctx context.Context, id *session.Identity) 
 		return false
 	}
 	st := s.roleData(ctx)
-	return roles.MaySignIn(id.Email, s.openListsForOutsider(ctx, sessionLists(id)), st.assignments, s.roleEnv(st))
+	return roles.MaySignIn(id.Email, s.anyAddressListsOf(ctx, sessionLists(id)), st.assignments, s.roleEnv(st))
 }
 
-// openListsForOutsider is lists without the closed ones, for an address that
-// is not staff: an outsider is never counted as a closed list's member, so a
+// anyAddressListsOf is lists without the staff-only ones, for an address that
+// is not staff: an outsider is never counted as a staff-only list's member, so a
 // role held only through one is no reason to sign in. While the role data has
 // never been read, no list counts.
-func (s *Server) openListsForOutsider(ctx context.Context, lists map[string]bool) map[string]bool {
-	closed, loaded := s.closedLists(ctx)
+func (s *Server) anyAddressListsOf(ctx context.Context, lists map[string]bool) map[string]bool {
+	staffOnly, loaded := s.staffOnlyLists(ctx)
 	out := make(map[string]bool, len(lists))
 	if !loaded {
 		return out
 	}
 	for l := range lists {
-		if !closed[normalizeGroupName(l)] {
+		if !staffOnly[normalizeGroupName(l)] {
 			out[l] = true
 		}
 	}
@@ -565,8 +566,8 @@ func (s *Server) knownRoleChecked(ctx context.Context, email string) (role strin
 
 // known reports whether an address is one of the department's: knownRole
 // admits it. It replaces the allow-list wherever the gateway asks whether an
-// address belongs to staff (feeds, the members endpoint, the lists closed to
-// outsiders, and the Groups page).
+// address belongs to staff (feeds, the members endpoint, the staff-only
+// lists, and the Groups page).
 func (s *Server) known(ctx context.Context, email string) bool {
 	return s.knownRole(ctx, email) != authz.RoleDeny
 }
@@ -636,8 +637,8 @@ func (s *Server) logWhoSignsIn(ctx context.Context) {
 // loginRole is the sign-in decision: a known address (knownRole) as staff or
 // an administrator, and also an address that holds an app role, which signs
 // in as a member (and not as a guest, even on an open host). A member is
-// decided by its roles, and is an outsider: closed lists are dropped from its
-// groups (see withoutClosedListsForOutsider).
+// decided by its roles, and is an outsider: staff-only lists are dropped from its
+// groups (see withoutStaffOnlyListsForOutsider).
 //
 // While the role data has never been read and only a domain group could
 // admit the address, the answer is RoleDeny, never a guest; the sign-in

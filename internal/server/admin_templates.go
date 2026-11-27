@@ -273,9 +273,9 @@ type codeView struct {
 	Created     string
 	Updated     string
 	// Refused is the short reason the target group may no longer be a card's
-	// target (see refusedTargets); empty for a group that may. A card made
-	// before the group became an application role keeps working, so the list
-	// marks it for the administrator to reconsider.
+	// target (see refusedTargets); empty for a group that may. Such a card is
+	// refused when it is scanned, so the list marks it for the administrator
+	// to replace.
 	Refused string
 }
 

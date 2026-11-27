@@ -677,16 +677,18 @@ func (s *Server) createGroupCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if reason, refused := s.targetRefusal(r.Context(), group); refused {
-		msg := "A break-glass code cannot target \"" + group + "\", because an application reads that group as one of its own roles and a card would admit whoever carries it in that role."
+		title, msg := "Staff-only list", "A break-glass code cannot target \""+group+"\", because it is a staff-only list, and a card would admit whoever carries it in that list's roles."
 		switch reason {
 		case refusedFeed:
-			msg = "A break-glass code cannot target \"" + group + "\", because its members come from a feed and a card would admit whoever carries it alongside them."
-		case refusedIncluded, refusedUnreadable:
-			msg = "A break-glass code cannot target \"" + group + "\", because the group is " + reason + "."
+			title, msg = "Group filled from a feed", "A break-glass code cannot target \""+group+"\", because its members come from a feed and a card would admit whoever carries it alongside them."
+		case refusedIncluded:
+			title, msg = "Group included in a staff-only list", "A break-glass code cannot target \""+group+"\", because a staff-only list includes it."
+		case refusedUnreadable:
+			title, msg = "Group not checked", "A break-glass code cannot target \""+group+"\" now, because every group is staff only while the gateway cannot read the app roles."
 		}
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
-			Title:   "Group " + reason,
-			Message: msg + " Choose a group that an app's sign-in rule names only to grant entry.",
+			Title:   title,
+			Message: msg + " Choose another group.",
 		})
 		return
 	}

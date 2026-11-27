@@ -172,10 +172,10 @@ type Config struct {
 	BreakGlassWebhookTimeout time.Duration
 	BreakGlassNotifyEmails   []string // recipients of use-notifications
 	// BreakGlassRefusedGroups (BREAKGLASS_REFUSED_GROUPS, space or comma
-	// separated) is deprecated and read for one release only. The gateway
-	// closes a list to outsiders when the list holds any app role other than
-	// User (closedLists); the lists named here are closed as well, and the
-	// gateway logs at start that the setting is deprecated.
+	// separated) is deprecated and read for one release only. A list that
+	// holds any app role other than User is staff only (staffOnlyLists); the
+	// lists named here are staff only as well, and the gateway logs at start
+	// that the setting is deprecated.
 	BreakGlassRefusedGroups []string
 	BreakGlassPDFHeader     string
 	BreakGlassPDFBody       string

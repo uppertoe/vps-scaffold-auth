@@ -11,13 +11,13 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
-// closedListServer builds a server whose lists hold the roles of an RCH-like
+// staffOnlyListServer builds a server whose lists hold the roles of an RCH-like
 // deployment: airdb_admin holds AIR-DB's Administrator role, prototypes
 // holds AIR-DB's Administrator and Narrator's User, planka-admins holds
 // Planka's Administrator, and planka-users holds Planka's User only. bg_ward
-// holds no role. The first three are closed to outsiders; planka-users and
+// holds no role. The first three are staff only; planka-users and
 // bg_ward are not. adjust is applied to the settings (nil for none).
-func closedListServer(t *testing.T, adjust func(*config.Config)) (*Server, *captureSender) {
+func staffOnlyListServer(t *testing.T, adjust func(*config.Config)) (*Server, *captureSender) {
 	t.Helper()
 	srv, sender := testServerWith(t, adjust)
 	ctx := context.Background()
@@ -38,11 +38,11 @@ func closedListServer(t *testing.T, adjust func(*config.Config)) (*Server, *capt
 	return srv, sender
 }
 
-// A list that holds any app role other than User is closed; a list that
-// holds only User, or nothing, is not. BREAKGLASS_REFUSED_GROUPS closes the
+// A list that holds any app role other than User is staff only; a list that
+// holds only User, or nothing, is not. BREAKGLASS_REFUSED_GROUPS makes the
 // lists it names as well, and a reserved name in it is ignored.
-func TestClosedListsFromRolesAndSetting(t *testing.T) {
-	srv, _ := closedListServer(t, func(c *config.Config) {
+func TestStaffOnlyListsFromRolesAndSetting(t *testing.T) {
+	srv, _ := staffOnlyListServer(t, func(c *config.Config) {
 		c.BreakGlassRefusedGroups = []string{"insights-admins", "Admin"}
 	})
 	ctx := context.Background()
@@ -57,45 +57,45 @@ func TestClosedListsFromRolesAndSetting(t *testing.T) {
 			t.Errorf("%s should not be a refused target (reserved roles have their own check)", g)
 		}
 	}
-	closed, loaded := srv.closedLists(ctx)
-	if !loaded || closed["planka-users"] || !closed["insights-admins"] {
-		t.Errorf("closedLists = %v, %v", closed, loaded)
+	staffOnly, loaded := srv.staffOnlyLists(ctx)
+	if !loaded || staffOnly["planka-users"] || !staffOnly["insights-admins"] {
+		t.Errorf("staffOnlyLists = %v, %v", staffOnly, loaded)
 	}
 }
 
-// A list closes as soon as it is given a role other than User and opens
+// A list becomes staff only as soon as it is given a role other than User and opens
 // again when the last such role is taken away, with no restart. A role for
-// an app or role the manifest does not declare closes the list too.
-func TestListClosesAndOpensWithItsRoles(t *testing.T) {
-	srv, _ := closedListServer(t, nil)
+// an app or role the manifest does not declare makes the list staff only too.
+func TestListIsStaffOnlyWhileItHoldsSuchARole(t *testing.T) {
+	srv, _ := staffOnlyListServer(t, nil)
 	ctx := context.Background()
-	isClosed := func(g string) bool {
-		closed, _ := srv.closedLists(ctx)
-		return closed[g]
+	isStaffOnly := func(g string) bool {
+		staffOnly, _ := srv.staffOnlyLists(ctx)
+		return staffOnly[g]
 	}
-	if isClosed("planka-users") {
-		t.Fatal("planka-users is closed while it holds only User")
+	if isStaffOnly("planka-users") {
+		t.Fatal("planka-users is staff only while it holds only User")
 	}
 	mustAssign(t, srv, store.RoleAssignment{App: "planka", Role: "owner", Kind: store.AssignList, Ref: "planka-users"})
-	if !isClosed("planka-users") {
-		t.Error("planka-users is open once it holds Board owner")
+	if !isStaffOnly("planka-users") {
+		t.Error("planka-users is not staff only once it holds Board owner")
 	}
 	if err := srv.store.RemoveRoleAssignment(ctx, "planka", "owner", store.AssignList, "planka-users"); err != nil {
 		t.Fatal(err)
 	}
 	srv.forgetRoles()
-	if isClosed("planka-users") {
-		t.Error("planka-users is still closed once Board owner is taken away")
+	if isStaffOnly("planka-users") {
+		t.Error("planka-users is still staff only once Board owner is taken away")
 	}
 	mustAssign(t, srv, store.RoleAssignment{App: "gone-app", Role: "editor", Kind: store.AssignList, Ref: "bg_ward"})
-	if !isClosed("bg_ward") {
+	if !isStaffOnly("bg_ward") {
 		t.Error("a role the manifest does not declare does not close its list")
 	}
 }
 
-// A card may not target a closed list.
-func TestBreakGlassRefusesClosedList(t *testing.T) {
-	srv, sender := closedListServer(t, nil)
+// A card may not target a staff-only list.
+func TestBreakGlassRefusesStaffOnlyList(t *testing.T) {
+	srv, sender := staffOnlyListServer(t, nil)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
@@ -104,7 +104,7 @@ func TestBreakGlassRefusesClosedList(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("card targeting airdb_admin: %d, want 400", rec.Code)
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "reads that group as one of its own roles") {
+	if body := rec.Body.String(); !strings.Contains(body, "because it is a staff-only list") {
 		t.Errorf("refusal page lacks the reason:\n%s", body)
 	}
 	// The typed name is checked the same way as a chosen one.
@@ -162,7 +162,7 @@ func TestBreakGlassRefusesFeedGroup(t *testing.T) {
 // The reserved roles stay refused with their own message, and a list that
 // holds only User, or no role, is still allowed.
 func TestBreakGlassReservedStillRefusedAndPlainGroupAllowed(t *testing.T) {
-	srv, sender := closedListServer(t, nil)
+	srv, sender := staffOnlyListServer(t, nil)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
@@ -187,9 +187,9 @@ func TestBreakGlassReservedStillRefusedAndPlainGroupAllowed(t *testing.T) {
 
 // The codes page offers the known groups; a refused one is shown but cannot
 // be chosen, with the reason beside it. An existing card whose group has
-// since closed is marked in the list.
+// since become staff only is marked in the list.
 func TestCodesPageMarksRefusedTargets(t *testing.T) {
-	srv, sender := closedListServer(t, nil)
+	srv, sender := staffOnlyListServer(t, nil)
 	ctx := context.Background()
 	if err := srv.store.CreateGroup(ctx, "reports_team", ""); err != nil {
 		t.Fatal(err)
@@ -202,8 +202,8 @@ func TestCodesPageMarksRefusedTargets(t *testing.T) {
 	body := c.get("/admin/break/new", nil).Body.String()
 
 	for _, want := range []string{
-		`<option value="airdb_admin" disabled>airdb_admin (used as an application role)</option>`,
-		`<option value="planka-admins" disabled>planka-admins (used as an application role)</option>`,
+		`<option value="airdb_admin" disabled>airdb_admin (staff only)</option>`,
+		`<option value="planka-admins" disabled>planka-admins (staff only)</option>`,
 		`<option value="planka-users">planka-users</option>`,
 		`<option value="bg_ward">bg_ward</option>`,
 		`<option value="reports_team">reports_team</option>`,
@@ -219,17 +219,17 @@ func TestCodesPageMarksRefusedTargets(t *testing.T) {
 	body = c.get("/admin/break", nil).Body.String()
 	row := body[strings.Index(body, ">Old</a>"):]
 	row = row[:strings.Index(row, "</small>")]
-	if !strings.Contains(row, `>used as an application role</span>`) {
+	if !strings.Contains(row, `>staff only</span>`) {
 		t.Errorf("existing card targeting prototypes is not marked:\n%s", row)
 	}
 }
 
 // A stranger (an address the gateway does not count as staff, who can sign
-// in only as a guest) cannot be made a member of a closed list, on the
+// in only as a guest) cannot be made a member of a staff-only list, on the
 // confirmation page or by a direct request; a member of staff can, and the
 // stranger can still join a list that holds only User.
 func TestGuestMembershipRefusedForAppRoleGroup(t *testing.T) {
-	srv, sender := closedListServer(t, nil)
+	srv, sender := staffOnlyListServer(t, nil)
 	ctx := context.Background()
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
@@ -242,7 +242,7 @@ func TestGuestMembershipRefusedForAppRoleGroup(t *testing.T) {
 		t.Fatalf("paste = %d, want the confirmation page", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Cannot be added (1)", "To be added (1)", `value="staff@example.com"`, "used as an application role"} {
+	for _, want := range []string{"Cannot be added (1)", "To be added (1)", `value="staff@example.com"`, "staff only"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("confirmation page missing %q", want)
 		}
@@ -301,12 +301,12 @@ func TestFeedGroupTakesNoHandAddedMember(t *testing.T) {
 	}
 }
 
-// A stranger cannot reach a closed list through an include, nor keep one
-// after a list they belong to closed: the list is dropped when their groups
+// A stranger cannot reach a staff-only list through an include, nor keep one
+// after a list they belong to became staff only: the list is dropped when their groups
 // are worked out, so the app's guard refuses them. A member of staff in the
 // same included group keeps the role.
 func TestGuestCannotReachAppRoleThroughInclude(t *testing.T) {
-	srv, sender := closedListServer(t, func(c *config.Config) {
+	srv, sender := staffOnlyListServer(t, func(c *config.Config) {
 		c.OpenRegistrationHosts = []string{"apply.example.com"}
 	})
 	ctx := context.Background()
@@ -344,11 +344,11 @@ func TestGuestCannotReachAppRoleThroughInclude(t *testing.T) {
 	}
 }
 
-// Including a group with outside members in a closed list, directly or
+// Including a group with outside members in a staff-only list, directly or
 // through a group that the list includes, is refused and undone; an include
 // of staff only goes ahead.
 func TestIncludeBringingOutsidersIntoAppRoleRefused(t *testing.T) {
-	srv, sender := closedListServer(t, nil)
+	srv, sender := staffOnlyListServer(t, nil)
 	ctx := context.Background()
 	for _, g := range []string{"middle", "collaborators", "staff"} {
 		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
