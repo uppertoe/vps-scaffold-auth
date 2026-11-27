@@ -243,9 +243,10 @@ func (s *Server) handleAdminEndAllSessions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	now := s.now()
-	mine := int64(0)
-	if id, ok := s.readSession(r, now); ok {
-		mine = id.SID
+	id, ok := s.readSession(r, now)
+	if !ok {
+		s.adminError(w, r)
+		return
 	}
 	// An old-format cookie not yet seen is refused when it arrives
 	// (session_legacy.go).
@@ -253,18 +254,22 @@ func (s *Server) handleAdminEndAllSessions(w http.ResponseWriter, r *http.Reques
 		s.adminError(w, r)
 		return
 	}
-	n, err := s.endSessionsWhere(r.Context(), func(x *store.Session) bool { return x.ID != mine })
+	// The administrator's own session continues under a new token, so a
+	// copy of their cookie in anyone else's hands ends with the rest. The
+	// new token and the ending are one change: if either fails, nothing has
+	// ended and the administrator is told.
+	ended, mineLive, err := s.endOthersAndRotate(w, r, id, now, func(*store.Session) bool { return true })
 	if err != nil {
+		log.Printf("sign out everyone: %v", err)
 		s.adminError(w, r)
 		return
 	}
-	// The administrator's own session continues under a new token, so a
-	// copy of their cookie in anyone else's hands ends with the rest.
-	if id, ok := s.readSession(r, now); ok {
-		if err := s.startSession(w, r, *id, s.sessions.SessionTTL(id), now); err != nil {
-			log.Printf("new token for %s after signing everyone out: %v", id.Email, err)
-		}
+	if !mineLive {
+		s.sessions.ClearSession(w)
+		http.Redirect(w, r, s.loginURL(s.cfg.PublicURL+sessionsPath), http.StatusFound)
+		return
 	}
+	n := len(ended)
 	s.auditAdmin(r, store.AdminActionSessionsEndAll, "", strconv.Itoa(n))
 	s.emailOtherAdmins(s.adminActor(r), msgSessSubjectAll, []string{fmt.Sprintf(msgSessLineAll, n)})
 	s.redirectDone(w, r, sessionsPath, "everyone-ended", "")

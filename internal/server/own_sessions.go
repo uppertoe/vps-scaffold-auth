@@ -54,6 +54,7 @@ const (
 	msgOwnFailed         = "Nothing has been signed out, because the gateway could not end the sessions. Open Your sessions and try again."
 	msgOwnOthersEnded    = "Your sessions on every other device have ended."
 	msgOwnOthersGone     = "The other sessions had already ended, so nothing has changed."
+	msgOwnThisBrowser    = "The session in this browser has not been signed out. To sign out here, use Sign out on the welcome page."
 	msgOwnSubjectOne     = "One of your sessions has been signed out"
 	msgOwnSubjectOthers  = "Your other sessions have been signed out"
 	msgOwnFirstOne       = "Your session on %s at %s was signed out on %s"
@@ -256,6 +257,10 @@ func (s *Server) handleOwnEndSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target, _ := strconv.ParseInt(r.PostFormValue("id"), 10, 64)
+	if target != 0 && target == id.SID {
+		s.redirectDone(w, r, ownSessionsPath, "own-this-browser", "")
+		return
+	}
 	ended, mineLive, err := s.endOwnSessions(r.Context(), id, func(x *store.Session) bool { return target != 0 && x.ID == target })
 	if err != nil {
 		log.Printf("end a session of %s: %v", id.Email, err)
@@ -280,14 +285,15 @@ func (s *Server) handleOwnEndSession(w http.ResponseWriter, r *http.Request) {
 // browser stays signed in under a new token, so a copy of its cookie taken by
 // someone else ends with the rest: the person who presses this suspects that
 // someone else is signed in as them, and cannot tell a copy of this browser's
-// cookie from this browser.
+// cookie from this browser. The new token and the ending are one change
+// (endOthersAndRotate): if either cannot be written, nothing has ended and
+// the person is told.
 func (s *Server) handleOwnEndOtherSessions(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.ownPost(w, r)
 	if !ok {
 		return
 	}
-	now := s.now()
-	ended, mineLive, err := s.endOwnSessions(r.Context(), id, func(*store.Session) bool { return true })
+	ended, mineLive, err := s.endOthersAndRotate(w, r, id, s.now(), func(x *store.Session) bool { return ownMatch(id.Email, x) })
 	if err != nil {
 		log.Printf("sign out every other device for %s: %v", id.Email, err)
 		s.render(w, http.StatusInternalServerError, "message", pageData{Title: "Please try again", Message: msgOwnFailed})
@@ -297,11 +303,6 @@ func (s *Server) handleOwnEndOtherSessions(w http.ResponseWriter, r *http.Reques
 		s.sessions.ClearSession(w)
 		http.Redirect(w, r, s.loginURL(s.cfg.PublicURL+ownSessionsPath), http.StatusFound)
 		return
-	}
-	// startSession keeps everything the session says, including its sign-in
-	// time, and starts only if the session is still live under the lock.
-	if err := s.startSession(w, r, *id, s.sessions.SessionTTL(id), now); err != nil {
-		log.Printf("new token for %s after signing out every other device: %v", id.Email, err)
 	}
 	if len(ended) == 0 {
 		s.redirectDone(w, r, ownSessionsPath, "own-others-gone", "")

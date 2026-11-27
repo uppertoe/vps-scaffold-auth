@@ -43,6 +43,7 @@ var adminNotices = map[string]string{
 var adminWarnings = map[string]string{
 	"session-gone":        "The session had already ended, so nothing has changed.",
 	"own-others-gone":     msgOwnOthersGone,
+	"own-this-browser":    msgOwnThisBrowser,
 	"card-design-refused": "The card's design has not been changed. Choose a design from the list, and note that a withdrawn card keeps its design.",
 	"card-remint-refused": "The card has not been replaced, because the card has been withdrawn. To give the location a working card, create a new card.",
 	"card-move-refused":   "The card has not been moved, because the card no longer opens a group or has been withdrawn.",

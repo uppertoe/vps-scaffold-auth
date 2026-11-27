@@ -167,10 +167,13 @@ func TestOwnSessionsAreOnlyThePersons(t *testing.T) {
 	if !strings.Contains(bob.get("/sessions", nil).Body.String(), "The session had already ended") {
 		t.Error("a forged row ID was not answered as an ended session")
 	}
-	// His own session, posted as "one", is not ended.
+	// His own session, posted as "one", is not ended, and the page says so.
 	bob.postForm("/sessions/end-one", url.Values{"csrf": {csrf}, "id": {strconv.FormatInt(sessionID(t, srv, bob), 10)}})
 	if verifyAny(t, srv, bob).Code != http.StatusOK {
 		t.Error("signing out one other session ended the person's own")
+	}
+	if !strings.Contains(bob.get("/sessions", nil).Body.String(), msgOwnThisBrowser) {
+		t.Error("posting this browser's own session as another is not reported as such")
 	}
 	if n := authEvents(t, srv, "bob@example.com")[store.AuthEventSessionEnd]; n != 0 {
 		t.Errorf("%d sign-outs audited for Bob, who ended nothing", n)
@@ -337,5 +340,158 @@ func TestOwnSessionsRefuseCardsAndGuests(t *testing.T) {
 	}
 	if rec := member.get("/sessions", nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), msgSessThisBrowser) {
 		t.Errorf("a member's Your sessions = %d", rec.Code)
+	}
+}
+
+// A card's session is never the person's, even one whose label is the
+// person's bare address: it is not listed, and neither "Sign out" nor "every
+// other device" ends it.
+func TestOwnSessionsNeverIncludeACardSession(t *testing.T) {
+	srv, sender := testServer(t)
+	amy := newClient(t, srv.Handler())
+	loginAs(t, amy, sender, "amy@example.com", nil)
+	phone := newClient(t, srv.Handler())
+	loginOnPhone(t, phone, sender, "amy@example.com")
+	card := mintSession(t, srv, session.Identity{Email: "amy@example.com", Groups: "bg", Kind: session.KindBreakGlass}, time.Hour)
+	cardID := sessionID(t, srv, card)
+	if n := strings.Count(amy.get("/sessions", nil).Body.String(), `class="pk-row sess-row`); n != 2 {
+		t.Errorf("Your sessions lists %d sessions, want 2 (not the card's)", n)
+	}
+	csrf := adminCSRF(t, amy, "/sessions?confirm=others")
+	amy.postForm("/sessions/end-one", url.Values{"csrf": {csrf}, "id": {strconv.FormatInt(cardID, 10)}})
+	amy.postForm("/sessions/end-others", url.Values{"csrf": {csrf}})
+	alive := false
+	for _, x := range srv.liveSessionsNow("amy@example.com", srv.now()) {
+		alive = alive || x.ID == cardID
+	}
+	if !alive {
+		t.Fatal("a card's session labelled with the person's address was ended")
+	}
+	if verifyAny(t, srv, phone).Code != http.StatusFound {
+		t.Error("every other device did not end the person's phone")
+	}
+}
+
+// A new token after signing out other sessions keeps the time the session's
+// groups were worked out, so a membership change since then still reaches
+// the session at its next request. Both rotations are checked: the person's
+// "every other device" and an administrator's "Sign out everyone".
+func TestRotationKeepsGroupsStale(t *testing.T) {
+	for _, admin := range []bool{false, true} {
+		srv, sender := testServer(t)
+		ctx := context.Background()
+		start := time.Now()
+		srv.now = func() time.Time { return start }
+		if err := srv.store.CreateGroup(ctx, "ward", ""); err != nil {
+			t.Fatal(err)
+		}
+		email := "amy@example.com"
+		if admin {
+			email = "admin@example.com"
+		}
+		if err := srv.store.AddGroupMember(ctx, "ward", email); err != nil {
+			t.Fatal(err)
+		}
+		guard := groupGuard(t, srv, "ward")
+		c, other := newClient(t, srv.Handler()), newClient(t, srv.Handler())
+		loginAs(t, c, sender, email, nil)
+		loginAs(t, other, sender, email, nil)
+		if c.get("/verify", guard).Code != http.StatusOK {
+			t.Fatal("the group's member was refused before the change")
+		}
+		page, path := "/sessions?confirm=others", "/sessions/end-others"
+		if admin {
+			page, path = sessionsPath+"?confirm=everyone", "/admin/sessions/end-all"
+		}
+		csrf := adminCSRF(t, c, page)
+
+		srv.now = func() time.Time { return start.Add(time.Second) }
+		if err := srv.store.RemoveGroupMember(ctx, "ward", email); err != nil {
+			t.Fatal(err)
+		}
+		srv.markGroupsChanged(srv.now())
+		srv.now = func() time.Time { return start.Add(2 * time.Second) }
+		if rec := c.postForm(path, url.Values{"csrf": {csrf}}); rec.Code != http.StatusFound {
+			t.Fatalf("admin %v: rotate = %d", admin, rec.Code)
+		}
+		if verifyAny(t, srv, other).Code != http.StatusFound {
+			t.Errorf("admin %v: the other session survived", admin)
+		}
+		if rec := c.get("/verify", guard); rec.Code == http.StatusOK {
+			t.Errorf("admin %v: a session given a new token kept a group it was removed from", admin)
+		}
+	}
+}
+
+// rotationFailStore fails the new row or the deletion while set.
+type rotationFailStore struct {
+	store.Store
+	failCreate, failDelete bool
+}
+
+func (f *rotationFailStore) CreateSession(ctx context.Context, x store.Session) (int64, error) {
+	if f.failCreate {
+		return 0, context.DeadlineExceeded
+	}
+	return f.Store.CreateSession(ctx, x)
+}
+
+func (f *rotationFailStore) DeleteSessions(ctx context.Context, ids []int64) error {
+	if f.failDelete {
+		return context.DeadlineExceeded
+	}
+	return f.Store.DeleteSessions(ctx, ids)
+}
+
+// If the new token or the ending cannot be written, nothing has changed and
+// the person or administrator is told: every session goes on, including a
+// copy of this browser's cookie, and nothing is audited or emailed as done.
+func TestFailedRotationChangesNothing(t *testing.T) {
+	for _, admin := range []bool{false, true} {
+		for _, failCreate := range []bool{true, false} {
+			srv, sender := testServer(t)
+			email := "amy@example.com"
+			if admin {
+				email = "admin@example.com"
+			}
+			c, other := newClient(t, srv.Handler()), newClient(t, srv.Handler())
+			loginAs(t, c, sender, email, nil)
+			loginAs(t, other, sender, email, nil)
+			copied := clientWith(t, srv, c.cookies[session.SessionCookie])
+			page, path := "/sessions?confirm=others", "/sessions/end-others"
+			if admin {
+				page, path = sessionsPath+"?confirm=everyone", "/admin/sessions/end-all"
+			}
+			csrf := adminCSRF(t, c, page)
+			fs := &rotationFailStore{Store: srv.store, failCreate: failCreate, failDelete: !failCreate}
+			srv.store = fs
+			rec := c.postForm(path, url.Values{"csrf": {csrf}})
+			fs.failCreate, fs.failDelete = false, false
+			if rec.Code != http.StatusInternalServerError || (!admin && !strings.Contains(rec.Body.String(), msgOwnFailed)) {
+				t.Errorf("admin %v, create fails %v: answered %d", admin, failCreate, rec.Code)
+			}
+			for name, x := range map[string]*client{"this browser": c, "the copy": copied, "the other": other} {
+				if verifyAny(t, srv, x).Code != http.StatusOK {
+					t.Errorf("admin %v, create fails %v: %s was signed out", admin, failCreate, name)
+				}
+			}
+			if n := liveCount(srv, email); n != 2 {
+				t.Errorf("admin %v, create fails %v: %d sessions, want 2", admin, failCreate, n)
+			}
+			if got := authEvents(t, srv, email)[store.AuthEventSessionsEndOthers]; got != 0 {
+				t.Errorf("a failed rotation was audited as done")
+			}
+			if events, _ := srv.store.ListAdminEvents(context.Background(), 20, 0); len(events) != 0 && admin {
+				for _, e := range events {
+					if e.Action == store.AdminActionSessionsEndAll {
+						t.Error("a failed sign out everyone was audited as done")
+					}
+				}
+			}
+			time.Sleep(50 * time.Millisecond)
+			if noticesTo(sender, email, msgOwnSubjectOthers) != 0 {
+				t.Error("a failed rotation was emailed as done")
+			}
+		}
 	}
 }
