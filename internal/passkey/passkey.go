@@ -1,21 +1,33 @@
 // Package passkey verifies WebAuthn passkey registrations and sign-ins for the
 // one shape this gateway accepts: a discoverable ES256 (P-256) credential held
 // by the device's own passkey provider (a phone's, or a computer's Touch ID or
-// Windows Hello), with user verification, and no attestation. Nothing else is supported, on purpose. The general WebAuthn
-// libraries carry attestation formats, TPM and certificate-chain parsing and a
-// metadata service client; none of that is used when attestation is "none",
-// and all of it would be code on the sign-in path. What remains is small
-// enough to read in one sitting:
+// Windows Hello), with user verification, and no attestation. Nothing else is
+// supported, on purpose.
+//
+// A general WebAuthn library (go-webauthn) was tried and set aside: it links
+// attestation formats, TPM and certificate-chain parsing, JWT and a metadata
+// service client, ten modules and about 65,000 lines, none of which is used
+// when attestation is "none". The one part of a ceremony that needs a real
+// parser, the CBOR of the credential's COSE key, is read with
+// fxamacker/cbor, a fuzzed and widely used CBOR library with no dependency
+// beyond a float16 package. The rest is fixed-layout bytes and a little JSON,
+// small enough to read in one sitting:
 //
 //   - clientDataJSON: the ceremony type, the challenge this server issued, and
 //     the exact origin of the sign-in host.
 //   - authenticatorData: the hash of the relying-party ID (the sign-in host),
 //     the user-present and user-verified flags, and the signature counter.
-//   - at registration, the public key the browser reports (SubjectPublicKeyInfo,
-//     from getPublicKey()) must match, byte for byte, the canonical COSE key
-//     in authenticatorData.
-//   - at sign-in, an ECDSA signature over authenticatorData followed by the
-//     SHA-256 of clientDataJSON.
+//   - at registration, the COSE key in authenticatorData (decoded with
+//     fxamacker/cbor) must be an ES256 key on P-256 in CTAP2's canonical
+//     encoding, and the same key the browser reports (SubjectPublicKeyInfo,
+//     from getPublicKey()), which is the form stored.
+//   - at sign-in, an ECDSA signature (Go's crypto/ecdsa) over
+//     authenticatorData followed by the SHA-256 of clientDataJSON.
+//
+// The tests hold the verifier to its recorded behaviour: a corpus of
+// real-shaped and mutated ceremonies with their verdicts
+// (testdata/corpus.json), fuzz targets for every field a browser posts, and
+// a passkey stored in the gateway's format as fixed bytes.
 //
 // Registration carries no attestation, so nothing at registration is signed:
 // the flags (user verified, backed up), the provider ID and the key are what
@@ -39,6 +51,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/fxamacker/cbor/v2"
 )
 
 // AlgES256 is the COSE algorithm identifier for ECDSA with P-256 and SHA-256,
@@ -167,13 +182,10 @@ func (rp RelyingParty) VerifyRegistration(reg Registration, challenge []byte) (C
 	if err != nil {
 		return Credential{}, err
 	}
-	want, err := coseP256(pub)
-	if err != nil {
-		return Credential{}, err
-	}
-	// The key must be exactly the canonical encoding of the reported key.
-	// Anything after it is allowed only when the extensions flag says so.
-	if !bytes.HasPrefix(coseKey, want) || (ad.flags&flagED == 0 && len(coseKey) != len(want)) {
+	// The key must be the canonical encoding of the reported key. Anything
+	// after it is allowed only when the extensions flag says so.
+	after, err := matchCOSEKey(coseKey, pub)
+	if err != nil || (ad.flags&flagED == 0 && len(after) != 0) {
 		return Credential{}, ErrKey
 	}
 	return Credential{
@@ -220,23 +232,45 @@ func (rp RelyingParty) VerifyAssertion(a Assertion, challenge, publicKey []byte,
 // present only when the ceremony ran in a cross-origin iframe, which the
 // sign-in pages forbid (frame-ancestors 'none'); its presence is refused.
 type clientData struct {
-	Type        string  `json:"type"`
-	Challenge   string  `json:"challenge"`
-	Origin      string  `json:"origin"`
-	CrossOrigin bool    `json:"crossOrigin"`
-	TopOrigin   *string `json:"topOrigin"`
+	Type        string
+	Challenge   string
+	Origin      string
+	CrossOrigin bool
+	TopOrigin   *string
 }
 
+// checkClientData reads clientDataJSON as the browser writes it. Go's
+// encoding/json matches member names without regard to case, so each member
+// is read by its exact name from a map, and a member whose name differs from
+// one of these only in case ("tYpe") is refused. The challenge must be the
+// exact unpadded base64url of the one issued.
 func (rp RelyingParty) checkClientData(raw []byte, typ string, challenge []byte) error {
-	var cd clientData
-	if err := json.Unmarshal(raw, &cd); err != nil {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
 		return ErrClientData
+	}
+	var cd clientData
+	fields := map[string]any{
+		"type": &cd.Type, "challenge": &cd.Challenge, "origin": &cd.Origin,
+		"crossOrigin": &cd.CrossOrigin, "topOrigin": &cd.TopOrigin,
+	}
+	for got := range m {
+		for name := range fields {
+			if got != name && strings.EqualFold(got, name) {
+				return ErrClientData
+			}
+		}
+	}
+	for name, v := range fields {
+		if r, ok := m[name]; ok && json.Unmarshal(r, v) != nil {
+			return ErrClientData
+		}
 	}
 	if cd.Type != typ || cd.Origin != rp.Origin || cd.CrossOrigin || cd.TopOrigin != nil {
 		return ErrClientData
 	}
-	got, err := base64.RawURLEncoding.DecodeString(cd.Challenge)
-	if err != nil || len(challenge) == 0 || subtle.ConstantTimeCompare(got, challenge) != 1 {
+	want := base64.RawURLEncoding.EncodeToString(challenge)
+	if len(challenge) == 0 || subtle.ConstantTimeCompare([]byte(cd.Challenge), []byte(want)) != 1 {
 		return ErrClientData
 	}
 	return nil
@@ -278,28 +312,85 @@ func parseP256(spki []byte) (*ecdsa.PublicKey, error) {
 	return pub, nil
 }
 
-// coseP256 is the COSE_Key an authenticator writes for the ES256 key pub, in
-// the canonical CBOR that CTAP2 requires and Apple's and Google's passkeys
-// emit: a five-entry map of kty 2 (EC2), alg -7 (ES256), crv 1 (P-256), and
-// the 32-byte x and y coordinates, in that order. Rather than carry a general
-// CBOR decoder, registration requires the authenticator data to hold exactly
-// these 77 bytes, which binds the browser-reported SubjectPublicKeyInfo to the
-// key the authenticator wrote. With attestation "none" nothing signs either,
-// so this is a consistency check on the person's own browser, not proof of
-// which device holds the key.
-func coseP256(pub *ecdsa.PublicKey) ([]byte, error) {
+// coseEC2 is a COSE_Key for an elliptic-curve key (RFC 9053), with the
+// labels as CBOR integers.
+type coseEC2 struct {
+	Kty int64  `cbor:"1,keyasint"`
+	Alg int64  `cbor:"3,keyasint"`
+	Crv int64  `cbor:"-1,keyasint"`
+	X   []byte `cbor:"-2,keyasint"`
+	Y   []byte `cbor:"-3,keyasint"`
+}
+
+// The COSE values of the one key accepted: EC2, ES256, P-256.
+const (
+	coseKtyEC2  = 2
+	coseCrvP256 = 1
+)
+
+// coseDecode reads a COSE key strictly: no duplicate or unknown labels, no
+// indefinite lengths and no tags. coseEncode writes the canonical CBOR that
+// CTAP2 requires. matchCOSEKey applies both: the key must decode under these
+// options, and must re-encode to exactly the bytes received. Either alone
+// refuses each of those encodings; TestCOSEDecoderOptions pins the options,
+// and the corpus the comparison, so neither can be dropped unnoticed.
+var (
+	coseDecode = mustDecMode(cbor.DecOptions{
+		DupMapKey:         cbor.DupMapKeyEnforcedAPF,
+		IndefLength:       cbor.IndefLengthForbidden,
+		TagsMd:            cbor.TagsForbidden,
+		ExtraReturnErrors: cbor.ExtraDecErrorUnknownField,
+		MaxNestedLevels:   4,
+		MaxMapPairs:       16,
+	})
+	coseEncode = mustEncMode(cbor.CTAP2EncOptions())
+)
+
+// matchCOSEKey decodes the COSE key at the start of b (fxamacker/cbor), and
+// returns what follows it. The key must be an ES256 key on P-256, written in
+// CTAP2's canonical encoding, as Apple's and Google's passkeys write it, and
+// must be pub: the key the browser reports as SubjectPublicKeyInfo. That
+// binds the reported key to the key the authenticator wrote. With
+// attestation "none" nothing signs either, so this is a consistency check on
+// the person's own browser, not proof of which device holds the key.
+func matchCOSEKey(b []byte, pub *ecdsa.PublicKey) (rest []byte, err error) {
+	var k coseEC2
+	rest, err = coseDecode.UnmarshalFirst(b, &k)
+	if err != nil {
+		return nil, ErrKey
+	}
+	if k.Kty != coseKtyEC2 || k.Alg != AlgES256 || k.Crv != coseCrvP256 {
+		return nil, ErrKey
+	}
+	canonical, err := coseEncode.Marshal(k)
+	if err != nil || !bytes.Equal(canonical, b[:len(b)-len(rest)]) {
+		return nil, ErrKey
+	}
 	ecdh, err := pub.ECDH()
 	if err != nil {
 		return nil, ErrKey
 	}
 	raw := ecdh.Bytes() // 0x04 || x || y
-	if len(raw) != 65 {
+	if len(raw) != 65 || !bytes.Equal(k.X, raw[1:33]) || !bytes.Equal(k.Y, raw[33:65]) {
 		return nil, ErrKey
 	}
-	out := []byte{0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20}
-	out = append(out, raw[1:33]...)
-	out = append(out, 0x22, 0x58, 0x20)
-	return append(out, raw[33:65]...), nil
+	return rest, nil
+}
+
+func mustDecMode(o cbor.DecOptions) cbor.DecMode {
+	m, err := o.DecMode()
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
+
+func mustEncMode(o cbor.EncOptions) cbor.EncMode {
+	m, err := o.EncMode()
+	if err != nil {
+		panic(err)
+	}
+	return m
 }
 
 // AAGUIDString formats a provider identifier the usual way.
