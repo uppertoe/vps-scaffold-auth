@@ -467,6 +467,8 @@ func rankOf(rank map[string]int, d string) int {
 
 // mayHoldRoleNow reports whether email holds a role through a domain group,
 // a list or a current person assignment, reading its lists from the store.
+// It is asked only about an address that is not staff, so a closed list
+// gives no reason to sign in (openListsForOutsider).
 // With invitations, an open invitation counts too; sign-in never passes it,
 // since an invitation lets its address in only through its own code step,
 // which accepts it (and so gives the role) before the session is made.
@@ -483,6 +485,7 @@ func (s *Server) mayHoldRoleNow(ctx context.Context, email string, invitations b
 	for _, l := range lists {
 		set[l] = true
 	}
+	set = s.openListsForOutsider(ctx, set)
 	st := s.roleData(ctx)
 	return (invitations && st.invited[email]) || roles.MaySignIn(email, set, st.assignments, s.roleEnv(st))
 }
@@ -495,7 +498,25 @@ func (s *Server) mayHoldRoleSnapshot(ctx context.Context, id *session.Identity) 
 		return false
 	}
 	st := s.roleData(ctx)
-	return roles.MaySignIn(id.Email, sessionLists(id), st.assignments, s.roleEnv(st))
+	return roles.MaySignIn(id.Email, s.openListsForOutsider(ctx, sessionLists(id)), st.assignments, s.roleEnv(st))
+}
+
+// openListsForOutsider is lists without the closed ones, for an address that
+// is not staff: an outsider is never counted as a closed list's member, so a
+// role held only through one is no reason to sign in. While the role data has
+// never been read, no list counts.
+func (s *Server) openListsForOutsider(ctx context.Context, lists map[string]bool) map[string]bool {
+	closed, loaded := s.closedLists(ctx)
+	out := make(map[string]bool, len(lists))
+	if !loaded {
+		return out
+	}
+	for l := range lists {
+		if !closed[normalizeGroupName(l)] {
+			out[l] = true
+		}
+	}
+	return out
 }
 
 // staffFromDomainGroups reports whether the domain groups' domains stand in

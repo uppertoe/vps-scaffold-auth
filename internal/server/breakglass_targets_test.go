@@ -48,12 +48,12 @@ func TestClosedListsFromRolesAndSetting(t *testing.T) {
 	ctx := context.Background()
 	got := srv.refusedTargets(ctx)
 	for _, g := range []string{"airdb_admin", "prototypes", "planka-admins", "insights-admins"} {
-		if got[g] != refusedAppRole {
-			t.Errorf("%s: reason %q, want %q", g, got[g], refusedAppRole)
+		if r, _ := got.reason(g); r != refusedAppRole {
+			t.Errorf("%s: reason %q, want %q", g, r, refusedAppRole)
 		}
 	}
 	for _, g := range []string{"planka-users", "bg_ward", "admin"} {
-		if _, refused := got[g]; refused {
+		if _, refused := got.reason(g); refused {
 			t.Errorf("%s should not be a refused target (reserved roles have their own check)", g)
 		}
 	}

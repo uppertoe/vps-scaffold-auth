@@ -26,8 +26,9 @@ type bulkPlan struct {
 	Invalid []string     // not an email address
 	TooMany bool         // the paste was cut at maxBulkAddresses
 	// Refused are addresses the gateway does not count as staff, which it
-	// will not add to this group because the group is closed to outsiders or
-	// filled from a feed (RefusedReason says which); see refusedTargets.
+	// will not add to this group because the group is closed to outsiders,
+	// included in a closed list, or filled from a feed, or because the
+	// gateway cannot yet tell (RefusedReason says which); see refusedTargets.
 	Refused       []string
 	RefusedReason string
 }

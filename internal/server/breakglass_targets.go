@@ -40,20 +40,62 @@ import (
 
 // Short reasons shown beside a refused group in the admin UI.
 const (
-	refusedAppRole = "used as an application role"
-	refusedFeed    = "filled from a feed"
+	refusedAppRole    = "used as an application role"
+	refusedFeed       = "filled from a feed"
+	refusedIncluded   = "included in a list that is closed to people who are not staff"
+	refusedUnreadable = "closed while the gateway cannot read the app roles"
 )
 
-// refusedTargets returns every group a break-glass card may not target and a
-// stranger may not be made a member of, mapped to its short reason.
-func (s *Server) refusedTargets(ctx context.Context) map[string]string {
-	out := map[string]string{}
-	closed, _ := s.closedLists(ctx)
+// targetRefusals are the groups a break-glass card may not target and a
+// stranger may not be made a member of, each with its short reason. all is
+// set while the gateway cannot tell which lists are closed (the role data
+// has never been read, or the includes cannot be read): every group is then
+// refused with that reason, failing closed.
+type targetRefusals struct {
+	byGroup map[string]string
+	all     string
+}
+
+// reason reports whether group is refused and why.
+func (t targetRefusals) reason(group string) (string, bool) {
+	if t.all != "" {
+		return t.all, true
+	}
+	r, ok := t.byGroup[normalizeGroupName(group)]
+	return r, ok
+}
+
+// refusedTargets works out the refused groups: the closed lists, every group
+// a closed list includes, directly or through other groups (a stranger added
+// there would be admitted through the include), and the groups filled from a
+// feed.
+func (s *Server) refusedTargets(ctx context.Context) targetRefusals {
+	out := targetRefusals{byGroup: map[string]string{}}
+	closed, loaded := s.closedLists(ctx)
+	includes, err := s.store.ListGroupIncludes(ctx)
+	if !loaded || err != nil {
+		out.all = refusedUnreadable
+		return out
+	}
 	for g := range closed {
-		out[g] = refusedAppRole
+		out.byGroup[g] = refusedAppRole
+	}
+	var walk func(string)
+	walk = func(g string) {
+		for _, inc := range includes[g] {
+			inc = normalizeGroupName(inc)
+			if _, done := out.byGroup[inc]; done {
+				continue
+			}
+			out.byGroup[inc] = refusedIncluded
+			walk(inc)
+		}
+	}
+	for g := range closed {
+		walk(g)
 	}
 	for g := range s.feeds.feeds {
-		out[normalizeGroupName(g)] = refusedFeed
+		out.byGroup[normalizeGroupName(g)] = refusedFeed
 	}
 	return out
 }
@@ -166,8 +208,7 @@ func (s *Server) withoutClosedListsForOutsider(ctx context.Context, email, tier 
 // targetRefusal reports whether group is refused and why. Reserved roles are
 // not its concern; callers check authz.IsReservedGroup first.
 func (s *Server) targetRefusal(ctx context.Context, group string) (string, bool) {
-	reason, refused := s.refusedTargets(ctx)[normalizeGroupName(group)]
-	return reason, refused
+	return s.refusedTargets(ctx).reason(group)
 }
 
 // targetOptionView is one group offered as a break-glass target on the codes
@@ -192,7 +233,8 @@ func (s *Server) targetOptions(ctx context.Context, groups []string) []targetOpt
 		if g == "" || authz.IsReservedGroup(g) {
 			continue
 		}
-		out = append(out, targetOptionView{Name: g, Reason: refused[g]})
+		reason, _ := refused.reason(g)
+		out = append(out, targetOptionView{Name: g, Reason: reason})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

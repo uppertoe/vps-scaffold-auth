@@ -53,11 +53,13 @@ send would hand the app Caddy's placeholder text.
 **Lists closed to outsiders.** A list that holds any app role other than User
 (an app's Administrator or Board owner, say) is closed to anyone the gateway
 does not count as staff: a guest, a member who is not staff, or a card. Such a
-list cannot be a break-glass card's target, the admin pages refuse to add an
-outsider to it by hand, in bulk or through an include, and an outsider who is
-on it all the same is never counted as its member, in a session or by the
-members endpoint. The rule is read from the role assignments, so a list closes
-as soon as it is given such a role.
+list, and any group it includes, cannot be a break-glass card's target, and
+the admin pages refuse to add an outsider to one by hand, in bulk or through
+an include. An outsider who is on a closed list all the same is never counted
+as its member, in a session or by the members endpoint, and a role held only
+through one is no reason to sign in. The rule is read from the role
+assignments, so a list closes as soon as it is given such a role. While the
+gateway cannot read the role data, it treats every list as closed.
 
 Sessions are **stateless signed cookies** — no session store. Persisted state
 (single-use OTP codes, admin TOTP secrets, DB-managed groups, and break-glass

@@ -149,7 +149,7 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 		}
 		if c.App == "" {
 			row.Group = c.TargetGroup
-			row.Refused = refused[normalizeGroupName(c.TargetGroup)]
+			row.Refused, _ = refused.reason(c.TargetGroup)
 			v.Legacy = append(v.Legacy, row)
 			continue
 		}
@@ -678,8 +678,11 @@ func (s *Server) createGroupCard(w http.ResponseWriter, r *http.Request) {
 	}
 	if reason, refused := s.targetRefusal(r.Context(), group); refused {
 		msg := "A break-glass code cannot target \"" + group + "\", because an application reads that group as one of its own roles and a card would admit whoever carries it in that role."
-		if reason == refusedFeed {
+		switch reason {
+		case refusedFeed:
 			msg = "A break-glass code cannot target \"" + group + "\", because its members come from a feed and a card would admit whoever carries it alongside them."
+		case refusedIncluded, refusedUnreadable:
+			msg = "A break-glass code cannot target \"" + group + "\", because the group is " + reason + "."
 		}
 		s.renderAdmin(w, r, http.StatusBadRequest, "admin_message", adminData{
 			Title:   "Group " + reason,

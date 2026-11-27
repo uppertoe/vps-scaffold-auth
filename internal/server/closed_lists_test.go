@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"reflect"
 	"sort"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
+	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
@@ -217,5 +219,131 @@ func TestMemberLosesAListAtTheNextRequestOnceItCloses(t *testing.T) {
 	}
 	if rec := c.get("/verify", roleGuard("caffeine", "")); rec.Code != http.StatusOK {
 		t.Errorf("the member's role held another way = %d %q, want 200", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+// An outsider whose only role comes through a closed list holds no role: the
+// sign-in sends no code and shows the same page as for any address that may
+// not sign in, rather than signing the person in and ending the session at
+// once. An outsider on a list that holds only User still signs in as a member.
+func TestOutsiderWithOnlyAClosedListIsSentNoCode(t *testing.T) {
+	srv, sender := closedListServer(t, nil)
+	ctx := context.Background()
+	const closedOnly, openToo = "contractor@partner.org", "visitor@partner.org"
+	if _, err := srv.store.AddGroupMembers(ctx, "planka-admins", []string{closedOnly, openToo}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.AddGroupMembers(ctx, "planka-users", []string{openToo}); err != nil {
+		t.Fatal(err)
+	}
+	testGuardApp(t, srv, "planka")
+	if got := srv.loginRole(ctx, closedOnly, false); got != authz.RoleDeny {
+		t.Errorf("loginRole(%s) = %q, want no role", closedOnly, got)
+	}
+	if got := srv.loginRole(ctx, openToo, false); got != authz.RoleMember {
+		t.Errorf("loginRole(%s) = %q, want a member", openToo, got)
+	}
+	// A session that still carries the closed list gives no reason to stay.
+	if srv.mayHoldRoleSnapshot(ctx, &session.Identity{Email: closedOnly, Groups: "guest,planka-admins", Kind: session.KindMember}) {
+		t.Error("a closed list in a member's session counts as a reason to sign in")
+	}
+	sender.reset()
+	c := newClient(t, srv.Handler())
+	page := c.postForm("/request", url.Values{"email": {closedOnly}})
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), closedOnly) || sentCount(sender) != 0 {
+		t.Errorf("request for %s = %d with %d codes sent; want the ordinary page and no code", closedOnly, page.Code, sentCount(sender))
+	}
+	newClient(t, srv.Handler()).postForm("/request", url.Values{"email": {openToo}})
+	if sentCount(sender) != 1 {
+		t.Errorf("request for %s sent %d codes, want 1", openToo, sentCount(sender))
+	}
+}
+
+// An outsider is not added to an open list that a closed list includes,
+// directly or through another group, since the closed list would then admit
+// them; nor can a card target such a list. Staff are added as usual.
+func TestOutsiderRefusedOnAListAClosedListIncludes(t *testing.T) {
+	srv, sender := closedListServer(t, nil)
+	ctx := context.Background()
+	for _, g := range []string{"middle", "inner"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := srv.store.AddGroupInclude(ctx, "planka-admins", "middle"); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.AddGroupInclude(ctx, "middle", "inner"); err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range []string{"middle", "inner"} {
+		if r, refused := srv.targetRefusal(ctx, g); !refused || r != refusedIncluded {
+			t.Errorf("%s: refusal %q %v, want %q", g, r, refused, refusedIncluded)
+		}
+	}
+	if _, refused := srv.targetRefusal(ctx, "bg_ward"); refused {
+		t.Error("a list no closed list includes is refused")
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
+	body := c.postForm("/admin/groups/inner/members", url.Values{"csrf": {tok}, "emails": {strangerAddr + "\nstaff@example.com"}}).Body.String()
+	if !strings.Contains(body, "Cannot be added (1)") || !strings.Contains(body, refusedIncluded) {
+		t.Errorf("the confirmation page does not refuse the outsider:\n%s", body)
+	}
+	c.postForm("/admin/groups/inner/members/confirm", url.Values{"csrf": {tok}, "add": {strangerAddr, "staff@example.com"}})
+	if m, _ := srv.store.ListGroupMembers(ctx, "inner"); len(m) != 1 || m[0] != "staff@example.com" {
+		t.Errorf("inner members = %v, want only the staff member", m)
+	}
+	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Inner"}, "group": {"inner"}})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("card targeting inner = %d, want 400", rec.Code)
+	}
+}
+
+// neverLoaded makes every read of the role assignments fail and forgets the
+// copy in memory, so the role data has never been read.
+func neverLoaded(srv *Server) {
+	srv.store = assignmentsReadFail{srv.store}
+	srv.roleCache.mu.Lock()
+	srv.roleCache.ok, srv.roleCache.have, srv.roleCache.state = false, false, roleState{}
+	srv.roleCache.mu.Unlock()
+}
+
+// While the role data has never been read, the gateway cannot tell which
+// lists are closed, so it fails closed: every group is refused as a card's
+// target and for a hand-added outsider, and an include is not kept, while
+// staff are still added.
+func TestNeverLoadedRefusesTargetsOutsidersAndIncludes(t *testing.T) {
+	srv, sender := closedListServer(t, nil)
+	ctx := context.Background()
+	for _, g := range []string{"collaborators", "staff-list"} {
+		if err := srv.store.CreateGroup(ctx, g, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := srv.store.AddGroupMembers(ctx, "collaborators", []string{strangerAddr}); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(t, srv.Handler())
+	loginAs(t, c, sender, "admin@example.com", nil)
+	tok := extractCSRF(t, c.get("/admin/groups/new", nil).Body.String())
+	neverLoaded(srv)
+
+	for _, g := range []string{"bg_ward", "planka-users"} {
+		if r, refused := srv.targetRefusal(ctx, g); !refused || r != refusedUnreadable {
+			t.Errorf("%s: refusal %q %v, want %q", g, r, refused, refusedUnreadable)
+		}
+	}
+	if rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Ward"}, "group": {"bg_ward"}}); rec.Code != http.StatusBadRequest {
+		t.Errorf("card targeting bg_ward = %d, want 400", rec.Code)
+	}
+	c.postForm("/admin/groups/bg_ward/members/confirm", url.Values{"csrf": {tok}, "add": {strangerAddr, "staff@example.com"}})
+	if m, _ := srv.store.ListGroupMembers(ctx, "bg_ward"); len(m) != 1 || m[0] != "staff@example.com" {
+		t.Errorf("bg_ward members = %v, want only the staff member", m)
+	}
+	c.postForm("/admin/groups/staff-list/includes", url.Values{"csrf": {tok}, "included": {"collaborators"}})
+	if inc, _ := srv.store.ListGroupIncludes(ctx); len(inc["staff-list"]) != 0 {
+		t.Errorf("an include was kept while the role data could not be read: %v", inc["staff-list"])
 	}
 }
