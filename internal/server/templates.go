@@ -93,6 +93,10 @@ type pageData struct {
 	Passkey *passkeyPage
 	// PasskeyScript is set by render on the pages allowed to run it.
 	PasskeyScript bool
+	// OwnSessions is Your sessions (own_sessions.go).
+	OwnSessions *ownSessionsView
+	// SessionsLink, on the welcome page, links to Your sessions.
+	SessionsLink bool
 }
 
 // passkeyPages are the pages that use /passkey.js when passkeys are on.
@@ -107,7 +111,7 @@ func loadTemplates() (pages, error) {
 		return nil, err
 	}
 	out := make(pages)
-	for _, name := range []string{"login", "code", "totp", "message", "denied", "welcome", "logout", "passkey_offer", "passkey_added", "passkeys", "passkey_confirm", "break_confirm"} {
+	for _, name := range []string{"login", "code", "totp", "message", "denied", "welcome", "logout", "passkey_offer", "passkey_added", "passkeys", "passkey_confirm", "break_confirm", "own_sessions"} {
 		t, err := base.Clone()
 		if err != nil {
 			return nil, err

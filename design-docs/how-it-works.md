@@ -2,7 +2,7 @@
 title: How it works
 summary: The path of a request through the reverse proxy and the gateway, what the session cookie carries, and what a tool is told about the person.
 weight: 1
-lastmod: 2026-11-27
+lastmod: 2026-11-28
 ---
 
 ## The path of a request
@@ -42,7 +42,8 @@ of its database cannot be used as anyone's session.
 The gateway holds its sessions in memory as well as in the database, so the
 check on each request stays fast. Because the gateway keeps each session, an
 administrator can end one session, all of one person's sessions, or everyone's,
-on the Sessions page, and the ending takes effect at once on every tool.
+on the Sessions page, and a person can end their own on the Your sessions
+page. The ending takes effect at once on every tool.
 
 The gateway issues four other short-lived cookies, each limited to the
 gateway's own host: one carries a sign-in in progress, one carries

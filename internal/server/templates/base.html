@@ -28,6 +28,8 @@
     --err-text: #9b1c1c;
     --ok-bg: #e6f4ea;
     --ok-text: #1e6b39;
+    --danger: #b42318;
+    --danger-hover: #912018;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -135,6 +137,17 @@
   .pk-row .remove { width: auto; margin: 0; padding: 0; min-height: 44px; background: none; border: 0;
     color: var(--err-text); font: inherit; font-size: 14px; cursor: pointer; }
   .pk-row .remove:hover { background: none; text-decoration: underline; }
+  /* Your sessions: the passkey row's grid, with "This browser" or "Sign
+     out" in the action's place. */
+  .sess-row .missing { color: var(--muted); font-weight: 400; }
+  .sess-row .mine { grid-column: 2; font-size: 14px; color: var(--muted); min-height: 44px; display: flex; align-items: center; }
+  .sess-row a.remove { grid-column: 2; display: flex; align-items: center; text-decoration: none; }
+  .card .sess-row a.remove { color: var(--err-text); }
+  .sess-row a.remove:hover { text-decoration: underline; }
+  .sess-row.hit { border-color: var(--link); background: var(--soft-bg); }
+  .sess-ask { margin: 0 0 16px; }
+  button.danger { background: var(--danger); }
+  button.danger:hover { background: var(--danger-hover); }
   .box { border: 1px solid var(--input-border); border-radius: 12px; padding: 12px 14px; margin: 4px 0 16px; font-size: 14px; color: var(--muted); }
   .box b { display: block; font-size: 15px; color: var(--text); }
   /* A card's scan pages open with a band in the card's header colour. */

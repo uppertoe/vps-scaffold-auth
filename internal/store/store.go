@@ -69,6 +69,10 @@ const (
 	AuthEventPasskeyAdd    = "passkey_add"
 	AuthEventPasskeyRemove = "passkey_remove"
 	AuthEventSessionsEnd   = "sessions_end" // signed out on every device
+	// On Your sessions: one other session signed out, and every session but
+	// the person's own.
+	AuthEventSessionEnd        = "session_end"
+	AuthEventSessionsEndOthers = "sessions_end_others"
 )
 
 // Human-login audit event outcomes.

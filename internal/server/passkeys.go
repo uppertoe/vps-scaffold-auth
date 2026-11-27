@@ -1305,15 +1305,15 @@ func (s *Server) notifyPasskeyRemoved(r *http.Request, to string, now time.Time)
 // renders with text/template, which does not escape, so every string is
 // HTML-escaped by renderPasskeyNoticeHTML; the colours are validated "#rrggbb".
 type passkeyNoticeData struct {
-	BrandName, Heading, First, OK, NotYou, Link string
-	HeaderColor, HeaderText                     string
-	AccentColor, AccentText                     string
+	BrandName, Heading, First, OK, NotYou, Link, LinkLabel string
+	HeaderColor, HeaderText                                string
+	AccentColor, AccentText                                string
 }
 
 // renderPasskeyNoticeHTML lays a notice out like the sign-in code email, in
 // the admin branding's colours, falling back to plain paragraphs if the
 // template ever fails so that the notice is still sent.
-func (s *Server) renderPasskeyNoticeHTML(heading, first, ok, notYou, link string, now time.Time) string {
+func (s *Server) renderPasskeyNoticeHTML(heading, first, ok, notYou, linkLabel, link string, now time.Time) string {
 	header := breakglass.DefaultPalette.Header
 	accent := breakglass.DefaultPalette.Accent
 	if b, err := s.publicBrandingAt(context.Background(), now); err == nil {
@@ -1323,7 +1323,7 @@ func (s *Server) renderPasskeyNoticeHTML(heading, first, ok, notYou, link string
 	esc := html.EscapeString
 	var buf bytes.Buffer
 	err := s.emailTmpl.ExecuteTemplate(&buf, "email_passkey_notice", passkeyNoticeData{
-		BrandName: esc(s.cfg.BrandName), Heading: esc(heading), First: esc(first), OK: esc(ok), NotYou: esc(notYou), Link: esc(link),
+		BrandName: esc(s.cfg.BrandName), Heading: esc(heading), First: esc(first), OK: esc(ok), NotYou: esc(notYou), Link: esc(link), LinkLabel: esc(linkLabel),
 		HeaderColor: header, HeaderText: emailTextOn(header),
 		AccentColor: accent, AccentText: emailTextOn(accent),
 	})
@@ -1331,7 +1331,7 @@ func (s *Server) renderPasskeyNoticeHTML(heading, first, ok, notYou, link string
 		return buf.String()
 	}
 	log.Printf("render passkey notice: %v", err)
-	return `<p>` + esc(first) + `</p><p>` + esc(ok) + `</p><p>` + esc(notYou) + `</p><p><a href="` + esc(link) + `">Your passkeys</a></p>`
+	return `<p>` + esc(first) + `</p><p>` + esc(ok) + `</p><p>` + esc(notYou) + `</p><p><a href="` + esc(link) + `">` + esc(linkLabel) + `</a></p>`
 }
 
 // passkeyDevice names the kind of phone or computer for the notice, or "" if
@@ -1355,16 +1355,26 @@ func passkeyDevice(ua string) string {
 // passkeyNotice builds a notice whose first line reads "A passkey was <done>
 // your account at <host> on <date> at <time>[, on <device>]."
 func (s *Server) passkeyNotice(to, subject, done, device, ok, notYou string, now time.Time) email.Message {
-	when := now.In(s.loc)
-	stamp := when.Format("2 January 2006") + " at " + strings.ToLower(when.Format("3:04 pm"))
-	first := fmt.Sprintf("A passkey was %s your account at %s on %s", done, s.relyingParty().ID, stamp)
+	first := fmt.Sprintf("A passkey was %s your account at %s on %s", done, s.relyingParty().ID, s.noticeStamp(now))
 	if device != "" {
 		first += ", on " + device
 	}
 	first += "."
-	link := s.passkeysURL()
-	text := first + "\n\n" + ok + "\n\n" + notYou + "\n\nYour passkeys: " + link + "\n"
-	htmlBody := s.renderPasskeyNoticeHTML(subject, first, ok, notYou, link, now)
+	return s.personalNotice(to, subject, first, ok, notYou, "Your passkeys", s.passkeysURL(), now)
+}
+
+// noticeStamp is "2 January 2006 at 3:04 pm", for a personal notice.
+func (s *Server) noticeStamp(now time.Time) string {
+	when := now.In(s.loc)
+	return when.Format("2 January 2006") + " at " + strings.ToLower(when.Format("3:04 pm"))
+}
+
+// personalNotice is an email to the account holder about a change to their
+// account (a passkey added or removed, sessions signed out): a heading, three
+// sentences and a button to the page where they can check it.
+func (s *Server) personalNotice(to, subject, first, ok, notYou, linkLabel, link string, now time.Time) email.Message {
+	text := first + "\n\n" + ok + "\n\n" + notYou + "\n\n" + linkLabel + ": " + link + "\n"
+	htmlBody := s.renderPasskeyNoticeHTML(subject, first, ok, notYou, linkLabel, link, now)
 	return email.Message{To: to, Subject: subject, Text: text, HTML: htmlBody}
 }
 

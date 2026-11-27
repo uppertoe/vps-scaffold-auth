@@ -2,7 +2,7 @@
 title: Signing in
 summary: The emailed code, the limits on guessing it, what the sign-in page reveals, how long a session lasts and where a person lands afterwards.
 weight: 2
-lastmod: 2026-11-27
+lastmod: 2026-11-28
 ---
 
 ## The code
@@ -114,6 +114,15 @@ for confirmation first, so a link alone cannot sign anyone out.
 The confirmation page also offers to sign out on every device. That ends every
 session the person has, on this device and any other, including one someone
 else may be using.
+
+A person can list their own sessions on the Your sessions page, which the
+welcome page and the passkeys page link to. Each session shows the browser,
+when it signed in and when it was last used, and the page marks the browser
+being used. The person can sign out any other session, or every session except
+this browser's. This browser stays signed in under a new cookie, so a copy of
+its old cookie in anyone else's hands ends too. The gateway emails the person
+each time, as it does when a passkey is added, so a stolen session that signs
+its owner out is noticed. Break-glass cards and guests have no such page.
 
 The Sessions page lists every session, with the person, when they signed in,
 when the session was last used and the browser. An administrator can sign out

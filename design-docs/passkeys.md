@@ -2,7 +2,7 @@
 title: Passkeys
 summary: How a person signs in on their phone, or on their own computer, with a passkey instead of an emailed code, and the rules that keep a passkey as safe as the sign-in it replaces.
 weight: 4
-lastmod: 2026-11-27
+lastmod: 2026-11-28
 ---
 
 ## What a passkey changes
@@ -108,6 +108,7 @@ added. An administrator removes all of one person's passkeys on that person's
 access page, and the removal is recorded in the admin audit.
 
 Sessions started with an emailed code can be ended too: the person can sign
+out one session or every other device on their Your sessions page, or sign
 out on every device, and an administrator can end any session on the Sessions
 page, as [Signing in](signing-in.md) describes.
 

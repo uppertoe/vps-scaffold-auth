@@ -897,6 +897,28 @@ func TestChain(t *testing.T) {
 		}
 	})
 
+	t.Run("a person signs out on every other device from Your sessions and stays signed in here", func(t *testing.T) {
+		here, other := newBrowser(t), newBrowser(t)
+		here.signIn("https://app."+domain+"/", "dana@example.org")
+		other.signIn("https://app."+domain+"/", "dana@example.org")
+		if r := other.get("https://app."+domain+"/", nil); r.status != http.StatusOK {
+			t.Fatalf("the other browser: %d", r.status)
+		}
+		ask := here.get(authHost+"/sessions?confirm=others", nil)
+		if ask.status != http.StatusOK || !strings.Contains(ask.body, `action="/sessions/end-others"`) {
+			t.Fatalf("Your sessions: %d", ask.status)
+		}
+		if r := here.submit("/sessions/end-others", hidden(ask.body)); r.status != http.StatusFound {
+			t.Fatalf("sign out every other device: %d", r.status)
+		}
+		if r := other.get("https://app."+domain+"/", nil); !strings.Contains(r.location(), "/login?") {
+			t.Errorf("the other browser after: %d to %q", r.status, r.location())
+		}
+		if r := here.get("https://app."+domain+"/", nil); r.status != http.StatusOK {
+			t.Errorf("this browser after: %d to %q", r.status, r.location())
+		}
+	})
+
 	t.Run("signing out ends the session for every app", func(t *testing.T) {
 		confirm := alice.get(authHost+"/logout", nil)
 		r := alice.submit("/logout", hidden(confirm.body))

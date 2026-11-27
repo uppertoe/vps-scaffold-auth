@@ -207,6 +207,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /passkeys/confirm", s.handlePasskeyConfirmCode)
 	mux.HandleFunc("POST /passkeys/register", s.handlePasskeyRegister)
 	mux.HandleFunc("POST /passkeys/{id}/remove", s.handlePasskeyRemove)
+	// Your sessions (own_sessions.go), on whether passkeys are on or not.
+	mux.HandleFunc("GET /sessions", s.handleOwnSessions)
+	mux.HandleFunc("POST /sessions/end-one", s.handleOwnEndSession)
+	mux.HandleFunc("POST /sessions/end-others", s.handleOwnEndOtherSessions)
 
 	// Admin subtree: one gate wraps the whole /admin/ tree. The inner mux
 	// matches on the full path, so no prefix stripping is needed.

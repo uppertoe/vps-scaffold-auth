@@ -307,6 +307,10 @@ func (s *Server) foldSignIns(events []store.AuthEvent) []signInView {
 			row.OK, row.Result, row.How = true, "Passkey removed", "Passkey"
 		case ok && e.EventType == store.AuthEventSessionsEnd:
 			row.OK, row.Result, row.How = true, "Signed out on every device", "Sign-out page"
+		case ok && e.EventType == store.AuthEventSessionEnd:
+			row.OK, row.Result, row.How = true, msgOwnAccessEndOne, msgOwnAccessHow
+		case ok && e.EventType == store.AuthEventSessionsEndOthers:
+			row.OK, row.Result, row.How = true, msgOwnAccessEndOther, msgOwnAccessHow
 		default:
 			row.Result, row.How = refusedLabel(e.EventType, e.Outcome), stepLabel(e.EventType)
 		}
