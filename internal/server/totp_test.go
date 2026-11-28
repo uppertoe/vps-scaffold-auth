@@ -149,7 +149,7 @@ func TestDemotedAdminLosesAdminGroupAtNextRequest(t *testing.T) {
 	if g := groupsAfter(t, srv, c, anyGuard(t, srv)); !strings.HasPrefix(g, "admin") {
 		t.Fatalf("before demotion: groups=%q, want admin", g)
 	}
-	srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
+	srv.policy = authz.NewPolicy(nil)
 	rec := c.get("/verify", anyGuard(t, srv))
 	if rec.Code != http.StatusOK || sessionOf(t, srv, c).Groups != "user" {
 		t.Fatalf("after demotion = %d groups=%q, want 200 user", rec.Code, sessionOf(t, srv, c).Groups)

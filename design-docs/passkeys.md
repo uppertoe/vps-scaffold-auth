@@ -68,8 +68,10 @@ passkey cannot add a passkey of their own that would survive the stolen one
 being removed. A person whose sign-in is older is asked to sign in again
 before a passkey is added.
 
-A guest and a break-glass session cannot add a passkey, and nor can an
-address that may no longer sign in.
+A guest may add a passkey under the same rules as anyone else. A guest's
+passkey never stands in for the admin second step, and it signs the guest in
+only where an emailed code would make them a guest. A break-glass session
+cannot add a passkey, and nor can an address that may no longer sign in.
 
 ## Administrators
 
@@ -126,7 +128,8 @@ page, as [Signing in](signing-in.md) describes.
   reports was saved on a phone over Bluetooth or a QR code, or on a security
   key.
 - **The rules are checked again at every passkey sign-in.** A passkey does not
-  let in an address that may no longer sign in, and it never makes a guest.
+  let in an address that may no longer sign in, and it makes a guest only
+  where an emailed code would.
 - **Only one kind of key is accepted.** The gateway accepts the P-256 keys that
   Apple's and Google's passkeys use, and nothing else. It asks the phone for no
   proof of its make or model, so the gateway's checks are short enough to read

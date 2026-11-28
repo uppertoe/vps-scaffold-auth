@@ -337,6 +337,7 @@ func TestInvitationLinkWrongAddress(t *testing.T) {
 	srv, sender, ml, c := inviteAdmin(t)
 	invite(t, c, adminInviteForm("k.lee@monash.org"))
 	link := inviteLinkIn(t, ml.waitFor(1, invitationsTo("k.lee@monash.org"))[0])
+	seedStaff(t, srv, "example.com")
 	other := newClient(t, srv.Handler())
 	loginAs(t, other, sender, "user@example.com", nil)
 	body := html.UnescapeString(other.get(link, nil).Body.String())

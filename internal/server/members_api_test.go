@@ -202,7 +202,7 @@ func TestMembersEndpointFromTheReadersFile(t *testing.T) {
 	}
 	for k, v := range map[string]string{
 		"AUTH_PUBLIC_URL": "https://auth.example.com", "DOMAIN": "example.com",
-		"ALLOWED_EMAIL_DOMAINS": "example.com", "ADMIN_EMAILS": "admin@example.com",
+		"APP_ROLES_FILE": "/etc/vps-auth/app-roles.tsv", "ADMIN_EMAILS": "admin@example.com",
 		"SESSION_SECRET": "0123456789abcdef0123456789abcdef", "EMAIL_BACKEND": "log",
 		"COOKIE_INSECURE": "true", "MEMBER_READERS": "",
 		"MEMBER_READERS_FILE": path, "MEMBER_READER_TOKEN_DIGEST": digestToken,

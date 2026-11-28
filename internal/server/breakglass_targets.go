@@ -170,8 +170,8 @@ func (s *Server) guestGroupsNow(ctx context.Context, id *session.Identity) strin
 
 // withoutStaffOnlyListsForOutsider removes every staff-only list from an address's
 // groups when the session is built on the guest tier (a guest's or a
-// member's) or the address is not staff (see knownRole: the allow-list, or
-// without one a domain group, does not admit it). Being on a list, holding a
+// member's) or the address is not staff (see knownRole: neither ADMIN_EMAILS nor a
+// domain group admits it). Being on a list, holding a
 // role or signing in on an open host never makes an address staff, and a
 // guest session stays a stranger's even if its domain has since become a
 // staff domain, until its person signs in again. A stranger is refused as a

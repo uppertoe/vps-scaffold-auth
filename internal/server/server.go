@@ -64,6 +64,12 @@ type Server struct {
 	branding          brandingCache  // public branding snapshot (see logo_cache.go)
 	appRoles          roles.Manifest // each app's roles (APP_ROLES_FILE, see app_roles.go)
 	roleCache         roleCache      // role assignments as /verify reads them
+	// guestsReleasedAt is when the release that retired the allow-list first
+	// ran on this database (carriedOverAsGuest). Remove after 1 March 2027.
+	guestsReleasedAt time.Time
+	// lostApps are the apps the previous start's manifest declared and this
+	// one does not (guestsStranded).
+	lostApps map[string]bool
 }
 
 // New constructs a Server from its dependencies.
@@ -97,7 +103,7 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		store:         st,
 		sender:        sender,
 		sessions:      session.NewManager(cfg.SessionSecret, cfg.SessionTTL, cfg.SessionRenew, cfg.CookieDomain, !cfg.CookieInsecure),
-		policy:        authz.NewPolicy(cfg.AllowedDomains, cfg.AdminEmails),
+		policy:        authz.NewPolicy(cfg.AdminEmails),
 		secrets:       secrets,
 		emailLimiter:  ratelimit.New(cfg.RateLimitPerEmail.Count, cfg.RateLimitPerEmail.Window),
 		emailCeiling:  limiterOr(cfg.RateLimitPerEmailCeiling, config.RateLimit{Count: 12, Window: time.Hour}),
@@ -122,7 +128,6 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		emailTmpl:     emailTmpl,
 		now:           time.Now,
 		loc:           loc,
-		appRoles:      loadAppRoles(cfg.AppRolesFile, cfg.Domain),
 	}
 	// Anti-replay reads the clock through s.now so tests sharing a fake clock stay
 	// consistent with the rest of the server.
@@ -135,12 +140,19 @@ func New(cfg *config.Config, st store.Store, sender email.Sender) (*Server, erro
 		return ""
 	}
 	s.passkeyChallenges = newChallengeGuard(st, func() time.Time { return s.now() })
-	if s.policy.OpenRegistration() {
-		log.Printf("authz: OPEN REGISTRATION enabled (ALLOWED_EMAIL_DOMAINS contains %q): any email verified by one-time code is admitted as a user. On a shared server prefer OPEN_REGISTRATION_HOSTS, which opens one app only.", authz.Wildcard)
+	if s.appRoles, err = loadAppRoles(cfg.AppRolesFile, cfg.Domain); err != nil {
+		return nil, err
 	}
-	if len(cfg.OpenRegistrationHosts) > 0 {
-		log.Printf("authz: guest sign-in open for %s: an OTP-verified address that is not known (the allow-list, or without one a domain group) and holds no app role becomes a guest, admitted only by app roles held by guests.", strings.Join(cfg.OpenRegistrationHosts, ", "))
+	if err := s.refuseAuthHostApps(); err != nil {
+		return nil, err
 	}
+	if s.lostApps, err = s.recordDeclaredApps(context.Background()); err != nil {
+		return nil, fmt.Errorf("recording the declared apps: %w", err)
+	}
+	if s.guestsReleasedAt, err = st.FirstRun(context.Background(), guestsFromRolesRelease, time.Now()); err != nil {
+		return nil, fmt.Errorf("recording the release: %w", err)
+	}
+	logRetiredSettings(cfg.RetiredSet)
 	s.logWhoSignsIn(context.Background())
 	s.logRefusedGroupsDeprecated(context.Background())
 	s.logDomainGroupReads(context.Background())
@@ -309,4 +321,36 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// The start-up warnings for a retired setting that is still set. Remove them
+// after one release, with config.RetiredSettings.
+var msgRetired = map[string]string{
+	"ALLOWED_EMAIL_DOMAINS":   "warning: ALLOWED_EMAIL_DOMAINS is set, but the gateway no longer reads it. Staff are the administrators in ADMIN_EMAILS and the addresses at the domains of the domain groups that hold an app role. Remove the setting.",
+	"OPEN_REGISTRATION_HOSTS": "warning: OPEN_REGISTRATION_HOSTS is set, but the gateway no longer reads it. Guests can sign in on the hosts of each app whose User role is held by guests. Remove the setting.",
+}
+
+// logRetiredSettings warns, once at start, about each retired setting that
+// is still set. Neither is read, so the gateway starts as if it were absent.
+func logRetiredSettings(set []string) {
+	for _, k := range set {
+		log.Print(msgRetired[k])
+	}
+}
+
+// refuseAuthHostApps refuses a manifest that gives an app the auth host. The
+// auth host serves the sign-in and admin pages, never an app, so a guard
+// there would let an app's roles, and a Guests assignment's open sign-in,
+// reach those pages.
+func (s *Server) refuseAuthHostApps() error {
+	host := s.authHost()
+	if host == "" {
+		return fmt.Errorf("AUTH_PUBLIC_URL: no host in %q", s.cfg.PublicURL)
+	}
+	for _, a := range s.appRoles.Sorted() {
+		if a.ServesHost(host) {
+			return fmt.Errorf("APP_ROLES_FILE: app %q names the auth host %s as one of its hosts; the auth host serves no app", a.Name, host)
+		}
+	}
+	return nil
 }

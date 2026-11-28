@@ -405,6 +405,11 @@ func (s *Server) renewSessionRow(w http.ResponseWriter, r *http.Request, id *ses
 		return false // ended while this request was on its way
 	}
 	next.Kind, next.Groups, next.Renewed = kind, groups, now
+	// A guest never holds the remember-me lifetime (completeLogin), so a
+	// session carried over as a guest's (carriedOverAsGuest) gives it up.
+	if kind == session.KindGuest && s.cfg.SessionTTL > 0 && next.TTL > s.cfg.SessionTTL {
+		next.TTL = s.cfg.SessionTTL
+	}
 	next.Expires = s.expiry(next.SignedIn, now, next.TTL)
 	if err := s.store.UpdateSession(r.Context(), next); err != nil {
 		// The session goes on as it was until its expiry; the renewal is
@@ -413,7 +418,7 @@ func (s *Server) renewSessionRow(w http.ResponseWriter, r *http.Request, id *ses
 		return true
 	}
 	l.mu.Lock()
-	cur.Kind, cur.Groups, cur.Renewed, cur.Expires = next.Kind, next.Groups, next.Renewed, next.Expires
+	cur.Kind, cur.Groups, cur.Renewed, cur.TTL, cur.Expires = next.Kind, next.Groups, next.Renewed, next.TTL, next.Expires
 	l.mu.Unlock()
 	s.sessions.SetSession(w, token, next.Expires, now)
 	return true

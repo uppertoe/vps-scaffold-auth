@@ -35,13 +35,21 @@ func (s *Server) renewSession(w http.ResponseWriter, r *http.Request, id *sessio
 // read (the refusal path), so a renewal there costs one query, not two. A nil
 // groups reads them here.
 func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *session.Identity, now time.Time, groups *string) bool {
-	// Without the allow-list, the domain groups decide who is staff; while
-	// they have never been read, the session is left as it is.
+	// The domain groups decide who is staff; while they have never been
+	// read, the session is left as it is.
 	if s.rolesUnavailable(r.Context()) {
 		s.renderUnavailable(w, s.reconstructOriginalURL(r))
 		return false
 	}
 	role := s.renewalRole(id)
+	if role == authz.RoleDeny && s.guestsStranded(r.Context()) && s.keptOnlyByGuests(id) {
+		// The manifest has lost the app whose role guests hold: a fault in
+		// the configuration, not a decision to close guest sign-in. A
+		// session only guests would keep is left as it is, as while the
+		// role data cannot be read.
+		s.renderUnavailable(w, s.reconstructOriginalURL(r))
+		return false
+	}
 	if role == authz.RoleDeny {
 		s.endThisSession(w, r, id)
 		s.redirectToLogin(w, r)
@@ -52,14 +60,18 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 		groups = &g
 	}
 	// id.Kind is passed through, so a guest stays a guest across renewals (and
-	// so stays confined to roles held by guests). The one change is between a
-	// person's own kinds: an address that now holds a role but is off the
-	// allow-list becomes a member, and a member the allow-list now admits
-	// becomes an ordinary session.
+	// so stays confined to roles held by guests). The changes are between a
+	// person's own kinds: an address that now holds a role but is not staff
+	// becomes a member, and a member who is now staff becomes an ordinary
+	// session. A staff session becomes a guest's only under the transitional
+	// rule in renewalRole.
 	kind := id.Kind
-	if role == authz.RoleMember {
+	switch {
+	case role == authz.RoleMember:
 		kind = session.KindMember
-	} else if kind == session.KindMember {
+	case role == authz.RoleGuest:
+		kind = session.KindGuest
+	case kind == session.KindMember:
 		kind = ""
 	}
 	if !s.renewSessionRow(w, r, id, kind, *groups, now) {
@@ -81,7 +93,7 @@ func (s *Server) renewSessionWith(w http.ResponseWriter, r *http.Request, id *se
 func (s *Server) currentGroups(r *http.Request, id *session.Identity) (groups string, ok bool) {
 	role := s.renewalRole(id)
 	if role == authz.RoleDeny {
-		return "", true // renewSessionWith ends the session
+		return "", true // renewSessionWith ends the session, or answers 503
 	}
 	dbGroups, err := s.store.GroupsForEmail(r.Context(), id.Email)
 	if err != nil {
@@ -121,10 +133,10 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		if legacy {
 			s.sessions.SetSession(w, token, x.Expires, now)
 		}
-		// Without the allow-list and before the domain groups have ever been
-		// read, the gateway cannot tell staff from strangers: it answers 503
-		// and keeps the session, rather than end it or treat staff as
-		// outsiders (see rolesUnavailable).
+		// Before the domain groups have ever been read, the gateway cannot
+		// tell staff from strangers: it answers 503 and keeps the session,
+		// rather than end it or treat staff as outsiders (see
+		// rolesUnavailable).
 		if s.rolesUnavailable(r.Context()) {
 			s.renderUnavailable(w, s.reconstructOriginalURL(r))
 			return
@@ -313,31 +325,29 @@ func applyRoleHint(d *pageData, rqr, rhd string) {
 }
 
 // applyLoginBranding fills the domain-derived UX fields on the login page from
-// the staff domains (ALLOWED_EMAIL_DOMAINS, or without it the domain groups'
-// domains; see staffDomains), so a DIRECT visit (no route rqd) still tells
-// the user which domain to use. It runs after applyAccessHint, so a
+// the staff domains (see staffDomains), so a DIRECT visit (no route rqd) still
+// tells the user which domain to use. It runs after applyAccessHint, so a
 // route-supplied requirement (HintDomains/RequireDomains) always wins; this only
 // fills the gaps:
 //   - HintDomains: the "This page is for <domains> email addresses" line, from
-//     the allow-list when no route set one.
+//     the staff domains when no route set one.
 //   - EmailPlaceholder: you@<first effective domain> — the route requirement if
-//     present, else the first allow-list domain — so the example matches who may
-//     sign in. Left empty (→ generic placeholder) when no domain is configured.
+//     present, else the first staff domain — so the example matches who may
+//     sign in. Left empty (→ generic placeholder) when there is no domain.
 func (s *Server) applyLoginBranding(ctx context.Context, d *pageData) {
-	// Not at a role guard, where the allow-list says nothing about who holds
-	// the role; only the domains of its domain groups are suggested.
+	// Not at a role guard, where the staff domains say nothing about who
+	// holds the role; only the domains of its domain groups are suggested.
 	if d.RoleGuard {
 		if dom := firstDomain(d.RoleHintDomains); dom != "" && d.EmailPlaceholder == "" {
 			d.EmailPlaceholder = "you@" + dom
 		}
 		return
 	}
-	// Open registration accepts any domain, so there is no domain to advertise:
-	// leave the hint empty and fall back to the generic placeholder. (A route may
-	// still have set RequireDomains/HintDomains above; those win and are kept.)
-	// The same holds for a login headed to an open-registration host, where a
-	// stranger's address is welcome as a guest.
-	if s.policy.OpenRegistration() || s.isOpenHost(d.Redirect) {
+	// A login headed to a host open to guests welcomes a stranger's address,
+	// so there is no domain to advertise: leave the hint empty and fall back
+	// to the generic placeholder. (A route may still have set
+	// RequireDomains/HintDomains above; those win and are kept.)
+	if s.isOpenHost(ctx, d.Redirect) {
 		if d.EmailPlaceholder == "" {
 			if dom := firstDomain(d.RequireDomains); dom != "" {
 				d.EmailPlaceholder = "you@" + dom
@@ -533,29 +543,30 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// permitted and non-permitted addresses. Without the decoy, a non-permitted
 	// address has no stored code and so reports "expired" (ConsumeNoCode) while a
 	// permitted one reports "incorrect" (ConsumeMismatch) and can reach the
-	// attempt cap — a difference that leaks allow-list membership, and thus which
+	// attempt cap — a difference that leaks who may sign in, and thus which
 	// off-domain addresses are admins. Either branch falls through to the same
 	// response. EnsureCode is insert-if-absent, so a rate-limited permitted user's
 	// live code is never overwritten.
 	//
-	// "Permitted" includes a would-be guest: when rd points at an open-
-	// registration host, any syntactically valid public address is sent a real
-	// code (LoginRole returns RoleGuest). That leaks nothing, since on such a host
-	// everyone is mailed; on every other host the decoy behaviour is unchanged.
+	// "Permitted" includes a would-be guest: when rd points at a host open to
+	// guests (isOpenHost), any syntactically valid public address is sent a
+	// real code (loginRole returns RoleGuest). That leaks nothing, since on
+	// such a host everyone is mailed; on every other host the decoy behaviour
+	// is unchanged.
 	//
 	// Both kinds of address go through the SAME cooldown, send-limit and
 	// counter transitions; the only difference is whether mail is sent. A
 	// decoy that kept its attempt counter across a re-request while a real
 	// code's was reset (or that never spent a send token) would answer the
-	// next wrong guess differently, and that difference is allow-list
-	// membership.
+	// next wrong guess differently, and that difference is who
+	// may sign in.
 	// While the gateway cannot tell who is staff, nobody is sent a code or a
 	// decoy: a member of staff would otherwise be refused, or made a guest.
 	if s.rolesUnavailable(r.Context()) {
 		s.renderUnavailable(w, rd)
 		return
 	}
-	permitted := s.loginRole(r.Context(), emailAddr, s.isOpenHost(rd)) != authz.RoleDeny
+	permitted := s.loginRole(r.Context(), emailAddr, s.isOpenHost(r.Context(), rd)) != authz.RoleDeny
 	s.issueCode(r, emailAddr, permitted, now)
 
 	if err := s.sessions.SetState(w, session.State{Email: emailAddr, Redirect: rd, Remember: remember}, s.cfg.OTPTTL, now); err != nil {
@@ -588,7 +599,7 @@ func (s *Server) issueCode(r *http.Request, emailAddr string, permitted bool, no
 		// token is spent, for either kind of address. As when over the send
 		// limit, a decoy is stored only if no code exists: a live code is never
 		// overwritten, a wrong guess is answered "incorrect" as at any other
-		// time (so the flood cannot be seen, and through it the allow-list),
+		// time (so the flood cannot be seen, and through it who may sign in),
 		// and the decoy's expiry falls just short of the cooldown window, so
 		// the person's next request after the flood sends a code at once.
 		log.Printf("request for %s: no code sent, %d emails are already being sent", emailAddr, maxMailSends)
@@ -736,7 +747,7 @@ func (s *Server) sendMailVia(slots chan struct{}, what string, send func(ctx con
 // are deliberately not mailing (not permitted, or over its send limit). It uses
 // insert-if-absent so a live code is never overwritten. This keeps /verify-code
 // behaviourally identical for permitted and non-permitted addresses — see the
-// rationale in handleRequest — so the verify step can't enumerate the allow-list.
+// rationale in handleRequest — so the verify step can't enumerate who may sign in.
 func (s *Server) storeDecoyCode(ctx context.Context, emailAddr string, now time.Time) error {
 	code, err := otp.Generate(s.cfg.OTPLength)
 	if err != nil {
@@ -866,7 +877,7 @@ func (s *Server) handleVerifyCode(w http.ResponseWriter, r *http.Request) {
 		// strangers out: a guest session is the same whichever host minted it,
 		// and the boundary is a role guard admitting guests only where an app
 		// role is held by guests. The host check only decides where a guest login is offered.
-		role := s.loginRole(r.Context(), st.Email, s.isOpenHost(rd))
+		role := s.loginRole(r.Context(), st.Email, s.isOpenHost(r.Context(), rd))
 		if role == authz.RoleDeny {
 			s.recordAuth(r, st.Email, store.AuthEventVerify, store.AuthOutcomeDenied)
 			s.sessions.ClearState(w)
@@ -1290,15 +1301,15 @@ func (s *Server) tierRole(id *session.Identity, role string) string {
 // headers at the next request rather than at the next scheduled renewal.
 //
 // A person's sign-in whose kind no longer matches knownRole is stale too: a
-// normal session whose address is no longer known (it has left the
-// allow-list, or without one every domain group) but holds an app role
-// becomes a member at once, and a member whose address is now known becomes
-// an ordinary session at once.
+// normal session whose address is no longer known (its domain has left every
+// domain group that holds a role) but holds an app role becomes a member at
+// once, one carried over as a guest's (renewalRole) does so at once, and a
+// member whose address is now known becomes an ordinary session at once.
 func (s *Server) tierStale(id *session.Identity) bool {
 	switch id.Kind {
 	case "":
 		role := s.renewalRole(id)
-		if role == authz.RoleMember {
+		if role == authz.RoleMember || role == authz.RoleGuest {
 			return true
 		}
 		return authz.HasGroup(id.Groups, authz.RoleAdmin) != (s.tierRole(id, role) == authz.RoleAdmin)
@@ -1309,11 +1320,11 @@ func (s *Server) tierStale(id *session.Identity) bool {
 }
 
 // policyWithdrawn reports whether the current policy refuses a normal or
-// guest session's person: their domain has been taken off the allow-list
-// (or, without one, off every domain group) and they hold no app role and are
-// not listed as an administrator, or no host admits guests any longer. The
-// allow-list is read from the configuration at start, and the domain groups
-// and roles from the cached role data, so this is a lookup in memory.
+// guest session's person: their domain has been taken off every domain group
+// that holds a role and they hold no app role and are not listed as an
+// administrator, or no app's role is held by guests any longer. The domain
+// groups and roles come from the cached role data, so this is a lookup in
+// memory.
 // Break-glass sessions are not policy logins and end at their own short
 // lifetime or when their card is revoked.
 func (s *Server) policyWithdrawn(id *session.Identity) bool {
@@ -1347,53 +1358,118 @@ func isAdminSession(id *session.Identity) bool {
 }
 
 // renewalRole re-derives a session's base role at sliding renewal. A normal
-// session is re-checked against the allow-list, which is where revocation takes
-// effect. A guest is, by definition, NOT on the allow-list, so asking Role would
-// end every guest session at its first renewal; instead the guest's address is
-// re-checked only for plausibility and it stays RoleGuest. It never steps up to
-// admin here: even if the address has since been made an admin, the guest
-// session keeps its kind and must sign in again to become one.
+// session is re-checked against knownRole, which is where revocation takes
+// effect. A guest is, by definition, not staff, so asking knownRole would end
+// every guest session at its first renewal; instead the guest's address is
+// re-checked only for plausibility and it stays RoleGuest while some app's
+// role is held by guests. It never steps up to admin here: even if the
+// address has since been made an admin, the guest session keeps its kind and
+// must sign in again to become one.
 func (s *Server) renewalRole(id *session.Identity) string {
+	ctx := context.Background()
 	if id.Kind == session.KindGuest {
-		// A guest stays a guest at renewal, but only while some host still
-		// admits guests: emptying OPEN_REGISTRATION_HOSTS ends every guest
-		// session at its next request (see policyWithdrawn), the same way
-		// de-listing a domain ends a user's. The address is re-checked for plausibility, nothing more.
-		if len(s.cfg.OpenRegistrationHosts) > 0 && authz.GuestEligible(id.Email) {
+		// Taking guests off every app ends every guest session at its next
+		// request (see policyWithdrawn), the same way taking a domain off
+		// every domain group ends a staff session.
+		if s.guestsAnywhere(ctx) && authz.GuestEligible(id.Email) {
 			return authz.RoleGuest
 		}
 		return authz.RoleDeny
 	}
-	// A member who is now known (the allow-list, or without one a domain
-	// group, admits the address) renews as an ordinary user or administrator
+	// A member who is now known renews as an ordinary user or administrator
 	// (renewSessionWith changes its kind).
-	role := s.knownRole(context.Background(), id.Email)
-	if role == authz.RoleDeny && personSession(id) && s.mayHoldRoleSnapshot(context.Background(), id) {
+	role := s.knownRole(ctx, id.Email)
+	if role == authz.RoleDeny && personSession(id) && s.mayHoldRoleSnapshot(ctx, id) {
 		// Not known, but holds an app role through a domain group, a list or
 		// a current person assignment (app_roles.go): a member.
 		return authz.RoleMember
 	}
+	if role == authz.RoleDeny && s.carriedOverAsGuest(ctx, id) {
+		return authz.RoleGuest
+	}
 	return role
 }
 
-// isOpenHost reports whether a (validated) post-login destination is on a host
-// listed in OPEN_REGISTRATION_HOSTS, where an address the allow-list does not
-// permit may sign in as a guest. An empty or unparsable rd is never open.
-func (s *Server) isOpenHost(rd string) bool {
-	if rd == "" || len(s.cfg.OpenRegistrationHosts) == 0 {
+// guestsFromRolesRelease names the release that retired ALLOWED_EMAIL_DOMAINS
+// and OPEN_REGISTRATION_HOSTS. The time it first ran on a server is recorded
+// in the database (Server.guestsReleasedAt), so every session from before it
+// can be told apart from one it started.
+const guestsFromRolesRelease = "guests-from-roles"
+
+// carriedOverAsGuest is a transitional rule, to be removed 90 days after the
+// release first ran on the last server (SESSION_MAX_AGE on markbot; remove
+// it, and guestsReleasedAt, after 1 March 2027). Under ALLOWED_EMAIL_DOMAINS,
+// an address at any listed domain, or with "*" any address, signed in as
+// staff. Without the setting, such a session would end at its next request,
+// signing out every p.stonn user. Instead, a staff session that began before
+// the release (an old signed cookie keeps its sign-in time when it is
+// converted, so it counts too), whose address is no longer staff and holds no
+// role through a list or a person assignment, becomes a guest's while some
+// app's role is held by guests. A session started by this release never
+// does: removing a domain from a domain group still ends its sessions, and a
+// member is never made a guest.
+func (s *Server) carriedOverAsGuest(ctx context.Context, id *session.Identity) bool {
+	return s.mayCarryOver(id) && s.guestsAnywhere(ctx)
+}
+
+// mayCarryOver is carriedOverAsGuest without asking whether guests hold a
+// role anywhere: a staff session from before the release with a plausible
+// address.
+func (s *Server) mayCarryOver(id *session.Identity) bool {
+	return id.Kind == "" && id.Auth > 1 && !s.guestsReleasedAt.IsZero() && id.Auth <= s.guestsReleasedAt.Unix() &&
+		authz.GuestEligible(id.Email)
+}
+
+// keptOnlyByGuests reports whether, of all the reasons a session could go
+// on, only guests holding a role could keep it: it is a guest's, or a staff
+// session that would carry over as one. Asked only once renewalRole has
+// refused the session.
+func (s *Server) keptOnlyByGuests(id *session.Identity) bool {
+	return (id.Kind == session.KindGuest && authz.GuestEligible(id.Email)) || s.mayCarryOver(id)
+}
+
+// isOpenHost reports whether a sign-in's destination is on a host open to
+// guests (openToGuests), where an address that is not staff and holds no
+// role may sign in as a guest. The destination is rd, and must be on the
+// domain. A sign-in that names none (a direct visit to the sign-in page), or
+// names one of the gateway's own pages (Your sessions, Your passkeys, the
+// links in its emails), is decided as one to DEFAULT_REDIRECT, so a guest
+// signed out there can sign in again where a direct visit could. The auth
+// host itself is never an app's host (the manifest is refused at start if it
+// names it). The host decides only where a stranger may start, never what a
+// guest reaches.
+func (s *Server) isOpenHost(ctx context.Context, rd string) bool {
+	host := s.destinationHost(rd)
+	if host == "" || host == s.authHost() {
+		host = s.destinationHost(s.cfg.DefaultRedirect)
+	}
+	if host == s.authHost() {
 		return false
 	}
-	u, err := url.Parse(rd)
+	return s.openToGuests(ctx, host)
+}
+
+// destinationHost is the lower-case host of a destination on the domain, or
+// "" for one that ValidateRedirect refuses.
+func (s *Server) destinationHost(rd string) string {
+	target, ok := authz.ValidateRedirect(rd, s.cfg.Domain)
+	if !ok {
+		return ""
+	}
+	u, err := url.Parse(target)
 	if err != nil {
-		return false
+		return ""
 	}
-	host := strings.ToLower(u.Hostname())
-	for _, h := range s.cfg.OpenRegistrationHosts {
-		if host == h {
-			return true
-		}
+	return strings.ToLower(u.Hostname())
+}
+
+// authHost is the gateway's own host, from AUTH_PUBLIC_URL.
+func (s *Server) authHost() string {
+	u, err := url.Parse(s.cfg.PublicURL)
+	if err != nil {
+		return ""
 	}
-	return false
+	return strings.ToLower(u.Hostname())
 }
 
 // computeGroups returns a session's comma-separated groups for an email: the

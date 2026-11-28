@@ -46,15 +46,20 @@ func guardFor(app string) map[string]string {
 }
 
 // anyGuard is a role guard whose User role is held by guests, so it admits
-// any signed-in person who is not a break-glass card.
+// any signed-in person who is not a break-glass card. Its app is on
+// any.example.com, which guests holding its role opens to guest sign-in;
+// the tests sign in on other hosts.
 func anyGuard(t *testing.T, srv *Server) map[string]string {
 	t.Helper()
-	if _, ok := srv.appRoles.Apps["app"]; !ok {
-		testGuardApp(t, srv, "app")
-		mustAssign(t, srv, store.RoleAssignment{App: "app", Role: "user", Kind: store.AssignGuests})
+	if _, ok := srv.appRoles.Apps[anyApp]; !ok {
+		testGuardApp(t, srv, anyApp)
+		mustAssign(t, srv, store.RoleAssignment{App: anyApp, Role: "user", Kind: store.AssignGuests})
 	}
-	return guardFor("app")
+	return guardFor(anyApp)
 }
+
+// anyApp is anyGuard's app.
+const anyApp = "any"
 
 // appForGroup names the app groupGuard makes for the group g.
 func appForGroup(g string) string {
@@ -266,8 +271,8 @@ func TestGroupRecheckClearsRevokedPrincipal(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
-	// The domain is de-listed and the person added to the group.
-	srv.policy = authz.NewPolicy([]string{"other.org"}, []string{"admin@example.com"})
+	// The domain group loses its role and the person is added to the group.
+	unseedStaff(t, srv)
 	if err := srv.store.AddGroupMember(ctx, "team", "user@example.com"); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +296,7 @@ func TestGroupRecheckGivesNewAdminNoAdminTier(t *testing.T) {
 	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "user@example.com", nil)
-	srv.policy = authz.NewPolicy([]string{"example.com"}, []string{"admin@example.com", "user@example.com"})
+	srv.policy = authz.NewPolicy([]string{"admin@example.com", "user@example.com"})
 	if err := srv.store.AddGroupMember(ctx, "team", "user@example.com"); err != nil {
 		t.Fatal(err)
 	}

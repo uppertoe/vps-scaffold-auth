@@ -40,7 +40,7 @@ func appsAdmin(t *testing.T) (*Server, *captureSender, *client) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, sender := testServerWith(t, func(c *config.Config) {
+	srv, sender := testServerNoStaff(t, func(c *config.Config) {
 		c.AppRolesFile = path
 		c.NetworkRanges = ranges
 		c.NetworkNames = config.NetworkNamesAsWritten("RCH=10.0.0.0/8")
@@ -112,18 +112,6 @@ func TestAppsOverview(t *testing.T) {
 	}
 }
 
-func TestAppsPagesNeedTheModel(t *testing.T) {
-	srv, sender := testServer(t)
-	c := newClient(t, srv.Handler())
-	loginAs(t, c, sender, "admin@example.com", nil)
-	if rec := c.get("/admin/apps", nil); rec.Code != http.StatusFound {
-		t.Errorf("apps page with the model off = %d, want a redirect", rec.Code)
-	}
-	if strings.Contains(c.get("/admin/", nil).Body.String(), `href="/admin/apps"`) {
-		t.Error("menu offers Apps with the model off")
-	}
-}
-
 func TestReviewWarnings(t *testing.T) {
 	srv, _, c := appsAdmin(t)
 	mustDomainGroup(t, srv, "staff", "example.com")
@@ -140,6 +128,7 @@ func TestReviewWarnings(t *testing.T) {
 		"Nobody will hold Administrator once this is saved, so /admin/* will be closed to everyone.",
 		"Anyone on the RCH network will reach every other path without signing in.",
 		"Anyone who confirms an email address will reach every other path.",
+		"Once this is saved, anyone who confirms an email address at enquiries.example.com will be signed in as a guest.",
 		msgSaveNote, "Keep editing", "Save the changes", "Give to", "Take from",
 	} {
 		if !strings.Contains(page, want) {

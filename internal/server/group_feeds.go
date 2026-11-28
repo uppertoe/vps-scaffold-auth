@@ -484,7 +484,7 @@ func (s *Server) syncFeedAttempt(ctx context.Context, group, actor, acceptHash s
 // would leave the group less than half its current size or less than half
 // the list last accepted, or more than double its current size (beyond a
 // small allowance for a group just starting). A changeover swaps people and
-// keeps the size; a roster returning one address, or the whole allow-list,
+// keeps the size; a roster returning one address, or every staff address,
 // does not, and such a change waits for an administrator however long. A
 // rotating group (GROUP_FEED_ROTATING), whose whole membership is replaced at
 // a changeover, has no ceiling: the wait and Keep current members are its
@@ -637,8 +637,8 @@ func (s *Server) fetchFeed(ctx context.Context, feed config.GroupFeed) ([]string
 	skipped := 0
 	for _, raw := range list {
 		e := normalizeEmail(raw)
-		// Only plain addresses of known people (knownRole: the allow-list,
-		// or without one a domain group's domains): a feed never brings in
+		// Only plain addresses of known people (knownRole: ADMIN_EMAILS,
+		// or a domain group's domains): a feed never brings in
 		// an outside address, which would otherwise reach group-gated apps
 		// through a guest session.
 		if !plainAddress(e) || !s.known(ctx, e) {

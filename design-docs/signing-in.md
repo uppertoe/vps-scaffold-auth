@@ -94,8 +94,8 @@ the department's server. A change to the rules takes effect at each person's
 next request. A person who may no longer sign in is signed out, a person
 removed from the admin listing loses the admin pages, and a change to a
 person's roles or lists applies straight away. A person whose domain leaves
-the allow-list, or on a server without the allow-list leaves every domain
-group that holds a role, continues as a member if they still hold a role.
+every domain group that holds a role continues as a member if they still hold
+a role.
 
 However often it renews, no session lasts longer than a fixed time from the
 moment the person signed in: seven days by default, or the "Keep me signed in"
@@ -122,7 +122,7 @@ being used. The person can sign out any other session, or every session except
 this browser's. This browser stays signed in under a new cookie, so a copy of
 its old cookie in anyone else's hands ends too. The gateway emails the person
 each time, as it does when a passkey is added, so a stolen session that signs
-its owner out is noticed. Break-glass cards and guests have no such page.
+its owner out is noticed. Guests have the page too; break-glass cards do not.
 
 The Sessions page lists every session, with the person, when they signed in,
 when the session was last used and the browser. An administrator can sign out

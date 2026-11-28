@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -46,8 +47,8 @@ type roleState struct {
 	invitedRoles map[string]bool
 	// staff are the domains of the domain groups that hold at least one app
 	// role, in staffOrder: the order of their groups' creation (oldest
-	// first), and within a group the group's own order. With the
-	// allow-list empty, an address at one of them is staff (knownRole).
+	// first), and within a group the group's own order. An address at one
+	// of them is staff (knownRole).
 	staff      map[string]bool
 	staffOrder []string
 	// domainRank orders every domain group's domains the same way, for the
@@ -70,20 +71,27 @@ type roleCache struct {
 	have bool
 }
 
-// loadAppRoles reads APP_ROLES_FILE once at start. A missing or unreadable
-// file leaves the manifest empty, so every guard that names an app is refused
-// until it is fixed; an empty setting turns the model off.
-func loadAppRoles(path, domain string) roles.Manifest {
+// loadAppRoles reads APP_ROLES_FILE once at start; the gateway never reads
+// it again while it runs. A file that cannot be read, such as the directory
+// Docker makes when a bind mount's source is missing, or that declares no
+// app, is an error, and the gateway refuses to start: with no app, nobody
+// would be staff or a guest, and every session but an administrator's would
+// end at its next request. (config.Load refuses an empty setting; an empty
+// path here is a hand-built configuration and gives an empty manifest.)
+func loadAppRoles(path, domain string) (roles.Manifest, error) {
 	if path == "" {
-		return roles.Manifest{}
+		return roles.Manifest{}, nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		log.Printf("app roles: %v; every guard that names an app will be refused", err)
-		return roles.Manifest{}
+		return roles.Manifest{}, fmt.Errorf("APP_ROLES_FILE: %w", err)
 	}
 	defer f.Close()
-	return roles.ParseManifest(f, domain, log.Printf)
+	m := roles.ParseManifest(f, domain, log.Printf)
+	if len(m.Apps) == 0 {
+		return m, fmt.Errorf("APP_ROLES_FILE: %s declares no app (is it a directory, or empty?)", path)
+	}
+	return m, nil
 }
 
 // rolesOn reports whether the app-roles model is configured.
@@ -410,7 +418,7 @@ func (s *Server) verifyByNetwork(w http.ResponseWriter, r *http.Request) bool {
 // a domain guard uses (see redirectToLogin). When the role is held only by
 // domain groups, it carries their domains as rqd, so the sign-in page hints
 // them and /request declines an address at none of them. Otherwise it carries rqr=1, which marks a role guard so
-// the page does not fall back to the allow-list's domains. When the role's
+// the page does not fall back to the staff domains. When the role's
 // assignments are domain groups only and a card or an open invitation also
 // admits someone, it adds rhd, those domains, which the page hints but never
 // declines on; the domains are the ones rqd would otherwise carry. Any other
@@ -520,22 +528,14 @@ func (s *Server) anyAddressListsOf(ctx context.Context, lists map[string]bool) m
 	return out
 }
 
-// staffFromDomainGroups reports whether the domain groups' domains stand in
-// for the allow-list: the app-roles model is on and ALLOWED_EMAIL_DOMAINS is
-// empty. While the allow-list is set it alone decides, exactly as before.
-func (s *Server) staffFromDomainGroups() bool {
-	return s.rolesOn() && !s.policy.HasAllowList()
-}
-
-// knownRole is policy.Role with the domain groups in place of an empty
-// allow-list: an administrator, an address the allow-list admits, or (with
-// no allow-list) an address at a domain of a domain group that holds at
-// least one app role is known, and signs in as staff. A domain group that
-// holds no role makes nobody staff. Nothing else makes an address known: not
-// a list, a person assignment, an invitation, a card or an open-registration
-// host, so a member or a guest is never known by this test. While the role
-// data has never been read, an address that only a domain group could admit
-// is not known; knownRoleChecked tells that case apart.
+// knownRole is the gateway's one test of who is staff: an administrator in
+// ADMIN_EMAILS, or an address at a domain of a domain group that holds at
+// least one app role the manifest declares, signs in as staff. A domain
+// group that holds no role makes nobody staff. Nothing else makes an address
+// known: not a list, a person assignment, an invitation, a card or a host
+// open to guests, so a member or a guest is never known by this test. While
+// the role data has never been read, an address that only a domain group
+// could admit is not known; knownRoleChecked tells that case apart.
 func (s *Server) knownRole(ctx context.Context, email string) string {
 	role, _ := s.knownRoleChecked(ctx, email)
 	return role
@@ -545,8 +545,7 @@ func (s *Server) knownRole(ctx context.Context, email string) string {
 // role data that has never been read, so the caller can refuse for now
 // rather than treat a member of staff as a stranger.
 func (s *Server) knownRoleChecked(ctx context.Context, email string) (role string, ok bool) {
-	role = s.policy.Role(email)
-	if role != authz.RoleDeny || !s.staffFromDomainGroups() {
+	if role = s.policy.Role(email); role != authz.RoleDeny || !s.rolesOn() {
 		return role, true
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
@@ -565,19 +564,18 @@ func (s *Server) knownRoleChecked(ctx context.Context, email string) (role strin
 }
 
 // known reports whether an address is one of the department's: knownRole
-// admits it. It replaces the allow-list wherever the gateway asks whether an
-// address belongs to staff (feeds, the members endpoint, the staff-only
-// lists, and the Groups page).
+// admits it. The gateway asks it wherever an address must belong to staff
+// (feeds, the members endpoint, the staff-only lists, and the Groups page).
 func (s *Server) known(ctx context.Context, email string) bool {
 	return s.knownRole(ctx, email) != authz.RoleDeny
 }
 
 // rolesUnavailable reports whether the gateway cannot tell who is staff just
-// now: the allow-list is empty, so the domain groups decide, and the role
-// data has never been read. Sign-in and session checks then answer with
-// renderUnavailable and leave every session as it is.
+// now: the domain groups decide, and the role data has never been read.
+// Sign-in and session checks then answer with renderUnavailable and leave
+// every session as it is.
 func (s *Server) rolesUnavailable(ctx context.Context) bool {
-	if !s.staffFromDomainGroups() {
+	if !s.rolesOn() {
 		return false
 	}
 	_, ok := s.roleDataLoaded(ctx)
@@ -599,46 +597,159 @@ const (
 )
 
 // staffDomains are the domains the sign-in page suggests on a direct visit:
-// the allow-list's, or, without one, the staff domains (see roleState.staff),
-// so a domain group that holds no role is never shown.
+// the staff domains (see roleState.staff), so a domain group that holds no
+// role is never shown.
 func (s *Server) staffDomains(ctx context.Context) []string {
-	if len(s.cfg.AllowedDomains) > 0 || !s.staffFromDomainGroups() {
-		return s.cfg.AllowedDomains
-	}
 	return s.roleData(ctx).staffOrder
 }
 
-// logWhoSignsIn says at start who can sign in when ALLOWED_EMAIL_DOMAINS is
-// empty, so a server that has removed it can see whether staff can still
-// sign in. Config.Validate already refuses to start with neither
-// ALLOWED_EMAIL_DOMAINS nor ADMIN_EMAILS, so an administrator can always sign
-// in. It reads the domain groups once and then forgets them, so the first
-// decision reads them afresh.
+// logWhoSignsIn says at start who can sign in, so a server can see whether
+// staff can still sign in and where guests may. Config.Validate already
+// refuses to start without ADMIN_EMAILS, so an administrator can always sign
+// in. It reads the role data once and then forgets it, so the first decision
+// reads it afresh.
 func (s *Server) logWhoSignsIn(ctx context.Context) {
-	if s.policy.HasAllowList() {
+	if !s.rolesOn() {
 		return
 	}
 	defer s.forgetRoles()
-	if !s.rolesOn() {
-		log.Printf("authz: ALLOWED_EMAIL_DOMAINS and APP_ROLES_FILE are not set: only the administrators in ADMIN_EMAILS can sign in")
-		return
-	}
 	st, ok := s.roleDataLoaded(ctx)
 	switch {
 	case !ok:
-		log.Printf("warning: authz: ALLOWED_EMAIL_DOMAINS is not set and the domain groups could not be read: sign-in and session checks answer 503, and no session is ended, until they can be read")
+		log.Printf("warning: authz: the domain groups could not be read: sign-in and session checks answer 503, and no session is ended, until they can be read")
+		return
 	case len(st.staffOrder) == 0:
-		log.Printf("warning: authz: ALLOWED_EMAIL_DOMAINS is not set and no domain group with a domain holds an app role: only the administrators in ADMIN_EMAILS and people who hold an app role through a list or a person assignment can sign in")
+		log.Printf("authz: no domain group with a domain holds an app role: only the administrators in ADMIN_EMAILS and people who hold an app role through a list or a person assignment can sign in")
 	default:
-		log.Printf("authz: ALLOWED_EMAIL_DOMAINS is not set: addresses at the domains of the domain groups that hold an app role (%s) sign in as staff, as do the administrators in ADMIN_EMAILS; others who hold an app role sign in as members", strings.Join(st.staffOrder, ", "))
+		log.Printf("authz: addresses at the domains of the domain groups that hold an app role (%s) sign in as staff, as do the administrators in ADMIN_EMAILS; others who hold an app role sign in as members", strings.Join(st.staffOrder, ", "))
 	}
+	if hosts := s.guestHosts(st); len(hosts) > 0 {
+		log.Printf("authz: guest sign-in is open on %s, the hosts of the apps whose User role is held by guests: an address that is not staff and holds no app role signs in there as a guest", strings.Join(hosts, ", "))
+	}
+	if s.guestsStranded(ctx) {
+		log.Printf("warning: authz: guests hold a role in an app that APP_ROLES_FILE no longer declares, and in no app it does: guest sessions are kept and answered 503 until the app is declared again")
+	}
+}
+
+// guestsHold reports whether guests hold app's User role: a guest who has
+// just signed in, on no list, would be admitted to the app. Only a declared
+// app counts, and only a guests assignment can make it so.
+func (s *Server) guestsHold(st roleState, app string) bool {
+	if !s.appRoles.Has(app, roles.UserRole) {
+		return false
+	}
+	held := roles.Held(app, roles.Subject{Session: true, Guest: true}, st.assignments, s.roleEnv(st))
+	return roles.Admits(held, roles.UserRole)
+}
+
+// openToGuests reports whether host is a host of an app whose User role is
+// held by guests, where a stranger who confirms an email address signs in as
+// a guest. While the role data has never been read, no host is.
+func (s *Server) openToGuests(ctx context.Context, host string) bool {
+	if host == "" || !s.rolesOn() {
+		return false
+	}
+	st, ok := s.roleDataLoaded(ctx)
+	if !ok {
+		return false
+	}
+	for name, a := range s.appRoles.Apps {
+		if a.ServesHost(host) && s.guestsHold(st, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// guestsAnywhere reports whether some app's User role is held by guests, so
+// a guest session has somewhere to go. While it is false, every guest
+// session ends at its next request.
+func (s *Server) guestsAnywhere(ctx context.Context) bool {
+	if !s.rolesOn() {
+		return false
+	}
+	st, ok := s.roleDataLoaded(ctx)
+	if !ok {
+		return false
+	}
+	for name := range s.appRoles.Apps {
+		if s.guestsHold(st, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordDeclaredApps records the apps this start's manifest declares and
+// returns those the previous start declared that this one does not.
+func (s *Server) recordDeclaredApps(ctx context.Context) (map[string]bool, error) {
+	now := make([]string, 0, len(s.appRoles.Apps))
+	for name := range s.appRoles.Apps {
+		now = append(now, name)
+	}
+	sort.Strings(now)
+	previous, err := s.store.ReplaceDeclaredApps(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	lost := map[string]bool{}
+	for _, a := range previous {
+		if _, ok := s.appRoles.Apps[a]; !ok {
+			lost[a] = true
+		}
+	}
+	return lost, nil
+}
+
+// guestsStranded reports whether this start's manifest has lost the app
+// guests hold a role in: a guests assignment names an app the previous
+// start declared and this one does not, and no declared app's role is held
+// by guests. Every guest session, and every session carried over as one,
+// would then end. That is taken for a fault in the configuration (a snippet
+// renamed or dropped by mistake), so renewSessionWith keeps those sessions
+// and answers 503 until the app is declared again; each still ends at
+// SESSION_MAX_AGE. The admin pages show only declared apps, so the
+// assignment cannot be removed there meanwhile. A guests assignment for an
+// app already gone at the previous start counts for nothing, so taking
+// guests off a declared app on its admin page is a decision, and ends the
+// sessions as before. The fault lasts until the next start, which records
+// the manifest it starts with.
+func (s *Server) guestsStranded(ctx context.Context) bool {
+	if len(s.lostApps) == 0 {
+		return false
+	}
+	st, ok := s.roleDataLoaded(ctx)
+	if !ok || s.guestsAnywhere(ctx) {
+		return false
+	}
+	for _, a := range st.assignments {
+		if a.Kind == store.AssignGuests && s.lostApps[a.App] {
+			return true
+		}
+	}
+	return false
+}
+
+// guestHosts are the hosts open to guests, sorted, for the start-up log.
+func (s *Server) guestHosts(st roleState) []string {
+	var out []string
+	for name, a := range s.appRoles.Apps {
+		if s.guestsHold(st, name) {
+			out = append(out, a.Hosts...)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // loginRole is the sign-in decision: a known address (knownRole) as staff or
 // an administrator, and also an address that holds an app role, which signs
 // in as a member (and not as a guest, even on an open host). A member is
 // decided by its roles, and is an outsider: staff-only lists are dropped from its
-// groups (see withoutStaffOnlyListsForOutsider).
+// groups (see withoutStaffOnlyListsForOutsider). Any other plausible address
+// signs in as a guest when openHost (the destination is open to guests; see
+// isOpenHost), and is refused otherwise. A passkey sign-in is decided here
+// exactly as an emailed code is.
 //
 // While the role data has never been read and only a domain group could
 // admit the address, the answer is RoleDeny, never a guest; the sign-in
@@ -654,13 +765,15 @@ func (s *Server) loginRole(ctx context.Context, email string, openHost bool) str
 	if s.mayHoldRoleNow(ctx, email, false) {
 		return authz.RoleMember
 	}
-	return s.policy.LoginRole(email, openHost)
+	if openHost && authz.GuestEligible(email) {
+		return authz.RoleGuest
+	}
+	return authz.RoleDeny
 }
 
 // currentRole is knownRole made role-aware: an address that is not known but
 // holds an app role through a domain group, a list or a current person
-// assignment, or has an open invitation, is a member. With the app-roles
-// model off it is exactly policy.Role.
+// assignment, or has an open invitation, is a member.
 func (s *Server) currentRole(ctx context.Context, email string) string {
 	role := s.knownRole(ctx, email)
 	if role == authz.RoleDeny && s.mayHoldRoleNow(ctx, email, true) {
@@ -669,9 +782,8 @@ func (s *Server) currentRole(ctx context.Context, email string) string {
 	return role
 }
 
-// personSession reports whether a session is a person's own sign-in, by the
-// allow-list (kind "") or by an app role (KindMember), rather than a card or
-// a guest.
+// personSession reports whether a session is a person's own sign-in, as staff
+// (kind "") or by an app role (KindMember), rather than a card or a guest.
 func personSession(id *session.Identity) bool {
 	return id.Kind == "" || id.Kind == session.KindMember
 }

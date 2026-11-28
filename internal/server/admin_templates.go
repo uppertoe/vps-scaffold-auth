@@ -247,13 +247,12 @@ func (o *overviewView) Attention() bool {
 }
 
 // memberView is one row of a group's member list. Permitted reports whether the
-// address is known (knownRole: ADMIN_EMAILS, ALLOWED_EMAIL_DOMAINS, or without
-// that setting a domain group's domains).
-// A membership for an address it does not admit used to be inert, because that
-// address could never sign in; once any host is listed in
-// OPEN_REGISTRATION_HOSTS the same address can sign in as a guest and the
-// membership admits it to every group guard naming this group. The page marks
-// such rows so an admin can see which memberships are live doors for strangers.
+// address is known (knownRole: ADMIN_EMAILS, or a domain group's domains).
+// A membership for an address it does not admit can still be live: on a host
+// open to guests (an app whose User role is held by guests) the same address
+// can sign in as a guest and the membership admits it to every group guard
+// naming this group. The page marks such rows so an admin can see which
+// memberships are live doors for strangers.
 type memberView struct {
 	Email     string
 	Permitted bool

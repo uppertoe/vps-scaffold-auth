@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
@@ -15,9 +14,8 @@ import (
 // scheduled renewal; a role change is not a membership change. The list is
 // dropped at the guest's next request instead.
 func TestReviewOutsiderLosesAListThatBecomesStaffOnly(t *testing.T) {
-	srv, sender := testServerWith(t, func(c *config.Config) {
-		c.OpenRegistrationHosts = []string{"apply.example.com"}
-	})
+	srv, sender := testServerWith(t, nil)
+	openToGuestsForTest(t, srv, "apply")
 	ctx := context.Background()
 	_ = srv.store.CreateGroup(ctx, "reviewers", "")
 	_, _ = srv.store.AddGroupMembers(ctx, "reviewers", []string{strangerAddr})

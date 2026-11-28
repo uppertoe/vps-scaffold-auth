@@ -274,14 +274,6 @@ func TestSignInByRole(t *testing.T) {
 		}
 	}
 
-	// With the model off, a role does not let an address sign in.
-	off, _ := testServer(t)
-	if err := off.store.AddRoleAssignment(ctx, store.RoleAssignment{App: "enquiries", Role: "admin", Kind: store.AssignPerson, Ref: "p@partner.org", How: store.AssignedByAdmin}); err != nil {
-		t.Fatal(err)
-	}
-	if got := off.loginRole(ctx, "p@partner.org", false); got != authz.RoleDeny {
-		t.Errorf("model off: loginRole = %q, want deny", got)
-	}
 }
 
 // Remote-Roles lists every role held, separated by commas, as the apps split it.

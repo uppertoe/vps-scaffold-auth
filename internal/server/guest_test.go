@@ -23,13 +23,48 @@ const (
 	strangerAddr = "stranger@gmail.com"
 )
 
-// guestServer is the standard test server with apply.example.com listed in
-// OPEN_REGISTRATION_HOSTS and the allow-list left at example.com.
+// guestServer is the standard test server with apply.example.com open to
+// guests: guests hold the User role of the app "apply", whose host it is.
+// Staff are at example.com.
 func guestServer(t *testing.T) (*Server, *captureSender) {
 	t.Helper()
-	return testServerWith(t, func(c *config.Config) {
-		c.OpenRegistrationHosts = []string{"apply.example.com"}
-	})
+	return guestServerWith(t, nil)
+}
+
+// guestServerWith is guestServer, letting the caller adjust the config.
+func guestServerWith(t *testing.T, adjust func(*config.Config)) (*Server, *captureSender) {
+	t.Helper()
+	srv, sender := testServerWith(t, adjust)
+	openToGuestsForTest(t, srv, "apply")
+	return srv, sender
+}
+
+// openToGuestsForTest gives guests the User role of app, declaring it on
+// <app>.example.com if the manifest does not, which opens guest sign-in on
+// the app's hosts.
+func openToGuestsForTest(t *testing.T, srv *Server, app string) {
+	t.Helper()
+	testGuardApp(t, srv, app)
+	mustAssign(t, srv, store.RoleAssignment{App: app, Role: "user", Kind: store.AssignGuests})
+}
+
+// noGuestsAnywhere takes every guests assignment away, so no app's role is
+// held by guests.
+func noGuestsAnywhere(t *testing.T, srv *Server) {
+	t.Helper()
+	ctx := context.Background()
+	as, err := srv.store.ListRoleAssignments(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range as {
+		if a.Kind == store.AssignGuests {
+			if err := srv.store.RemoveRoleAssignment(ctx, a.App, a.Role, a.Kind, a.Ref); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	srv.forgetRoles()
 }
 
 // loginGuest signs a stranger in through the open host and fails the test if no
@@ -285,7 +320,7 @@ func TestGuestNeverAdmin(t *testing.T) {
 	}
 	// Even if the address is later made an admin, the live guest session does
 	// not step up at renewal; it stays a guest.
-	srv.policy = authz.NewPolicy([]string{"example.com"}, []string{"admin@example.com", strangerAddr})
+	srv.policy = authz.NewPolicy([]string{"admin@example.com", strangerAddr})
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
 	c.get("/verify", anyGuard(t, srv))
 	if id := sessionOf(t, srv, c); id.Kind != session.KindGuest || strings.Contains(id.Groups, "admin") {
@@ -392,16 +427,17 @@ func TestGuestBreakGlassScanGrantsDirectly(t *testing.T) {
 	}
 }
 
-// Emptying OPEN_REGISTRATION_HOSTS ends every guest session at its next
-// request, the way de-listing a domain ends a user's: a guest only exists
-// because some host admits guests.
+// Taking guests off every app ends every guest session at its next request,
+// the way taking a domain group's last role ends a staff session: a guest
+// only exists because some app's role is held by guests.
 func TestGuestSessionEndsWhenNoHostIsOpen(t *testing.T) {
 	srv, sender := guestServer(t)
 	c := newClient(t, srv.Handler())
 	loginGuest(t, c, sender, strangerAddr)
+	guard := anyGuard(t, srv)
 
-	srv.cfg.OpenRegistrationHosts = nil
-	rec := c.get("/verify", anyGuard(t, srv))
+	noGuestsAnywhere(t, srv)
+	rec := c.get("/verify", guard)
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "/login") {
 		t.Fatalf("guest with no open host should be sent to login at once; got %d %q", rec.Code, rec.Header().Get("Location"))
 	}

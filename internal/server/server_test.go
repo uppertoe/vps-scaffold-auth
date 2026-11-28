@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -155,7 +156,46 @@ func testServer(t *testing.T) (*Server, *captureSender) {
 
 // testServerWith builds the standard test server, letting the caller adjust
 // the config before construction (some settings, like the CSP, are precomputed).
+// Staff are everyone at example.com: a domain group, staffHarnessGroup, holds
+// the User role of an app of its own (staffHarnessApp, on
+// harness.example.com), as a server's department domain group would. A test
+// that decides who is staff itself uses testServerNoStaff.
 func testServerWith(t *testing.T, adjust func(*config.Config)) (*Server, *captureSender) {
+	t.Helper()
+	srv, sender := testServerNoStaff(t, adjust)
+	seedStaff(t, srv, "example.com")
+	return srv, sender
+}
+
+// The harness's own staff domain group and the app it holds a role in.
+const (
+	staffHarnessGroup = "harness-staff"
+	staffHarnessApp   = "harness"
+)
+
+// seedStaff makes the addresses at domains staff, through staffHarnessGroup
+// and staffHarnessApp, which no test otherwise names.
+func seedStaff(t *testing.T, srv *Server, domains ...string) {
+	t.Helper()
+	testGuardApp(t, srv, staffHarnessApp)
+	mustDomainGroup(t, srv, staffHarnessGroup, domains...)
+	mustAssign(t, srv, store.RoleAssignment{App: staffHarnessApp, Role: "user", Kind: store.AssignDomainGroup, Ref: staffHarnessGroup})
+}
+
+// unseedStaff takes staffHarnessGroup's role away, so nobody at its domains
+// is staff any longer.
+func unseedStaff(t *testing.T, srv *Server) {
+	t.Helper()
+	if err := srv.store.RemoveRoleAssignment(context.Background(), staffHarnessApp, "user", store.AssignDomainGroup, staffHarnessGroup); err != nil {
+		t.Fatal(err)
+	}
+	srv.forgetRoles()
+}
+
+// testServerNoStaff is testServerWith without the harness's staff: only the
+// administrators in ADMIN_EMAILS, and whoever the test gives a role, may
+// sign in.
+func testServerNoStaff(t *testing.T, adjust func(*config.Config)) (*Server, *captureSender) {
 	t.Helper()
 	st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "auth.db"))
 	if err != nil {
@@ -167,7 +207,6 @@ func testServerWith(t *testing.T, adjust func(*config.Config)) (*Server, *captur
 		PublicURL:         "https://auth.example.com",
 		Domain:            "example.com",
 		DefaultRedirect:   "https://app.example.com/",
-		AllowedDomains:    []string{"example.com"},
 		AdminEmails:       []string{"admin@example.com"},
 		SessionSecret:     []byte("0123456789abcdef0123456789abcdef"),
 		CookieDomain:      ".example.com",
@@ -185,11 +224,24 @@ func testServerWith(t *testing.T, adjust func(*config.Config)) (*Server, *captur
 	if adjust != nil {
 		adjust(cfg)
 	}
+	// The gateway refuses to start without a manifest that declares an app,
+	// so a test that names none gets one declaring only staffHarnessApp.
+	// Tests add apps of their own in memory (testGuardApp).
+	if cfg.AppRolesFile == "" {
+		cfg.AppRolesFile = filepath.Join(t.TempDir(), "app-roles.tsv")
+		if err := os.WriteFile(cfg.AppRolesFile, []byte(staffHarnessApp+"\tuser\tUser\t"+staffHarnessApp+".{$DOMAIN}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	sender := newCaptureSender()
 	srv, err := New(cfg, st, sender)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The transitional rule (carriedOverAsGuest) is off unless a test turns
+	// it on, so a session a test starts on a fake clock is never taken for
+	// one from before the release.
+	srv.guestsReleasedAt = time.Time{}
 	return srv, sender
 }
 
@@ -982,7 +1034,7 @@ func TestRemovedAdminLosesAdminUI(t *testing.T) {
 	if rec := c.get("/admin/groups", nil); rec.Code != http.StatusOK {
 		t.Fatalf("admin before removal = %d, want 200", rec.Code)
 	}
-	srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
+	srv.policy = authz.NewPolicy(nil)
 	if rec := c.get("/admin/groups", nil); rec.Code != http.StatusFound {
 		t.Errorf("admin after removal = %d, want 302 to login", rec.Code)
 	}

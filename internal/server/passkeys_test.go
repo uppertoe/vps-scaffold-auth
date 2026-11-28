@@ -19,6 +19,7 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 	"github.com/uppertoe/vps-scaffold-auth/internal/passkey/passkeytest"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
+	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
 
 const (
@@ -158,10 +159,11 @@ func TestPasskeyOfferRegisterAndSignIn(t *testing.T) {
 	}
 }
 
-// The offer is for phones, staff and administrators, after an email code, and
-// once per phone.
+// The offer is for phones, for anyone who signs in with an email code
+// (staff, administrators, members and guests), and once per phone.
 func TestPasskeyOfferOnlyWhereItHelps(t *testing.T) {
-	srv, sender := pkServer(t, func(c *config.Config) { c.OpenRegistrationHosts = []string{"apply.example.com"} })
+	srv, sender := pkServer(t, nil)
+	openToGuestsForTest(t, srv, "apply")
 	c := newClient(t, srv.Handler())
 	sender.reset()
 	c.postWith("/request", url.Values{"email": {"user@example.com"}}, map[string]string{"User-Agent": desktopUA})
@@ -185,12 +187,12 @@ func TestPasskeyOfferOnlyWhereItHelps(t *testing.T) {
 	if c.cookies[passkeyOfferedCookie] != nil {
 		t.Error("the old offer cookie was not cleared")
 	}
-	// A guest is never offered one.
+	// A guest is offered one on a phone, as anyone else is.
 	c = newClient(t, srv.Handler())
 	sender.reset()
 	c.postWith("/request", url.Values{"email": {"stranger@other.org"}, "rd": {"https://apply.example.com/"}}, phone)
-	if rec := c.postWith("/verify-code", url.Values{"code": {sender.code()}, "rd": {"https://apply.example.com/"}}, phone); rec.Code != http.StatusFound {
-		t.Fatalf("a guest was offered a passkey: %d", rec.Code)
+	if rec := c.postWith("/verify-code", url.Values{"code": {sender.code()}, "rd": {"https://apply.example.com/"}}, phone); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "passkey") {
+		t.Fatalf("a guest on a phone was not offered a passkey: %d", rec.Code)
 	}
 }
 
@@ -493,9 +495,10 @@ func TestPasskeySignInRefusals(t *testing.T) {
 		}
 	})
 	t.Run("an address no longer permitted", func(t *testing.T) {
-		srv.cfg.AllowedDomains = []string{"other.org"}
-		srv.policy = newPolicyFor(srv.cfg)
-		defer func() { srv.cfg.AllowedDomains = []string{"example.com"}; srv.policy = newPolicyFor(srv.cfg) }()
+		unseedStaff(t, srv)
+		defer func() {
+			mustAssign(t, srv, store.RoleAssignment{App: staffHarnessApp, Role: "user", Kind: store.AssignDomainGroup, Ref: staffHarnessGroup})
+		}()
 		if signInWith(t, newClient(t, srv.Handler()), a).Code == http.StatusFound {
 			t.Fatal("a de-listed address signed in with its passkey")
 		}
@@ -519,7 +522,7 @@ func TestRegistrationChallengeIsBoundToItsAccount(t *testing.T) {
 }
 
 func newPolicyFor(c *config.Config) *authz.Policy {
-	return authz.NewPolicy(c.AllowedDomains, c.AdminEmails)
+	return authz.NewPolicy(c.AdminEmails)
 }
 
 // A capital in AUTH_PUBLIC_URL does not break passkeys: browsers write the

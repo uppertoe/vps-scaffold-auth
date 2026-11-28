@@ -190,6 +190,9 @@ func TestBreakGlassReservedStillRefusedAndPlainGroupAllowed(t *testing.T) {
 // since become staff only is marked in the list.
 func TestCodesPageMarksRefusedTargets(t *testing.T) {
 	srv, sender := staffOnlyListServer(t, nil)
+	// The group form is drawn only without app roles, which a server can no
+	// longer run without; it goes with group cards.
+	srv.cfg.AppRolesFile = ""
 	ctx := context.Background()
 	if err := srv.store.CreateGroup(ctx, "reports_team", ""); err != nil {
 		t.Fatal(err)
@@ -306,9 +309,8 @@ func TestFeedGroupTakesNoHandAddedMember(t *testing.T) {
 // are worked out, so the app's guard refuses them. A member of staff in the
 // same included group keeps the role.
 func TestGuestCannotReachAppRoleThroughInclude(t *testing.T) {
-	srv, sender := staffOnlyListServer(t, func(c *config.Config) {
-		c.OpenRegistrationHosts = []string{"apply.example.com"}
-	})
+	srv, sender := staffOnlyListServer(t, nil)
+	openToGuestsForTest(t, srv, "apply")
 	ctx := context.Background()
 	if err := srv.store.CreateGroup(ctx, "collaborators", ""); err != nil {
 		t.Fatal(err)

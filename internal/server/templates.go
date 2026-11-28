@@ -84,7 +84,7 @@ type pageData struct {
 	// gateway.
 	LinkHref string
 	// EmailPlaceholder is the login field's example address, derived from the
-	// effective domain (the route requirement, else the configured allow-list)
+	// effective domain (the route requirement, else the staff domains)
 	// as you@<domain>; empty falls back to a generic example in the template.
 	EmailPlaceholder string
 	// Passkey drives the passkey parts of a page (passkeys.go); nil when

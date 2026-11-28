@@ -412,7 +412,7 @@ type Store interface {
 	// it (insert-if-absent), so a live code is never clobbered. Used to persist
 	// an unguessable, never-emailed decoy for addresses that are not sent a code,
 	// so the /verify-code step is indistinguishable for permitted vs
-	// non-permitted addresses (closing an allow-list enumeration oracle).
+	// non-permitted addresses (closing an oracle for who may sign in).
 	EnsureCode(ctx context.Context, email, codeHash string, expiresAt time.Time) error
 
 	// HasRecentCode reports whether an unconsumed code exists for email whose
@@ -672,6 +672,12 @@ type Store interface {
 	EndSessionsBefore(ctx context.Context, key string, at time.Time) error
 	// ListSessionCutoffs returns every cutoff, Unix seconds by key.
 	ListSessionCutoffs(ctx context.Context) (map[string]int64, error)
+	// FirstRun returns when the release name first ran on this database,
+	// recording now if it never has.
+	FirstRun(ctx context.Context, name string, now time.Time) (time.Time, error)
+	// ReplaceDeclaredApps records the apps the manifest declares at this
+	// start and returns those the previous start recorded.
+	ReplaceDeclaredApps(ctx context.Context, apps []string) (previous []string, err error)
 	// GroupKind returns a group's kind (GroupKindList or GroupKindDomain);
 	// exists is false for a group that does not exist.
 	GroupKind(ctx context.Context, group string) (kind string, exists bool, err error)

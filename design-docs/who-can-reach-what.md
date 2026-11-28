@@ -2,7 +2,7 @@
 title: Who can reach what
 summary: The roles each tool declares, who the gateway gives each role to, who may sign in, and how guests from the public are kept to the one tool meant for them.
 weight: 3
-lastmod: 2026-11-19
+lastmod: 2026-11-28
 ---
 
 ## What a tool declares
@@ -70,12 +70,10 @@ administrator who gave the role.
 
 ## Who can sign in
 
-An address at one of the domains on the allow-list in the gateway's settings
-signs in as staff, and an address on the gateway's list of administrators
-signs in as an administrator. When a server leaves the allow-list empty, the
-gateway counts as staff every address at a domain of a domain group that holds
-a role in at least one tool. A domain group that holds no role admits nobody.
-While the allow-list is set, the domain groups add no one to staff. An address
+An address on the gateway's list of administrators signs in as an
+administrator. The gateway counts as staff every address at a domain of a
+domain group that holds a role in at least one tool. A domain group that holds
+no role admits nobody. An address
 that is not staff signs in as a member if it holds a role in some tool through
 a domain group, a list or a person assignment. An address with an open
 invitation signs in through the invitation's link and code. On a tool that
@@ -86,12 +84,6 @@ The hospital network and guests give nobody a reason to sign in, because they
 admit people without naming them. An address that may not sign in is sent no
 code and sees the same page as any other address, so the sign-in page does
 not reveal who holds a role.
-
-The allow-list predates app roles, and the department's server still sets it
-to the hospital's and the institute's domains. The domain groups for RCH and
-MCRI staff carry the same two domains and each holds a role, and every tool on
-the department's server uses app roles, so removing the allow-list there
-would change no one's sign-in.
 
 The same test of who is staff decides which addresses a roster feed keeps,
 which members a tool reading a list is given, and which members the Groups
@@ -119,25 +111,28 @@ page names the domains but declines no address.
 One tool on the department's server, the fellowship enquiries page, is for
 members of the public, and its User role is given to guests. A person who
 signs in on the way to that tool, with an address the gateway would not
-otherwise admit, is signed in as a guest. The gateway offers a guest sign-in
-only on a host that its settings open to registration.
+otherwise admit, is signed in as a guest. Giving guests a tool's User role
+opens a guest sign-in on that tool's addresses, and on no other. The page that
+gives the role says so before it is saved. A sign-in that names no tool is
+decided as one to the gateway's default destination.
 
 A guest holds a role only where a tool gives the role to guests, and guests
 can be given only the User role. Every other tool refuses them. A tool that
 gives guests nothing therefore stays closed to the public.
 
-The host list decides only where the gateway offers a guest sign-in. It is not
+The tool's address decides only where the gateway offers a guest sign-in. It is not
 the boundary, because the destination travels in the sign-in address, which a
 visitor can change. The boundary is that only the tools which give a role to
 guests admit them.
 
 A guest session renews like any other but always keeps the short lifetime.
-Removing every host from the list ends all guest sessions at their next
-renewal. A guest who reaches a tool they cannot open is told they are signed
+Taking guests off every tool ends all guest sessions at their next request.
+A guest may add a passkey, which signs them in as a guest only where an emailed
+code would, and has the Your sessions page. A guest who reaches a tool they cannot open is told they are signed
 in as a guest and is offered a way to sign out, so that they can sign in again
 with an approved address.
 
 ## Opening the gateway to everyone
 
-The gateway can also be set to admit any verified address as staff. The
-department's server does not use this setting.
+The gateway no longer has a setting that admits any verified address as staff.
+A tool meant for the public gives its User role to guests instead.

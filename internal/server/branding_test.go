@@ -8,12 +8,12 @@ import (
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
 )
 
-// A direct visit (no route requirement) hints the configured allow-list and
-// derives the email placeholder from it, so the bare login page still tells the
+// A direct visit (no route requirement) hints the staff domains and derives
+// the email placeholder from them, so the bare login page still tells the
 // user which domain to use.
 func TestDirectVisitHintsConfiguredDomain(t *testing.T) {
-	srv, _ := testServer(t)
-	srv.cfg.AllowedDomains = []string{"monashhealth.org"}
+	srv, _ := testServerNoStaff(t, nil)
+	seedStaff(t, srv, "monashhealth.org")
 	c := newClient(t, srv.Handler())
 	body := c.get("/login", nil).Body.String()
 	if !strings.Contains(body, "This page is for") || !strings.Contains(body, "monashhealth.org") {
@@ -28,11 +28,10 @@ func TestDirectVisitHintsConfiguredDomain(t *testing.T) {
 // route's domain is what's hinted and drives the placeholder.
 func TestRouteDomainWinsOverConfiguredFallback(t *testing.T) {
 	srv, _ := testServer(t)
-	srv.cfg.AllowedDomains = []string{"example.com"}
 	c := newClient(t, srv.Handler())
 	body := c.get("/login?rd=&rqd=rch.org.au", nil).Body.String()
 	if !strings.Contains(body, `placeholder="you@rch.org.au"`) {
-		t.Errorf("placeholder should follow the route requirement, not the allow-list:\n%s", body)
+		t.Errorf("placeholder should follow the route requirement, not the staff domains:\n%s", body)
 	}
 }
 

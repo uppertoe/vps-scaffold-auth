@@ -24,8 +24,10 @@ func TestRevokedPrincipalNotRenewed(t *testing.T) {
 		t.Fatalf("initial /verify = %d, want 200", rec.Code)
 	}
 
-	// Access is revoked for everyone (domain de-listed, no admin override).
-	srv.policy = authz.NewPolicy(nil, nil)
+	// Access is revoked for everyone (the domain group loses its role, no
+	// admin override).
+	unseedStaff(t, srv)
+	srv.policy = authz.NewPolicy(nil)
 	// Push the clock past the renew threshold so /verify hits the renew path.
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
 
@@ -52,8 +54,8 @@ func TestDemotedAdminLosesAdminGroupAtRenewal(t *testing.T) {
 		t.Fatalf("initial groups = %q, want admin", g)
 	}
 
-	// admin@example.com is demoted to a plain user (still in an allowed domain).
-	srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
+	// admin@example.com is demoted to a plain user (still at a staff domain).
+	srv.policy = authz.NewPolicy(nil)
 	srv.now = func() time.Time { return time.Now().Add(45 * time.Minute) }
 
 	rec := c.get("/verify", anyGuard(t, srv))
@@ -105,7 +107,7 @@ func TestReservedGroupNameRejected(t *testing.T) {
 // would inject a standalone "admin" token. ValidGroupName must reject it at both
 // the group-create and break-glass-create entry points.
 func TestGroupNameWithSeparatorRejected(t *testing.T) {
-	srv, sender := testServer(t)
+	srv, sender := testServerNoStaff(t, nil)
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 
@@ -196,7 +198,7 @@ func TestBreakGlassSessionCannotActOutsideItsCard(t *testing.T) {
 	if members, _ := srv.store.ListGroupMembers(ctx, "ward"); len(members) != 0 {
 		t.Errorf("a break-glass session changed membership: %v", members)
 	}
-	if groups, _ := srv.store.ListGroups(ctx); len(groups) != 1 {
+	if groups, _ := srv.store.ListGroups(ctx); len(groups) != 2 { // ward and the harness's staff group
 		t.Errorf("a break-glass session created a group: %+v", groups)
 	}
 	if keys, _ := srv.store.ListPasskeys(ctx, "breakglass:Ward"); len(keys) != 0 {
@@ -204,9 +206,9 @@ func TestBreakGlassSessionCannotActOutsideItsCard(t *testing.T) {
 	}
 }
 
-// A domain taken off the allow-list, an administrator taken off the admin
-// listing, and guests turned off all take effect at the next request, as a
-// group change does, not at the next scheduled renewal.
+// A domain group's last role taken away, an administrator taken off the
+// admin listing, and guests taken off every app all take effect at the next
+// request, as a group change does, not at the next scheduled renewal.
 func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
 	t.Run("domain", func(t *testing.T) {
 		srv, sender := testServer(t)
@@ -215,7 +217,7 @@ func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
 		if rec := c.get("/verify", anyGuard(t, srv)); rec.Code != http.StatusOK {
 			t.Fatalf("initial /verify = %d, want 200", rec.Code)
 		}
-		srv.policy = authz.NewPolicy([]string{"other.org"}, []string{"admin@example.com"})
+		unseedStaff(t, srv)
 		rec := c.get("/verify", anyGuard(t, srv))
 		if rec.Code == http.StatusOK {
 			t.Fatal("de-listed person still admitted before the scheduled renewal")
@@ -231,7 +233,7 @@ func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
 		if g := groupsAfter(t, srv, c, anyGuard(t, srv)); g != "admin" {
 			t.Fatalf("initial groups = %q, want admin", g)
 		}
-		srv.policy = authz.NewPolicy([]string{"example.com"}, nil)
+		srv.policy = authz.NewPolicy(nil)
 		rec := c.get("/verify", anyGuard(t, srv))
 		if rec.Code != http.StatusOK || sessionOf(t, srv, c).Groups != "user" {
 			t.Fatalf("de-listed admin = %d groups=%q, want 200 as user", rec.Code, sessionOf(t, srv, c).Groups)
@@ -240,14 +242,14 @@ func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
 			t.Error("de-listed admin still reaches the admin pages")
 		}
 	})
-	t.Run("admin listing, outside the allow-list", func(t *testing.T) {
+	t.Run("admin listing, outside the staff domains", func(t *testing.T) {
 		srv, sender := testServer(t)
-		srv.policy = authz.NewPolicy([]string{"example.com"}, []string{"admin@example.com", "boss@other.org"})
+		srv.policy = authz.NewPolicy([]string{"admin@example.com", "boss@other.org"})
 		c := newClient(t, srv.Handler())
 		loginAs(t, c, sender, "boss@other.org", nil)
-		srv.policy = authz.NewPolicy([]string{"example.com"}, []string{"admin@example.com"})
+		srv.policy = authz.NewPolicy([]string{"admin@example.com"})
 		if rec := c.get("/verify", anyGuard(t, srv)); rec.Code == http.StatusOK {
-			t.Fatal("de-listed admin outside the allow-list still admitted")
+			t.Fatal("de-listed admin outside the staff domains still admitted")
 		}
 	})
 	t.Run("guests", func(t *testing.T) {
@@ -258,7 +260,7 @@ func TestPolicyRemovalTakesEffectAtNextRequest(t *testing.T) {
 		if rec := c.get("/verify", guestRoute); rec.Code != http.StatusOK {
 			t.Fatalf("initial guest /verify = %d, want 200", rec.Code)
 		}
-		srv.cfg.OpenRegistrationHosts = nil
+		noGuestsAnywhere(t, srv)
 		if rec := c.get("/verify", guestRoute); rec.Code == http.StatusOK {
 			t.Fatal("guest still admitted after guests were turned off")
 		}

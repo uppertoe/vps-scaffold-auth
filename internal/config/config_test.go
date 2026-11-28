@@ -11,8 +11,8 @@ func setValid(t *testing.T) {
 	t.Helper()
 	t.Setenv("AUTH_PUBLIC_URL", "https://auth.example.com")
 	t.Setenv("DOMAIN", "example.com")
-	t.Setenv("ALLOWED_EMAIL_DOMAINS", "example.com")
 	t.Setenv("ADMIN_EMAILS", "admin@example.com")
+	t.Setenv("APP_ROLES_FILE", "/etc/vps-auth/app-roles.tsv")
 	t.Setenv("SESSION_SECRET", "0123456789abcdef0123456789abcdef") // 32 bytes
 	t.Setenv("EMAIL_BACKEND", "log")
 	// The log backend is dev-only (it writes OTP codes to the process log) and
@@ -69,8 +69,8 @@ func TestLoadValid(t *testing.T) {
 	if c.CookieDomain != ".example.com" {
 		t.Errorf("CookieDomain default = %q, want .example.com", c.CookieDomain)
 	}
-	if len(c.AllowedDomains) != 1 || c.AllowedDomains[0] != "example.com" {
-		t.Errorf("AllowedDomains = %v", c.AllowedDomains)
+	if len(c.RetiredSet) != 0 {
+		t.Errorf("RetiredSet = %v, want none", c.RetiredSet)
 	}
 	if c.OTPLength != 6 || c.SessionTTL == 0 {
 		t.Errorf("defaults not applied: OTPLength=%d SessionTTL=%v", c.OTPLength, c.SessionTTL)
@@ -85,12 +85,25 @@ func TestLoadShortSecretFails(t *testing.T) {
 	}
 }
 
+// Without the allow-list, staff come from domain groups that an
+// administrator sets up, so ADMIN_EMAILS is required; ALLOWED_EMAIL_DOMAINS
+// no longer stands in for it.
 func TestLoadNoAudienceFails(t *testing.T) {
 	setValid(t)
-	t.Setenv("ALLOWED_EMAIL_DOMAINS", "")
+	t.Setenv("ALLOWED_EMAIL_DOMAINS", "example.com")
 	t.Setenv("ADMIN_EMAILS", "")
-	if _, err := Load(); err == nil {
-		t.Error("expected error when neither domains nor admins are set")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ADMIN_EMAILS") {
+		t.Errorf("Load without ADMIN_EMAILS: %v, want a refusal naming ADMIN_EMAILS", err)
+	}
+}
+
+// The app roles decide who is staff, a member or a guest, so the gateway
+// refuses to start without them.
+func TestLoadRequiresAppRolesFile(t *testing.T) {
+	setValid(t)
+	t.Setenv("APP_ROLES_FILE", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "APP_ROLES_FILE") {
+		t.Errorf("Load without APP_ROLES_FILE: %v, want a refusal naming it", err)
 	}
 }
 
@@ -240,58 +253,23 @@ func TestOTPEmailSubjectOverride(t *testing.T) {
 	}
 }
 
-func TestLoadOpenRegistrationHosts(t *testing.T) {
+// A retired setting left in place is reported and otherwise ignored: the
+// gateway starts, whatever its value, even one the old validation refused.
+func TestRetiredSettingsAreIgnored(t *testing.T) {
 	setValid(t)
-	t.Setenv("OPEN_REGISTRATION_HOSTS", " Apply.Example.com, example.com ,deep.sub.example.com")
+	t.Setenv("ALLOWED_EMAIL_DOMAINS", "*")
+	t.Setenv("OPEN_REGISTRATION_HOSTS", "https://evil.com:443/x")
 	c, err := Load()
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("Load with retired settings: %v", err)
 	}
-	want := []string{"apply.example.com", "example.com", "deep.sub.example.com"}
-	if len(c.OpenRegistrationHosts) != len(want) {
-		t.Fatalf("OpenRegistrationHosts = %v, want %v", c.OpenRegistrationHosts, want)
+	if strings.Join(c.RetiredSet, ",") != "ALLOWED_EMAIL_DOMAINS,OPEN_REGISTRATION_HOSTS" {
+		t.Errorf("RetiredSet = %v", c.RetiredSet)
 	}
-	for i := range want {
-		if c.OpenRegistrationHosts[i] != want[i] {
-			t.Errorf("OpenRegistrationHosts[%d] = %q, want %q", i, c.OpenRegistrationHosts[i], want[i])
-		}
-	}
-}
-
-func TestLoadOpenRegistrationHostsDefaultEmpty(t *testing.T) {
-	setValid(t)
-	c, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if len(c.OpenRegistrationHosts) != 0 {
-		t.Errorf("OpenRegistrationHosts = %v, want none", c.OpenRegistrationHosts)
-	}
-}
-
-// Anything that is not DOMAIN or a subdomain of it, or not a bare hostname,
-// refuses to boot rather than silently never matching.
-func TestLoadOpenRegistrationHostsRejectsOutsideDomain(t *testing.T) {
-	bad := []string{
-		"evil.com",
-		"notexample.com",            // suffix match without the dot
-		"example.com.evil.com",      // look-alike
-		"https://apply.example.com", // a URL, not a host
-		"apply.example.com:443",
-		"apply.example.com/path",
-		"*.example.com",
-		"*",
-		"apply..example.com",
-		"-apply.example.com",
-	}
-	for _, h := range bad {
-		t.Run(h, func(t *testing.T) {
-			setValid(t)
-			t.Setenv("OPEN_REGISTRATION_HOSTS", h)
-			if _, err := Load(); err == nil {
-				t.Errorf("expected OPEN_REGISTRATION_HOSTS=%q to be refused", h)
-			}
-		})
+	t.Setenv("ALLOWED_EMAIL_DOMAINS", "")
+	t.Setenv("OPEN_REGISTRATION_HOSTS", "")
+	if c, err = Load(); err != nil || len(c.RetiredSet) != 0 {
+		t.Errorf("empty retired settings: %v, %v; want none reported", c.RetiredSet, err)
 	}
 }
 
