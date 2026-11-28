@@ -1,0 +1,41 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+<h1>{{.Title}}</h1>
+{{with .OwnSessions}}
+<p class="sub">{{.Lead}}</p>
+{{/* A confirmation is asked under the strip, so confirming moves nothing in
+     the list. */}}
+{{if eq .StripTone "ok"}}<div class="ok" role="status">{{.Strip}}</div>
+{{else if eq .StripTone "warn"}}<div class="err" role="status">{{.Strip}}</div>
+{{else if eq .StripTone "ask"}}<p class="sub notice" role="status">{{.Strip}}</p>
+{{else}}<p class="sub" role="status">{{.Strip}}</p>{{end}}
+{{if eq .Asking "one"}}
+<form method="post" action="/sessions/end-one" class="sess-ask">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <input type="hidden" name="id" value="{{.AskID}}">
+  <button type="submit" class="danger">{{.Btn.One}}</button>
+  <a class="btn quiet" href="{{.CancelHref}}">{{.Btn.Cancel}}</a>
+</form>
+{{else if eq .Asking "others"}}
+<form method="post" action="/sessions/end-others" class="sess-ask">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <button type="submit" class="danger">{{.Btn.Others}}</button>
+  <a class="btn quiet" href="{{.CancelHref}}">{{.Btn.Cancel}}</a>
+</form>
+{{end}}
+{{range .Rows}}
+<div class="pk-row sess-row{{if .Hit}} hit{{end}}">
+  {{template "pk-device-icon" (not .Phone)}}
+  <span class="name{{if .DeviceMissing}} missing{{end}}">{{.Device}}</span>
+  <svg class="fact-icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg>
+  <span class="fact">{{.SignedIn}}</span>
+  <svg class="fact-icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+  <span class="fact">{{.Seen}}</span>
+  {{if .Mine}}<span class="mine">{{$.OwnSessions.Btn.Mine}}</span>{{else}}<a class="remove" href="{{.AskHref}}">{{$.OwnSessions.Btn.One}}</a>{{end}}
+</div>
+{{end}}
+{{if and .OthersHref (ne .Asking "others")}}<a class="btn quiet" href="{{.OthersHref}}">{{.Btn.Others}}</a>{{end}}
+<a class="btn quiet" href="/logout">{{.Btn.All}}</a>
+{{if .Passkeys}}<div class="links"><a href="{{.Passkeys}}">{{.Btn.Passkeys}}</a></div>{{end}}
+{{end}}
+{{end}}

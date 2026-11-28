@@ -1160,8 +1160,11 @@ func (s *Server) handleWelcome(w http.ResponseWriter, r *http.Request) {
 		// A real admin session gets an Admin link here; a break-glass or guest
 		// session never does (neither can reach the admin UI — see requireAdmin).
 		data.IsAdmin = id.Kind == "" && s.policy.Role(id.Email) == authz.RoleAdmin
-		if _, _, ok := s.passkeySession(r); ok && s.cfg.PasskeysEnabled {
-			data.Passkey = &passkeyPage{Next: s.passkeysURL()}
+		if _, ok := s.ownSession(r); ok {
+			data.SessionsLink = true
+			if s.cfg.PasskeysEnabled {
+				data.Passkey = &passkeyPage{Next: s.passkeysURL()}
+			}
 		}
 	}
 	if target, ok := s.servedTarget(s.cfg.DefaultRedirect); ok {

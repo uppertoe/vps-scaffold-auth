@@ -427,7 +427,15 @@ may hold. The admin **Sessions** page lists every live session (the person, its
 kind, when it signed in and was last seen, and the browser), and signs out one
 session, one person on every device, or everyone but the administrator doing
 it. Each is confirmed on the page, recorded in the admin audit and emailed to
-the other administrators. A session also ends at once when:
+the other administrators.
+
+A person's own **Your sessions** page (`/sessions`, linked from the welcome
+page and the passkeys page) lists their sessions with the same facts and marks
+this browser. It signs out one other session, or every session but this
+browser's, which carries on under a new cookie so that a copy of the old one
+ends too. Each is confirmed on the page, recorded in the sign-in audit and
+emailed to the person. A break-glass card's session and a guest's have no such
+page. A session also ends at once when:
 
 - the person's administrator authenticator is replaced or removed;
 - the passkey it was started with is removed;

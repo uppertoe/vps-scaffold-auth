@@ -189,27 +189,14 @@ func (s *Server) readSession(r *http.Request, now time.Time) (*session.Identity,
 // only one cookie; replacing it also gives a new token whenever the session
 // gains the admin step.
 //
-// A session built from an existing one (id.SID set: the admin step, or the
-// acting administrator's new token after "Sign out everyone") starts only if
+// A session built from an existing one (id.SID set: the admin step) starts
+// only if
 // that session is still live under the write lock, so a revocation that
 // lands after the handler read it cannot be outlived by its replacement.
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request, id session.Identity, ttl time.Duration, now time.Time) error {
-	if ttl <= 0 {
-		ttl = s.sessions.DefaultTTL()
-	}
-	token, err := session.NewToken()
+	token, x, err := s.newSessionRow(r, id, ttl, now)
 	if err != nil {
 		return err
-	}
-	signedIn := now
-	if id.Auth > 0 {
-		signedIn = time.Unix(id.Auth, 0)
-	}
-	x := store.Session{
-		Hash: session.TokenHash(token), Email: id.Email, Kind: id.Kind, Groups: id.Groups,
-		TOTP: id.TOTP, Step: id.Step, Passkey: id.PK, Card: id.Card,
-		SignedIn: signedIn, Renewed: now, TTL: ttl, Expires: s.expiry(signedIn, now, ttl),
-		LastSeen: now, Device: deviceSummary(r.UserAgent()),
 	}
 	var replaced []int64
 	if cur, _, _, err := s.resolveSession(r, now); err == nil && cur != nil {
@@ -249,6 +236,88 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, id session
 	s.sessions.SetSession(w, token, x.Expires, now)
 	s.sweepSessions(r.Context(), now)
 	return nil
+}
+
+// newSessionRow builds the row for a session under a new token. A session
+// carried over from an existing row (id.SID and id.Iat set: a new token after
+// a sign-out of other sessions) keeps the time its groups were worked out, so
+// a membership change since then still makes it renew at its next request
+// (groupsStale). A session whose groups were worked out just now (a sign-in,
+// the admin step) is renewed now.
+func (s *Server) newSessionRow(r *http.Request, id session.Identity, ttl time.Duration, now time.Time) (string, store.Session, error) {
+	if ttl <= 0 {
+		ttl = s.sessions.DefaultTTL()
+	}
+	token, err := session.NewToken()
+	if err != nil {
+		return "", store.Session{}, err
+	}
+	signedIn := now
+	if id.Auth > 0 {
+		signedIn = time.Unix(id.Auth, 0)
+	}
+	renewed := now
+	if id.SID != 0 && id.Iat > 0 && id.Iat < now.Unix() {
+		renewed = time.Unix(id.Iat, 0)
+	}
+	return token, store.Session{
+		Hash: session.TokenHash(token), Email: id.Email, Kind: id.Kind, Groups: id.Groups,
+		TOTP: id.TOTP, Step: id.Step, Passkey: id.PK, Card: id.Card,
+		SignedIn: signedIn, Renewed: renewed, TTL: ttl, Expires: s.expiry(signedIn, now, ttl),
+		LastSeen: now, Device: deviceSummary(r.UserAgent()),
+	}, nil
+}
+
+// endOthersAndRotate ends every session match picks other than the request's
+// own (id.SID), and gives the request's own session a new token, as one
+// change under the write lock: the new row is made first, then the old row
+// and the others are deleted in one statement. If either write fails, nothing
+// has changed (the new row, whose token was never sent, is deleted again) and
+// the error is returned. If the request's own session has ended by the time
+// the lock is held, nothing is done and mineLive is false. The cookie is set
+// only once everything has been written.
+func (s *Server) endOthersAndRotate(w http.ResponseWriter, r *http.Request, id *session.Identity, now time.Time, match func(*store.Session) bool) (ended []store.Session, mineLive bool, err error) {
+	token, x, err := s.newSessionRow(r, *id, s.sessions.SessionTTL(id), now)
+	if err != nil {
+		return nil, true, err
+	}
+	l := s.live
+	l.write.Lock()
+	l.mu.RLock()
+	mineLive = l.byID[id.SID] != nil
+	ids := []int64{id.SID}
+	for xid, row := range l.byID {
+		if xid != id.SID && match(row) {
+			ids = append(ids, xid)
+			ended = append(ended, *row)
+		}
+	}
+	l.mu.RUnlock()
+	if !mineLive {
+		l.write.Unlock()
+		return nil, false, nil
+	}
+	if err = s.grantStillValid(r.Context(), *id); err == nil {
+		x.ID, err = s.store.CreateSession(r.Context(), x)
+		if err == nil {
+			slices.Sort(ids[1:])
+			if err = s.store.DeleteSessions(r.Context(), ids); err != nil {
+				if derr := s.store.DeleteSessions(r.Context(), []int64{x.ID}); derr != nil {
+					log.Printf("delete an unused new session: %v", derr)
+				}
+			}
+		}
+	}
+	if err == nil {
+		l.add(&x)
+		l.drop(ids)
+	}
+	l.write.Unlock()
+	if err != nil {
+		return nil, true, err
+	}
+	s.sessions.SetSession(w, token, x.Expires, now)
+	return ended, true, nil
 }
 
 // errGrantGone means the passkey or card a sign-in used was removed or
