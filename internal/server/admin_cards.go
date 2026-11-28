@@ -37,7 +37,7 @@ const (
 	// Cards made for a group before app roles, which name no app. Drafted on
 	// 28 November 2026 for approval.
 	msgLegacyHeading = "Cards that open nothing"
-	msgLegacyNote    = "These cards were made for a group before app roles. The gateway refuses every scan of these cards. Withdraw each card from its page."
+	msgLegacyNote    = "Each card in this section was made for a group before app roles. The gateway refuses every scan of a group card. You can withdraw each card from its page."
 )
 
 // sampleLocation and sampleApp fill a preview before the form has them.

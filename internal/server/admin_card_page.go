@@ -66,7 +66,7 @@ var cardOutcomes = map[string][2]string{
 	store.OutcomeRevoked:       {"Refused: withdrawn", "off"},
 	store.OutcomeReplaced:      {"Refused: replaced", "off"},
 	store.OutcomeRedirected:    {"Opened with their own sign-in", "tag"},
-	store.OutcomeRefusedTarget: {"Refused: the group is now an app role", "off"},
+	store.OutcomeRefusedTarget: {"Refused: the card opens nothing", "off"},
 }
 
 // browserOf names the browser from a user agent, or "".
