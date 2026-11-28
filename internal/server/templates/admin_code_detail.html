@@ -47,9 +47,9 @@
 <div class="dangerpanel" id="danger">
   <h2>Replace or withdraw the card</h2>
   <div class="twocol">
-    <div>{{if eq .Confirm "replace"}}
+    {{if not .OpensNothing}}<div>{{if eq .Confirm "replace"}}
       <div class="confirmbox"><p><b>Replace the card for {{.Label}}?</b> {{.ReplaceText}}</p><div class="acts"><form method="post" action="/admin/break/{{.ID}}/remint"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="danger">Replace the card</button></form><a class="btnlink quiet" href="/admin/break/{{.ID}}">Keep the card</a></div></div>
-    {{else}}<p>{{.ReplaceText}}</p><a class="btnlink red" href="/admin/break/{{.ID}}?confirm=replace#danger">Replace the card</a>{{end}}</div>
+    {{else}}<p>{{.ReplaceText}}</p><a class="btnlink red" href="/admin/break/{{.ID}}?confirm=replace#danger">Replace the card</a>{{end}}</div>{{end}}
     <div>{{if eq .Confirm "withdraw"}}
       <div class="confirmbox"><p><b>Withdraw the card for {{.Label}}?</b> {{.WithdrawTxt}}</p><div class="acts"><form method="post" action="/admin/break/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="danger">Withdraw the card</button></form><a class="btnlink quiet" href="/admin/break/{{.ID}}">Keep the card</a></div></div>
     {{else}}<p>{{.WithdrawTxt}}</p><a class="btnlink red" href="/admin/break/{{.ID}}?confirm=withdraw#danger">Withdraw the card</a>{{end}}</div>

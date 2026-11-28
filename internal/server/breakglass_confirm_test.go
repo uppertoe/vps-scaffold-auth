@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
 	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
@@ -172,4 +173,60 @@ func TestOldGroupCardSessionHoldsNothing(t *testing.T) {
 	if rec := mintSession(t, srv, card, time.Hour).get("/verify", guard); rec.Code != http.StatusOK {
 		t.Errorf("a card session with no groups = %d, want 200", rec.Code)
 	}
+}
+
+// mintCardAs inserts a card with the app and role given, written to the
+// store directly as an older or hand-edited row could be, and returns its
+// token.
+func mintCardAs(t *testing.T, srv *Server, label, app, role string) string {
+	t.Helper()
+	token, err := breakglass.GenerateToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := srv.secrets.Seal(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.CreateBreakGlassCode(context.Background(), store.BreakGlassCode{
+		Label: label, App: app, Role: role, TokenEnc: enc, TokenHash: otp.Hash(token),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv.forgetRoles()
+	return token
+}
+
+// assertCardRefused checks that a card's scan page and its grant are both
+// refused with the neutral page, recorded as refused_target, and start no
+// session.
+func assertCardRefused(t *testing.T, srv *Server, token string) {
+	t.Helper()
+	c := newClient(t, srv.Handler())
+	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("scan page = %d, want the neutral page", rec.Code)
+	}
+	if rec := c.postForm("/break", url.Values{"token": {token}}); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), msgCardUnknownTitle) {
+		t.Errorf("grant = %d, want the neutral page", rec.Code)
+	}
+	if c.cookies[session.SessionCookie] != nil {
+		t.Error("the card started a session")
+	}
+	events, _ := srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0)
+	if len(events) != 2 || events[0].Outcome != store.OutcomeRefusedTarget || events[1].Outcome != store.OutcomeRefusedTarget {
+		t.Errorf("events = %+v, want two 'refused_target'", events)
+	}
+}
+
+// A card for a declared app but a role other than User is refused: a card
+// holds only the User role, whatever its row says.
+func TestCardForAnotherRoleIsRefused(t *testing.T) {
+	srv, _, _ := cardsAdmin(t)
+	assertCardRefused(t, srv, mintCardAs(t, srv, "Pharmacy", "neverdrugs", "editor"))
+}
+
+// A card with the User role but no app is refused.
+func TestCardForUserWithNoAppIsRefused(t *testing.T) {
+	srv, _, _ := cardsAdmin(t)
+	assertCardRefused(t, srv, mintCardAs(t, srv, "Pharmacy", "", store.RoleUser))
 }

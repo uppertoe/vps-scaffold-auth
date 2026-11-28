@@ -17,27 +17,30 @@ import (
 // --- One card's page ---
 
 type cardPageView struct {
-	ID          int64
-	Label       string
-	AppLabel    string
-	Active      bool
-	Steps       []cardStep
-	Withdrawn   string
-	PreviewURL  string
-	Caption     string
-	Designs     []designChoice
-	DesignID    int64
-	DesignName  string
-	AppToken    tokenView
-	PageLabel   string
-	PageURL     string
-	Note        string
-	UsesLine    string
-	Events      []cardEventView
-	Confirm     string // "replace" or "withdraw" while asking
-	ConfirmText string
-	ReplaceText string
-	WithdrawTxt string
+	ID         int64
+	Label      string
+	AppLabel   string
+	Active     bool
+	Steps      []cardStep
+	Withdrawn  string
+	PreviewURL string
+	Caption    string
+	Designs    []designChoice
+	DesignID   int64
+	DesignName string
+	AppToken   tokenView
+	PageLabel  string
+	PageURL    string
+	Note       string
+	UsesLine   string
+	Events     []cardEventView
+	Confirm    string // "replace" or "withdraw" while asking
+	// OpensNothing marks a card that names no app (see opensNothing). Its
+	// page offers only Withdraw, since a replacement would open nothing too.
+	OpensNothing bool
+	ConfirmText  string
+	ReplaceText  string
+	WithdrawTxt  string
 }
 
 type cardStep struct {
@@ -177,10 +180,13 @@ func (s *Server) renderCardPage(w http.ResponseWriter, r *http.Request, c store.
 	} else {
 		v.UsesLine = capFirst(countWords(uses, "use", "uses")) + " in the last 30 days"
 	}
+	v.OpensNothing = opensNothing(c)
 	if v.Active {
 		switch confirm {
 		case "replace":
-			v.Confirm = "replace"
+			if !v.OpensNothing {
+				v.Confirm = "replace"
+			}
 		case "withdraw":
 			v.Confirm = "withdraw"
 		}
@@ -251,6 +257,12 @@ func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) 
 	// A withdrawn card stays withdrawn; its page offers no replacement.
 	if c.Status != store.BreakGlassActive {
 		s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(c.ID, 10), "card-remint-refused", "")
+		return
+	}
+	// A card that opens nothing is not offered a replacement either, which
+	// would open nothing too; a hand-made post gets the neutral page.
+	if opensNothing(c) {
+		s.cardNotAvailable(w)
 		return
 	}
 	tokenEnc, tokenHash, err := s.newToken()

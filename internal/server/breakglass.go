@@ -135,7 +135,7 @@ func (s *Server) cardNotAvailable(w http.ResponseWriter) {
 // withdrawn card. A card for any role other than User is refused the same
 // way, although none can be made. It reports whether it refused.
 func (s *Server) refuseGroupCard(w http.ResponseWriter, r *http.Request, code store.BreakGlassCode, ip, ua string) bool {
-	if code.App != "" && code.Role == store.RoleUser {
+	if !opensNothing(code) {
 		return false
 	}
 	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
@@ -147,6 +147,12 @@ func (s *Server) refuseGroupCard(w http.ResponseWriter, r *http.Request, code st
 	log.Printf("break-glass refused (the card names no app) for %q from %s", code.Label, ip)
 	s.cardNotAvailable(w)
 	return true
+}
+
+// opensNothing reports a card that names no app, or a role other than User:
+// such a card is refused at every scan, and its page offers no replacement.
+func opensNothing(c store.BreakGlassCode) bool {
+	return c.App == "" || c.Role != store.RoleUser
 }
 
 // grantBreakGlass mints an emergency session for an active code: it writes the
