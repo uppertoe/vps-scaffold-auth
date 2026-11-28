@@ -7,8 +7,8 @@ require (
 	github.com/fxamacker/cbor/v2 v2.10.0
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/pquerna/otp v1.5.0
-	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
-	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
+	github.com/srwiley/oksvg v0.0.0-20261128183325-b156bdf0478f
+	github.com/srwiley/rasterx v0.0.0-20261128041338-3ef3aeed05cd
 	golang.org/x/image v0.47.0
 	modernc.org/sqlite v1.61.1
 )
