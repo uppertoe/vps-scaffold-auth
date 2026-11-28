@@ -17,7 +17,7 @@
 {{end}}
 {{if .Legacy}}
 <h2 class="sec">{{.LegacyH}}</h2>
-<p class="legacynote">{{.LegacyN}}</p>
+{{if .LegacyN}}<p class="legacynote">{{.LegacyN}}</p>{{end}}
 <div class="rlist clist">
   <div class="rrow colhead"><div></div><div>Location</div><div>Last used</div><div>In 30 days</div><div>Last tested</div><div>State</div></div>
   {{range .Legacy}}{{template "card_row" .}}{{end}}

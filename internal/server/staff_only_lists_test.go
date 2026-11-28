@@ -100,7 +100,7 @@ func TestRefusedGroupsSettingStillStaffOnlyOnRCHAndMCH(t *testing.T) {
 					t.Errorf("%s is not staff only with the setting read", g)
 				}
 				if reason, _ := srv.targetRefusal(ctx, g); reason != refusedAppRole {
-					t.Errorf("%s is a card target: reason %q", g, reason)
+					t.Errorf("%s is not refused as staff only: reason %q", g, reason)
 				}
 			}
 			alone := serverListsServer(t, i, false)
@@ -262,7 +262,7 @@ func TestOutsiderWithOnlyAStaffOnlyListIsSentNoCode(t *testing.T) {
 
 // An outsider is not added to an any-address list that a staff-only list includes,
 // directly or through another group, since the staff-only list would then admit
-// them; nor can a card target such a list. Staff are added as usual.
+// them. Staff are added as usual.
 func TestOutsiderRefusedOnAListAStaffOnlyListIncludes(t *testing.T) {
 	srv, sender := staffOnlyListServer(t, nil)
 	ctx := context.Background()
@@ -296,10 +296,6 @@ func TestOutsiderRefusedOnAListAStaffOnlyListIncludes(t *testing.T) {
 	if m, _ := srv.store.ListGroupMembers(ctx, "inner"); len(m) != 1 || m[0] != "staff@example.com" {
 		t.Errorf("inner members = %v, want only the staff member", m)
 	}
-	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Inner"}, "group": {"inner"}})
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("card targeting inner = %d, want 400", rec.Code)
-	}
 }
 
 // neverLoaded makes every read of the role assignments fail and forgets the
@@ -312,9 +308,9 @@ func neverLoaded(srv *Server) {
 }
 
 // While the role data has never been read, the gateway cannot tell which
-// lists are closed, so it fails closed: every group is refused as a card's
-// target and for a hand-added outsider, and an include is not kept, while
-// staff are still added.
+// lists are closed, so it fails closed: every group is refused for a
+// hand-added outsider, and an include is not kept, while staff are still
+// added.
 func TestNeverLoadedRefusesTargetsOutsidersAndIncludes(t *testing.T) {
 	srv, sender := staffOnlyListServer(t, nil)
 	ctx := context.Background()
@@ -335,9 +331,6 @@ func TestNeverLoadedRefusesTargetsOutsidersAndIncludes(t *testing.T) {
 		if r, refused := srv.targetRefusal(ctx, g); !refused || r != refusedUnreadable {
 			t.Errorf("%s: refusal %q %v, want %q", g, r, refused, refusedUnreadable)
 		}
-	}
-	if rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Ward"}, "group": {"bg_ward"}}); rec.Code != http.StatusBadRequest {
-		t.Errorf("card targeting bg_ward = %d, want 400", rec.Code)
 	}
 	c.postForm("/admin/groups/bg_ward/members/confirm", url.Values{"csrf": {tok}, "add": {strangerAddr, "staff@example.com"}})
 	// Staff are told apart by the domain groups, which cannot be read, so

@@ -55,10 +55,9 @@ app's Administrator or Board owner, say) is staff only; any other list takes
 any address. Someone the gateway does not count as staff (a guest, a member
 who is not staff, or a card) is never added to a staff-only list, and never
 counted as its member, in a session or by the members endpoint; a role held
-only through one is no reason for them to sign in. A staff-only list, and any
-group it includes, cannot be a break-glass card's target, and the admin pages
-refuse to add someone who is not staff to one by hand, in bulk or through an
-include. The rule is read from the role assignments, so a list becomes staff
+only through one is no reason for them to sign in. The admin pages refuse to
+add someone who is not staff to a staff-only list, or to any group it
+includes, by hand, in bulk or through an include. The rule is read from the role assignments, so a list becomes staff
 only as soon as it is given such a role. While the gateway cannot read the
 role data, it treats every list as staff only.
 
@@ -529,11 +528,10 @@ still reach an app during a time-critical event (e.g. a code stroke).
   admits it, so a card opens exactly the app it names, not the whole estate. A
   holder who reaches another app gets the "no access" page (with a sign-in
   link), and the card keeps working on its own app.
-- **Cards made before app roles named a group.** A role guard admits no such
-  card, so a group card opens nothing; the card's page offers to move it to an
-  app, keeping its printed token. The gateway still refuses a group card whose
-  group is a staff-only list (one that holds an app role other than User, or
-  that the deprecated `BREAKGLASS_REFUSED_GROUPS` names).
+- **Cards made before app roles named a group.** Such a card names no app,
+  so the card opens nothing. The gateway refuses every scan of such a card,
+  and the cards list shows the card under "Cards that open nothing" until an
+  administrator withdraws the card. No card can be made for a group.
 - **Scanning is an instant grant**: the token in the QR URL is the only
   credential, by design. The scan is rate-limited, **logged synchronously**
   (label, client IP, user-agent, time), and **notifies admins** out of band via
@@ -770,12 +768,11 @@ as a second address.
   are. Break-glass sessions use a short, non-renewable
   TTL, end when their card is revoked or re-minted, and are never accepted by the
   admin UI.
-- Break-glass target groups and DB group names cannot be the reserved roles
-  `admin`/`user`/`guest`, so emergency access can never silently confer the admin
-  tier, and no group can make a member of staff look like a guest. A card cannot
-  target a group an app reads as its own role either, and a guest cannot be made
-  a member of one (see [Break-the-glass QR codes](#break-the-glass-qr-codes)), so
-  emergency access never confers an application's administrator role.
+- DB group names cannot be the reserved roles `admin`/`user`/`guest`, so no
+  group can silently confer the admin tier or make a member of staff look like
+  a guest. A card holds only its app's User role (see
+  [Break-the-glass QR codes](#break-the-glass-qr-codes)), so emergency access
+  never confers an application's administrator role.
 
 ## Local development
 

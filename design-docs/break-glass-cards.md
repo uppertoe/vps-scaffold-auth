@@ -2,7 +2,7 @@
 title: Break-glass cards
 summary: Emergency access by QR code, how each card is limited to one app, how its use is recorded and announced, and the risk accepted with it.
 weight: 5
-lastmod: 2026-11-19
+lastmod: 2026-11-28
 ---
 
 ## What a card is for
@@ -38,18 +38,13 @@ group.
 
 ## Cards made before app roles
 
-A card made before app roles opens the sites of one group, as it always did.
-Such a card cannot name a staff-only list, a group that a staff-only list
-includes, or a group filled from a feed. A card whose list has become staff
-only since the card was made grants nothing: the person scanning it sees the same page as for a withdrawn card,
-the scan is recorded as refused, and the chosen administrators are notified.
-
-An administrator can move a card of this kind onto an app whose site now uses
-the role guard. The card keeps its code, so the printed copies keep working,
-and from then on a scan opens the app's User role. A session started before
-the move keeps only the group's sites until it ends. Once every site that a
-group opened uses the role guard, a card for that group opens nothing until it
-is moved.
+A card made before app roles named a group rather than an app. Every site now
+uses app roles, so such a card opens nothing. The gateway refuses every scan
+of such a card with the same page as for a withdrawn card, and records the
+scan as refused. The cards list shows these cards under "Cards that open
+nothing" until an administrator withdraws each card. A session that an earlier
+release started from such a card reaches nothing until it ends. No card can
+be made for a group.
 
 ## How long access lasts
 

@@ -83,10 +83,9 @@ func TestDBGroupsSurfacedInHeader(t *testing.T) {
 	}
 }
 
-// mintCode inserts a break-glass code directly and returns its raw token.
-// mintGroupCode mints a card that still names a group, as cards did before
-// app roles; a role guard admits no such card.
-func mintGroupCode(t *testing.T, srv *Server, label, group string) string {
+// mintGroupCode inserts a card that names no app, as a card made for a group
+// before app roles is stored now, and returns its raw token.
+func mintGroupCode(t *testing.T, srv *Server, label string) string {
 	t.Helper()
 	token, err := breakglass.GenerateToken()
 	if err != nil {
@@ -97,7 +96,7 @@ func mintGroupCode(t *testing.T, srv *Server, label, group string) string {
 		t.Fatal(err)
 	}
 	if _, err := srv.store.CreateBreakGlassCode(context.Background(), store.BreakGlassCode{
-		Label: label, TargetGroup: group, TokenEnc: enc, TokenHash: otp.Hash(token),
+		Label: label, TokenEnc: enc, TokenHash: otp.Hash(token),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -214,24 +213,15 @@ func TestAdminRequiresAdminGroup(t *testing.T) {
 }
 
 func TestAdminCreateCodeCSRF(t *testing.T) {
-	srv, sender := testServer(t)
-	c := newClient(t, srv.Handler())
-	loginAs(t, c, sender, "admin@example.com", nil)
-
-	// Load the page to obtain a CSRF cookie + token.
-	rec := c.get("/admin/break/new", nil)
-	tok := extractCSRF(t, rec.Body.String())
+	srv, _, c := cardsAdmin(t)
 
 	// Missing token → 403.
-	if rec := c.postForm("/admin/break", url.Values{"label": {"L"}, "group": {"g"}}); rec.Code != http.StatusForbidden {
+	if rec := c.postForm("/admin/break", url.Values{"label": {"L"}, "app": {"neverdrugs"}, "page.neverdrugs": {"/search"}}); rec.Code != http.StatusForbidden {
 		t.Fatalf("no-CSRF create = %d, want 403", rec.Code)
 	}
 
 	// Valid token → created.
-	rec = c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Angio 1"}, "group": {"code_stroke_break_glass"}})
-	if rec.Code != http.StatusFound {
-		t.Fatalf("create = %d, want 302", rec.Code)
-	}
+	newCard(t, srv, c, "Angio 1", "/search")
 	codes, _ := srv.store.ListBreakGlassCodes(context.Background())
 	if len(codes) != 1 || codes[0].Label != "Angio 1" {
 		t.Fatalf("codes = %+v", codes)
@@ -311,7 +301,7 @@ func TestPerCodeBrandingPDFRenders(t *testing.T) {
 	srv, sender := testServer(t)
 	ctx := context.Background()
 	id, _ := srv.store.CreateBreakGlassCode(ctx, store.BreakGlassCode{
-		Label: "Cath Lab", TargetGroup: "g", TokenEnc: mustSeal(t, srv, "tok"), TokenHash: "h",
+		Label: "Cath Lab", App: "handbook", Role: store.RoleUser, TokenEnc: mustSeal(t, srv, "tok"), TokenHash: "h",
 	})
 	if err := srv.store.SaveCodeBrandingMeta(ctx, id, "Cardiology Emergency", "Cath lab access", "Scan me", "#7a1f2b", "#b5293a", "#fdb913", "#f26c52", "#82c341"); err != nil {
 		t.Fatal(err)

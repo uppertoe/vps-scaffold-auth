@@ -24,7 +24,7 @@ type Subject struct {
 	Guest      bool
 	BreakGlass bool
 	// CardApp and CardRole are the app role the scanned card names; both are
-	// empty for a card that still targets a group.
+	// empty for a card made for a group before app roles, which holds nothing.
 	CardApp, CardRole string
 	// Lists are the list groups the person belongs to.
 	Lists map[string]bool

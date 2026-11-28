@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,11 +34,10 @@ const (
 	msgCardReplaceSubj = "The break-glass card for %s has been replaced."
 	msgCardWithdrawSub = "The break-glass card for %s has been withdrawn."
 	msgCardNoPages     = msgCardNoPagesApproved
-	msgLegacyHeading   = "Cards that open a group"
-	// Without app roles a group card cannot be moved, so the list keeps the
-	// note it had before.
-	msgLegacyNoteNoRoles = "These cards were made before app roles, and each one opens the sites of its group. They keep working until they are replaced or withdrawn."
-	msgLegacyNote        = "These cards were made before app roles, and each one opens the sites of its group. A group card stops opening an app once the app moves to roles. To keep a card working, open the card's page and choose " + msgMoveAction + ". The card keeps its printed code."
+	// Cards made for a group before app roles, which name no app. Drafted on
+	// 28 November 2026 for approval.
+	msgLegacyHeading = "Cards that open nothing"
+	msgLegacyNote    = "These cards were made for a group before app roles. The gateway refuses every scan of these cards. Withdraw each card from its page."
 )
 
 // sampleLocation and sampleApp fill a preview before the form has them.
@@ -68,8 +66,6 @@ type cardRow struct {
 	Uses     string
 	Tested   string
 	Active   bool
-	Group    string // a legacy card's group
-	Refused  string // why that group may no longer be a card's (see refusedTargets)
 	Version  string // changes when the drawing does, so the thumbnail is fetched again
 }
 
@@ -126,12 +122,8 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 		s.adminError(w, r)
 		return
 	}
-	v := &cardsView{Empty: len(codes) == 0, LegacyH: msgLegacyHeading, LegacyN: msgLegacyNote}
-	if !s.rolesOn() {
-		v.LegacyN = msgLegacyNoteNoRoles
-	}
+	v := &cardsView{Empty: len(codes) == 0, LegacyH: msgLegacyHeading}
 	groups := map[string]*cardAppGroup{}
-	refused := s.refusedTargets(ctx)
 	sortCards(codes)
 	v.Attention = cardLines(codes, stats)
 	for _, c := range codes {
@@ -144,9 +136,12 @@ func (s *Server) handleAdminBreakList(w http.ResponseWriter, r *http.Request) {
 		if !c.TestedAt.IsZero() {
 			row.Tested = s.shortStamp(c.TestedAt)
 		}
+		// A card made for a group names no app and opens nothing. It is
+		// listed apart, with a note to withdraw it while it is active.
 		if c.App == "" {
-			row.Group = c.TargetGroup
-			row.Refused, _ = refused.reason(c.TargetGroup)
+			if row.Active {
+				v.LegacyN = msgLegacyNote
+			}
 			v.Legacy = append(v.Legacy, row)
 			continue
 		}
@@ -183,11 +178,12 @@ func sortCards(codes []store.BreakGlassCode) {
 
 // cardLines are the attention lines about cards, which the Cards page and
 // the Overview both show: each active card never tested, and each used
-// three times or more in 30 days. codes are sorted as sortCards sorts them.
+// three times or more in 30 days. A card made for a group is left out, since
+// its scan is refused. codes are sorted as sortCards sorts them.
 func cardLines(codes []store.BreakGlassCode, stats map[int64]cardStats) []attentionLine {
 	var out []attentionLine
 	for _, c := range codes {
-		if c.Status != store.BreakGlassActive {
+		if c.Status != store.BreakGlassActive || c.App == "" {
 			continue
 		}
 		link := "/admin/break/" + strconv.FormatInt(c.ID, 10)
@@ -250,18 +246,12 @@ func (s *Server) drawDesign(ctx context.Context, d store.CardDesign) breakglass.
 }
 
 // cardAppLabel is the name a card prints after "Opens": its app's label, or
-// for a card that still opens a group, the host its scan opens.
+// "" for a card made for a group, which opens nothing.
 func (s *Server) cardAppLabel(c store.BreakGlassCode) string {
-	if c.App != "" {
-		if a, ok := s.appRoles.Apps[c.App]; ok {
-			return a.Label
-		}
-		return c.App
+	if a, ok := s.appRoles.Apps[c.App]; ok {
+		return a.Label
 	}
-	if u, err := url.Parse(c.Redirect); err == nil && u.Host != "" {
-		return u.Host
-	}
-	return ""
+	return c.App
 }
 
 // sizeText is "105 × 148 mm".

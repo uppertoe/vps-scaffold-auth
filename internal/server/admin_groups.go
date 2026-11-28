@@ -52,16 +52,6 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, error) {
 	if err != nil {
 		return nil, err
 	}
-	cardTargets := map[string]bool{}
-	codes, err := s.store.ListBreakGlassCodes(r.Context())
-	if err != nil {
-		return nil, err
-	}
-	for _, c := range codes {
-		if c.TargetGroup != "" {
-			cardTargets[normalizeGroupName(c.TargetGroup)] = true
-		}
-	}
 	includes, err := s.store.ListGroupIncludes(r.Context())
 	if err != nil {
 		return nil, err
@@ -108,7 +98,7 @@ func (s *Server) groupViews(r *http.Request) ([]groupView, error) {
 		view = append(view, groupView{
 			Feed: s.feedViewFor(g.Name, syncStates),
 			Name: g.Name, Label: g.Label, Members: mv,
-			Unused:         !cardTargets[g.Name] && len(includedIn[g.Name]) == 0 && !referenced[g.Name],
+			Unused:         len(includedIn[g.Name]) == 0 && !referenced[g.Name],
 			Includes:       includes[g.Name],
 			IncludedIn:     includedIn[g.Name],
 			IncludeOptions: options,

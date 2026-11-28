@@ -29,14 +29,12 @@ type cardPageView struct {
 	DesignID    int64
 	DesignName  string
 	AppToken    tokenView
-	Group       string // a card that opens a group
 	PageLabel   string
 	PageURL     string
 	Note        string
 	UsesLine    string
 	Events      []cardEventView
-	Confirm     string        // "replace", "withdraw" or "move" while asking
-	Move        *cardMoveView // a card that opens a group, with app roles on
+	Confirm     string // "replace" or "withdraw" while asking
 	ConfirmText string
 	ReplaceText string
 	WithdrawTxt string
@@ -101,13 +99,12 @@ func (s *Server) handleAdminBreakDetail(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	s.renderCardPage(w, r, http.StatusOK, c, r.URL.Query().Get("confirm"), "", "", "")
+	s.renderCardPage(w, r, c, r.URL.Query().Get("confirm"))
 }
 
 // renderCardPage draws a card's page. confirm is the action being confirmed
-// ("replace", "withdraw" or "move"); app and page are the move's choices so
-// far, and warning says why a move was refused.
-func (s *Server) renderCardPage(w http.ResponseWriter, r *http.Request, status int, c store.BreakGlassCode, confirm, app, page, warning string) {
+// ("replace" or "withdraw").
+func (s *Server) renderCardPage(w http.ResponseWriter, r *http.Request, c store.BreakGlassCode, confirm string) {
 	ctx := r.Context()
 	events, err := s.store.ListBreakGlassEvents(ctx, c.ID, 100, 0)
 	if err != nil {
@@ -147,8 +144,6 @@ func (s *Server) renderCardPage(w http.ResponseWriter, r *http.Request, status i
 	}
 	if c.App != "" {
 		v.AppToken = tokenView{Icon: iconApp, Label: v.AppLabel, Title: v.AppLabel + ": User"}
-	} else {
-		v.Group = c.TargetGroup
 	}
 	v.PageURL = strings.TrimPrefix(strings.TrimPrefix(c.Redirect, "https://"), "http://")
 	v.PageLabel = v.PageURL
@@ -190,13 +185,7 @@ func (s *Server) renderCardPage(w http.ResponseWriter, r *http.Request, status i
 			v.Confirm = "withdraw"
 		}
 	}
-	if v.Active && c.App == "" && s.rolesOn() {
-		v.Move = s.cardMoveView(ctx, c, app, page)
-		if confirm == "move" {
-			v.Confirm = "move"
-		}
-	}
-	s.renderAdmin(w, r, status, "admin_code_detail", adminData{Title: c.Label, CardPage: v, Warning: warning})
+	s.renderAdmin(w, r, http.StatusOK, "admin_code_detail", adminData{Title: c.Label, CardPage: v})
 }
 
 // handleAdminBreakDesign gives a card another design.

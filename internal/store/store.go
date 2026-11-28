@@ -146,11 +146,6 @@ type Store interface {
 	// SetBreakGlassRole points a card at an app role. Only the user role may
 	// be given to a card (ErrCardRole), because its holder is not identified.
 	SetBreakGlassRole(ctx context.Context, id int64, app, role string) error
-	// MoveBreakGlassCard moves an active card that opens a group onto an
-	// app's user role and landing page, keeping its token, label, note,
-	// design and events, and clearing its group. Any other card is refused
-	// (ErrCardNotGroup).
-	MoveBreakGlassCard(ctx context.Context, id int64, app, redirect string) error
 
 	// --- Invitations (see invitations.go) ---
 

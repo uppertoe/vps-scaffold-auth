@@ -129,15 +129,14 @@ func BuildGroups(role string, dbGroups []string) string {
 	return strings.Join(out, ",")
 }
 
-// IsReservedGroup reports whether name collides with a base role. A DB group or
-// a break-glass target group with such a name would be indistinguishable from
+// IsReservedGroup reports whether name collides with a base role. A DB group
+// with such a name would be indistinguishable from
 // the role in a session's groups, silently conferring admin/user privilege,
 // so callers must reject these names.
 //
 // "guest" is reserved for the same reason in the other direction: the gateway
 // reads a leading "guest" in a session's groups as "this is a stranger", so a
-// DB group of that name must not be able to stamp it onto a regular user, nor
-// a break-glass card make itself look like one.
+// DB group of that name must not be able to stamp it onto a regular user.
 func IsReservedGroup(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case RoleAdmin, RoleUser, RoleGuest:

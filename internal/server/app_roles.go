@@ -130,7 +130,7 @@ func (s *Server) roleData(ctx context.Context) roleState {
 	}
 	cards := make(map[int64]store.BreakGlassCode, len(codes))
 	for _, c := range codes {
-		cards[c.ID] = store.BreakGlassCode{ID: c.ID, App: c.App, Role: c.Role, Status: c.Status, TargetGroup: c.TargetGroup}
+		cards[c.ID] = store.BreakGlassCode{ID: c.ID, App: c.App, Role: c.Role, Status: c.Status}
 	}
 	invites, err := s.store.ListInvitations(ctx)
 	if err != nil {
@@ -290,21 +290,19 @@ func (s *Server) heldRoles(r *http.Request, id *session.Identity, app string) []
 		Addr:       clientAddr(r),
 	}
 	if sub.BreakGlass {
-		if c, ok := st.cards[id.Card]; ok && c.Status == store.BreakGlassActive && cardIssuedAsNow(id, c) {
+		if c, ok := st.cards[id.Card]; ok && c.Status == store.BreakGlassActive && cardIssuedAsNow(id) {
 			sub.CardApp, sub.CardRole = c.App, c.Role
 		}
 	}
 	return roles.Held(app, sub, st.assignments, s.roleEnv(st))
 }
 
-// cardIssuedAsNow reports whether a break-glass session carries the groups
-// its card grants today. A session started before its card was moved from a
-// group onto an app carries the group, and keeps only the group's sites
-// until it ends: the card's app is read for it only once a new scan has
-// issued a session without the group. The same holds when a scan read the
-// card just before a move and issued the session just after it.
-func cardIssuedAsNow(id *session.Identity, c store.BreakGlassCode) bool {
-	return id.Groups == authz.BuildGroups(c.TargetGroup, nil)
+// cardIssuedAsNow reports whether a break-glass session was issued as a scan
+// issues one today, with no groups. A session that carries a group was
+// started by an earlier release from a card made for a group, and it holds
+// nothing until it ends, even if its card was later moved onto an app.
+func cardIssuedAsNow(id *session.Identity) bool {
+	return id.Groups == ""
 }
 
 // sessionLists are the lists a session's person belongs to: its groups

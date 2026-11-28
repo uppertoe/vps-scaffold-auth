@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"html"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -90,140 +92,6 @@ func TestListIsStaffOnlyWhileItHoldsSuchARole(t *testing.T) {
 	mustAssign(t, srv, store.RoleAssignment{App: "gone-app", Role: "editor", Kind: store.AssignList, Ref: "bg_ward"})
 	if !isStaffOnly("bg_ward") {
 		t.Error("a role the manifest does not declare does not close its list")
-	}
-}
-
-// A card may not target a staff-only list.
-func TestBreakGlassRefusesStaffOnlyList(t *testing.T) {
-	srv, sender := staffOnlyListServer(t, nil)
-	c := newClient(t, srv.Handler())
-	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
-
-	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Imaging"}, "group": {"airdb_admin"}})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("card targeting airdb_admin: %d, want 400", rec.Code)
-	}
-	if body := rec.Body.String(); !strings.Contains(body, "because it is a staff-only list") {
-		t.Errorf("refusal page lacks the reason:\n%s", body)
-	}
-	// The typed name is checked the same way as a chosen one.
-	rec = c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Boards"}, "group_new": {"planka-admins"}})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("card targeting planka-admins: %d, want 400", rec.Code)
-	}
-	if codes, _ := srv.store.ListBreakGlassCodes(context.Background()); len(codes) != 0 {
-		t.Errorf("refused card was stored: %+v", codes)
-	}
-}
-
-// BREAKGLASS_REFUSED_GROUPS still refuses a list that holds no role other
-// than User, for the release it is kept.
-func TestBreakGlassRefusesConfiguredGroup(t *testing.T) {
-	srv, sender := testServerWith(t, func(c *config.Config) {
-		c.BreakGlassRefusedGroups = []string{"insights-admins"}
-	})
-	c := newClient(t, srv.Handler())
-	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
-
-	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Insights"}, "group": {"insights-admins"}})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("card targeting insights-admins: %d, want 400", rec.Code)
-	}
-	// With no known groups the form takes a typed name, and an ordinary
-	// group is still fine.
-	rec = c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Ward"}, "group": {"bg_ward"}})
-	if rec.Code != http.StatusFound {
-		t.Fatalf("card targeting bg_ward: %d, want a redirect", rec.Code)
-	}
-}
-
-// A group filled from a feed cannot be a card's target: the card would sit
-// alongside the people the feed vouches for.
-func TestBreakGlassRefusesFeedGroup(t *testing.T) {
-	srv, sender := feedServer(t, "https://feed.example.com/list", "")
-	c := newClient(t, srv.Handler())
-	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
-
-	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Consultants"}, "group": {"rch-consultants"}})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("card targeting a feed group: %d, want 400", rec.Code)
-	}
-	if body := rec.Body.String(); !strings.Contains(body, "members come from a feed") {
-		t.Errorf("refusal page lacks the feed reason:\n%s", body)
-	}
-	if codes, _ := srv.store.ListBreakGlassCodes(context.Background()); len(codes) != 0 {
-		t.Errorf("refused card was stored: %+v", codes)
-	}
-}
-
-// The reserved roles stay refused with their own message, and a list that
-// holds only User, or no role, is still allowed.
-func TestBreakGlassReservedStillRefusedAndPlainGroupAllowed(t *testing.T) {
-	srv, sender := staffOnlyListServer(t, nil)
-	c := newClient(t, srv.Handler())
-	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
-
-	for _, role := range []string{"admin", "user", "guest"} {
-		rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Role " + role}, "group": {role}})
-		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "reserved roles") {
-			t.Errorf("card targeting %q: %d, want 400 with the reserved-role message", role, rec.Code)
-		}
-	}
-	for _, g := range []string{"planka-users", "bg_ward"} {
-		rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Card " + g}, "group": {g}})
-		if rec.Code != http.StatusFound {
-			t.Errorf("card targeting %q: %d, want a redirect (%s)", g, rec.Code, rec.Body.String())
-		}
-	}
-	codes, _ := srv.store.ListBreakGlassCodes(context.Background())
-	if len(codes) != 2 {
-		t.Errorf("want the two plain-group cards stored, got %+v", codes)
-	}
-}
-
-// The codes page offers the known groups; a refused one is shown but cannot
-// be chosen, with the reason beside it. An existing card whose group has
-// since become staff only is marked in the list.
-func TestCodesPageMarksRefusedTargets(t *testing.T) {
-	srv, sender := staffOnlyListServer(t, nil)
-	// The group form is drawn only without app roles, which a server can no
-	// longer run without; it goes with group cards.
-	srv.cfg.AppRolesFile = ""
-	ctx := context.Background()
-	if err := srv.store.CreateGroup(ctx, "reports_team", ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := srv.store.CreateBreakGlassCode(ctx, store.BreakGlassCode{Label: "Old", TargetGroup: "prototypes", Status: store.BreakGlassActive}); err != nil {
-		t.Fatal(err)
-	}
-	c := newClient(t, srv.Handler())
-	loginAs(t, c, sender, "admin@example.com", nil)
-	body := c.get("/admin/break/new", nil).Body.String()
-
-	for _, want := range []string{
-		`<option value="airdb_admin" disabled>airdb_admin (staff only)</option>`,
-		`<option value="planka-admins" disabled>planka-admins (staff only)</option>`,
-		`<option value="planka-users">planka-users</option>`,
-		`<option value="bg_ward">bg_ward</option>`,
-		`<option value="reports_team">reports_team</option>`,
-		`name="group_new"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("codes page missing %q", want)
-		}
-	}
-	if strings.Contains(body, `<option value="admin"`) {
-		t.Error("a reserved role is offered as a target")
-	}
-	body = c.get("/admin/break", nil).Body.String()
-	row := body[strings.Index(body, ">Old</a>"):]
-	row = row[:strings.Index(row, "</small>")]
-	if !strings.Contains(row, `>staff only</span>`) {
-		t.Errorf("existing card targeting prototypes is not marked:\n%s", row)
 	}
 }
 
@@ -396,18 +264,18 @@ func TestIncludeBringingOutsidersIntoAppRoleRefused(t *testing.T) {
 // A card label that could pass for an address or split a header list is
 // refused; an ordinary label with punctuation is accepted.
 func TestCardLabelRefusesAtCommaAndLineBreak(t *testing.T) {
-	srv, sender := testServer(t)
-	c := newClient(t, srv.Handler())
-	loginAs(t, c, sender, "admin@example.com", nil)
-	tok := extractCSRF(t, c.get("/admin/break/new", nil).Body.String())
+	srv, _, c := cardsAdmin(t)
+	form := func(label string) url.Values {
+		return url.Values{"csrf": {csrfOf(t, c, "/admin/break/new")}, "label": {label}, "app": {"neverdrugs"},
+			"page.neverdrugs": {"/search"}, "design": {strconv.FormatInt(firstDesign(t, srv).ID, 10)}}
+	}
 	for _, label := range []string{"ops@example.com", "ED, Resus", "Ward\nB"} {
-		rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {label}, "group_new": {"ward-b"}})
-		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Invalid label") {
-			t.Errorf("label %q: %d, want 400 Invalid label", label, rec.Code)
+		rec := c.postForm("/admin/break", form(label))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), html.EscapeString(msgCardBadLocation)) {
+			t.Errorf("label %q: %d, want 400 with the location message", label, rec.Code)
 		}
 	}
-	rec := c.postForm("/admin/break", url.Values{"csrf": {tok}, "label": {"Children's ED/Resus (CCU)"}, "group_new": {"ward-b"}})
-	if rec.Code == http.StatusBadRequest {
-		t.Fatalf("an ordinary label was refused: %s", rec.Body.String())
+	if rec := c.postForm("/admin/break", form("Children's ED/Resus (CCU)")); rec.Code != http.StatusFound {
+		t.Fatalf("an ordinary label was refused: %d %s", rec.Code, rec.Body.String())
 	}
 }

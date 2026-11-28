@@ -34,7 +34,7 @@ func TestWebhookDeliversWhileEmailStalls(t *testing.T) {
 
 	n := NewNotifier(stalledSender{}, []string{"oncall@example.com"}, srv.URL, time.Second)
 	n.blocked = func(net.IP) bool { return false } // the test server is on loopback
-	n.Notify(UseEvent{Label: "Lab 1", TargetGroup: "g1", Outcome: "granted", Time: time.Now()})
+	n.Notify(UseEvent{Label: "Lab 1", Outcome: "granted", Time: time.Now()})
 
 	select {
 	case <-hit:

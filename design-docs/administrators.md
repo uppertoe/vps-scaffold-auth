@@ -2,7 +2,7 @@
 title: Administrators
 summary: How the admin tier is granted, how its second factor is issued and checked, how it differs from an app's own roles, and what the admin pages can change and record.
 weight: 4
-lastmod: 2026-11-27
+lastmod: 2026-11-28
 ---
 
 ## Who is an administrator
@@ -79,7 +79,7 @@ they signed in with.
 | Apps | Give each app's roles and take them away, and see which paths each role opens |
 | Invitations | Invite people to a role in one app, and resend or withdraw an invitation |
 | Groups | Manage domain groups and lists, including lists filled from a feed |
-| Break-glass cards | Make, replace, withdraw and move cards, manage the card designs, and download each card's printable PDF |
+| Break-glass cards | Make, replace and withdraw cards, manage the card designs, and download each card's printable PDF |
 | App feeds | Approve which apps may read the members of which lists |
 | Sessions | See who is signed in on which browser, and sign out one session, one person or everyone |
 | Access log | See sign-in attempts and which tools each person reached |

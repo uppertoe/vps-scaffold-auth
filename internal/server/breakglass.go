@@ -41,10 +41,10 @@ func (s *Server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// A card whose group has become staff only since it was made must not
-	// grant a session. grantBreakGlass checks again for the one-tap activation;
-	// checking here as well keeps the denial page from offering such a card.
-	if s.refuseRetargetedCard(w, r, code, ip, ua, now) {
+	// A card made for a group opens nothing. grantBreakGlass checks again
+	// for the one-tap activation; checking here as well keeps the denial
+	// page from offering such a card.
+	if s.refuseGroupCard(w, r, code, ip, ua) {
 		return
 	}
 
@@ -128,15 +128,14 @@ func (s *Server) cardNotAvailable(w http.ResponseWriter) {
 	})
 }
 
-// refuseRetargetedCard refuses a card whose group has become a staff-only list
-// (or one filled from a feed) since the card was made. A card is refused such
-// a target when it is made, but a list becomes staff only as soon as it is given an app
-// role other than User, and a card is a credential that anyone who
-// photographs it can use. The scan is audited and the administrators are
-// told, so that they replace the card; the person scanning sees the same
-// neutral page as for a revoked card. It reports whether it refused.
-func (s *Server) refuseRetargetedCard(w http.ResponseWriter, r *http.Request, code store.BreakGlassCode, ip, ua string, now time.Time) bool {
-	if _, refused := s.targetRefusal(r.Context(), code.TargetGroup); !refused {
+// refuseGroupCard refuses a card made for a group before app roles, which
+// names no app. Such a card opens nothing, since every site is guarded by
+// app roles; it stays listed until an administrator withdraws it. The scan
+// is audited, and the person scanning sees the same neutral page as for a
+// withdrawn card. A card for any role other than User is refused the same
+// way, although none can be made. It reports whether it refused.
+func (s *Server) refuseGroupCard(w http.ResponseWriter, r *http.Request, code store.BreakGlassCode, ip, ua string) bool {
+	if code.App != "" && code.Role == store.RoleUser {
 		return false
 	}
 	if err := s.store.RecordBreakGlassEvent(r.Context(), store.BreakGlassEvent{
@@ -145,18 +144,7 @@ func (s *Server) refuseRetargetedCard(w http.ResponseWriter, r *http.Request, co
 	}); err != nil {
 		log.Printf("break-glass record refused event for %q: %v", code.Label, err)
 	}
-	// Anyone holding a photo of the card can post it again and again, so the
-	// administrators are told about a refused card once an hour at most; each
-	// refusal is still recorded above.
-	if s.refusedNotices.due(code.ID, now) {
-		_, notifyEmails, webhookURL := s.effectiveSettings(r.Context())
-		breakglass.NewNotifier(s.sender, notifyEmails, webhookURL, s.cfg.BreakGlassWebhookTimeout).
-			Notify(breakglass.UseEvent{
-				Label: code.Label, TargetGroup: code.TargetGroup, Outcome: store.OutcomeRefusedTarget,
-				ClientIP: ip, UserAgent: ua, Time: now,
-			})
-	}
-	log.Printf("break-glass refused (target %q is now refused) for %q from %s", code.TargetGroup, code.Label, ip)
+	log.Printf("break-glass refused (the card names no app) for %q from %s", code.Label, ip)
 	s.cardNotAvailable(w)
 	return true
 }
@@ -168,7 +156,7 @@ func (s *Server) refuseRetargetedCard(w http.ResponseWriter, r *http.Request, co
 // no existing login) and the one-tap activation from the denial page
 // (handleBreakGlassActivate).
 func (s *Server) grantBreakGlass(w http.ResponseWriter, r *http.Request, code store.BreakGlassCode, ip, ua string, now time.Time) {
-	if s.refuseRetargetedCard(w, r, code, ip, ua, now) {
+	if s.refuseGroupCard(w, r, code, ip, ua) {
 		return
 	}
 	// Source-of-truth audit, written before granting.
@@ -187,13 +175,15 @@ func (s *Server) grantBreakGlass(w http.ResponseWriter, r *http.Request, code st
 	// the emergency grant.
 	breakglass.NewNotifier(s.sender, notifyEmails, webhookURL, s.cfg.BreakGlassWebhookTimeout).
 		Notify(breakglass.UseEvent{
-			Label: code.Label, TargetGroup: code.TargetGroup, Outcome: store.OutcomeGranted,
+			Label: code.Label, Outcome: store.OutcomeGranted,
 			ClientIP: ip, UserAgent: ua, Time: now,
 		})
 
-	groups := authz.BuildGroups(code.TargetGroup, nil)
+	// A card's session carries no groups: it holds only the card's app role
+	// (roles.Held), and a session that carries a group is one an earlier
+	// release started from a group card, which holds nothing (cardIssuedAsNow).
 	principal := "breakglass:" + code.Label
-	if err := s.startSession(w, r, session.Identity{Email: principal, Groups: groups, Kind: session.KindBreakGlass, Card: code.ID, CardCode: code.TokenHash}, ttl, now); errors.Is(err, errGrantGone) {
+	if err := s.startSession(w, r, session.Identity{Email: principal, Kind: session.KindBreakGlass, Card: code.ID, CardCode: code.TokenHash}, ttl, now); errors.Is(err, errGrantGone) {
 		// Withdrawn or replaced while this scan was under way.
 		s.cardNotAvailable(w)
 		return

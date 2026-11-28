@@ -41,9 +41,9 @@ func TestBrandingMigratesToDesigns(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	plain, _ := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Theatre 2", TargetGroup: "ward", TokenEnc: "e1", TokenHash: "h1"})
-	same, _ := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Theatre 3", TargetGroup: "ward", TokenEnc: "e2", TokenHash: "h2"})
-	own, _ := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "PICU bed 4", TargetGroup: "ward", TokenEnc: "e3", TokenHash: "h3"})
+	plain, _ := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Theatre 2", TokenEnc: "e1", TokenHash: "h1"})
+	same, _ := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Theatre 3", TokenEnc: "e2", TokenHash: "h2"})
+	own, _ := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "PICU bed 4", TokenEnc: "e3", TokenHash: "h3"})
 	if err := s.SaveCodeBrandingMeta(ctx, same, "Code blue", "", "", "#222222", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestDesignInUseAndLastDesign(t *testing.T) {
 func TestReplaceRetiresTheOldCode(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
-	id, _ := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Theatre 6", TargetGroup: "ward", TokenEnc: "e", TokenHash: "old"})
+	id, _ := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Theatre 6", TokenEnc: "e", TokenHash: "old"})
 	now := time.Unix(1_800_000_000, 0)
 	s.MarkCardPDF(ctx, id, now)
 	s.MarkCardTested(ctx, id, now)
