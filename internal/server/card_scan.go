@@ -40,7 +40,7 @@ type scanView struct {
 	Panel    bool
 	Title    string
 	Label    string
-	App      string // the app's label; "" for a card that opens a group
+	App      string // the app's label
 	AppURL   string
 	Token    string
 	Replaced bool
@@ -219,7 +219,7 @@ func (s *Server) handleCardLogo(w http.ResponseWriter, r *http.Request) {
 const msgSignInInstead = "If you have %s %s email address, you can sign in with it instead."
 
 // signInSentence offers the organisations whose domain groups hold a role in
-// the card's app (any app's, for a card that opens a group), by the
+// the card's app (any app's, for a card made for a group), by the
 // organisation name each group is given, in the groups' order. A group with
 // no name is left out, and with no names there is no sentence.
 func (s *Server) signInSentence(ctx context.Context, c store.BreakGlassCode) string {
@@ -327,18 +327,12 @@ func (s *Server) handleBreakGlassScan(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusNotFound, "break_confirm", pageData{Scan: v})
 		return
 	}
-	// A card whose group has become a staff-only list shows the same page
-	// as any card that is not active; the grant records and reports it.
-	if code.App == "" {
-		if _, refused := s.targetRefusal(ctx, code.TargetGroup); refused {
-			s.cardNotAvailable(w)
-			return
-		}
+	// A card made for a group opens nothing, so its scan is refused before
+	// the page offers anything, an administrator's test scan included.
+	if s.refuseGroupCard(w, r, code, ip, ua) {
+		return
 	}
-	v := &scanView{Variant: scanConfirm, Label: code.Label, Token: token}
-	if code.App != "" {
-		v.App = s.cardAppLabel(code)
-	}
+	v := &scanView{Variant: scanConfirm, Label: code.Label, Token: token, App: s.cardAppLabel(code)}
 	s.scanBand(ctx, code, v)
 	if s.isGatewayAdmin(r) {
 		if err := s.store.RecordBreakGlassEvent(ctx, store.BreakGlassEvent{
@@ -366,7 +360,7 @@ func (s *Server) handleBreakGlassScan(w http.ResponseWriter, r *http.Request) {
 
 // wrongAppPage is the denial page for someone holding a card's session who
 // has followed a link to another app: it names the app the card opens. ok is
-// false for a card that opens a group, which keeps the older page.
+// false for a card that names no app, which keeps the older page.
 func (s *Server) wrongAppPage(ctx context.Context, id *session.Identity, rd string) (*scanView, bool) {
 	code, found, err := s.store.GetBreakGlassCode(ctx, id.Card)
 	if err != nil || !found || code.App == "" {

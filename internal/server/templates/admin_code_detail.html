@@ -1,15 +1,11 @@
 {{define "title"}}{{.Title}}{{end}}
-{{define "head"}}{{template "roles_css"}}{{template "cards_css"}}{{with .CardPage}}{{with .Move}}<style>{{range .Apps}}
-  #mv:has(input[name=app][value="{{.Name}}"]:checked) .pages[data-for="{{.Name}}"] { display: grid; }{{end}}
-  #mv:not(:has(input[name=app]:checked)) .nopage { display: block; }
-  .nopage { display: none; }
-</style>{{end}}{{end}}{{end}}
+{{define "head"}}{{template "roles_css"}}{{template "cards_css"}}{{end}}
 {{define "content"}}
 {{template "role_icons"}}
 {{$csrf := .CSRF}}
 {{with .CardPage}}
 <a class="back" href="/admin/break">&larr; All cards</a>
-<div class="ptitle"><div><h1>{{.Label}}</h1><p>{{if .AppLabel}}Opens {{.AppLabel}} for whoever holds it{{else}}Opens the group {{.Group}} for whoever holds it{{end}}</p></div>{{if .Active}}<span class="pill ok">Active</span>{{else}}<span class="pill off">Withdrawn</span>{{end}}</div>
+<div class="ptitle"><div><h1>{{.Label}}</h1><p>{{if .AppLabel}}Opens {{.AppLabel}} for whoever holds it{{else}}This card opens nothing.{{end}}</p></div>{{if .Active}}<span class="pill ok">Active</span>{{else}}<span class="pill off">Withdrawn</span>{{end}}</div>
 {{if .Active}}
 <ol class="steps">{{range .Steps}}<li{{if .Done}} class="done"{{end}}><i>{{if .Done}}&#10003;{{end}}</i><b>{{.Title}}</b><span title="{{.Detail}}">{{.Detail}}</span></li>{{end}}</ol>
 {{else}}
@@ -32,7 +28,7 @@
   </div>
   <div>
     <dl class="cfacts">
-      <div><dt>Opens</dt><dd>{{if .AppLabel}}{{if .Group}}<span>{{.AppLabel}}</span>{{else}}{{template "token" .AppToken}}<span class="muted">as a user</span>{{end}}{{else}}<span>The group {{.Group}}</span>{{end}}</dd></div>
+      <div><dt>Opens</dt><dd>{{if .AppLabel}}{{template "token" .AppToken}}<span class="muted">as a user</span>{{else}}<span>Nothing</span>{{end}}</dd></div>
       <div><dt>A scan opens</dt><dd><span>{{.PageLabel}}</span>{{if ne .PageLabel .PageURL}}<span class="muted mono">{{.PageURL}}</span>{{end}}</dd></div>
       <div><dt>Note for administrators</dt><dd>{{if .Note}}<span>{{.Note}}</span><span class="muted"> · not printed</span>{{else}}<span class="muted">No note</span>{{end}}</dd></div>
     </dl>
@@ -47,41 +43,13 @@
     </div>
   </div>
 </div>
-{{$cp := .}}
-{{with .Move}}
-<div class="movepanel" id="move">
-  <h2>{{.Heading}}</h2>
-  {{if eq $cp.Confirm "move"}}
-  <form id="mv" class="confirmbox" method="post" action="/admin/break/{{$cp.ID}}/move">
-    <input type="hidden" name="csrf" value="{{$csrf}}">
-    <p><b>{{.Choose}}</b></p>
-    <section class="fsec"><h3>App the card opens</h3>
-      {{range .Apps}}<label class="choice slim"><input type="radio" name="app" value="{{.Name}}"{{if .Checked}} checked{{end}}{{if .Disabled}} disabled{{end}}><span class="r"></span><span class="cl">{{template "token" .Token}}{{if .Cards}}<small>{{.Cards}}</small>{{end}}</span></label>
-      {{else}}<p class="hint">The app-roles manifest names no app yet.</p>{{end}}
-    </section>
-    <section class="fsec"><h3>Page a scan opens</h3>
-      <p class="hint nopage">{{.ChooseFirst}}</p>
-      {{range .Apps}}{{$app := .}}{{if .Pages}}<div class="pages" data-for="{{.Name}}">
-        <p class="hint">{{.PagesHint}}</p>
-        {{range .Pages}}<label class="choice slim"><input type="radio" name="page.{{$app.Name}}" value="{{.Path}}"{{if .Checked}} checked{{end}}><span class="r"></span><span class="stack"><b>{{.Label}}</b><small class="mono">{{.URL}}</small></span></label>{{end}}
-      </div>{{end}}{{end}}
-    </section>
-    <p>{{.Keeps}} {{.Next}} {{.Sessions}}</p>
-    <div class="acts"><button type="submit">{{.Button}}</button><a class="btnlink quiet" href="/admin/break/{{$cp.ID}}">Keep the card</a></div>
-  </form>
-  {{else}}
-  <p>{{.Intro}}</p>
-  <a class="btnlink" href="/admin/break/{{$cp.ID}}?confirm=move#move">{{.Action}}</a>
-  {{end}}
-</div>
-{{end}}
 {{if .Active}}
 <div class="dangerpanel" id="danger">
   <h2>Replace or withdraw the card</h2>
   <div class="twocol">
-    <div>{{if eq .Confirm "replace"}}
+    {{if not .OpensNothing}}<div>{{if eq .Confirm "replace"}}
       <div class="confirmbox"><p><b>Replace the card for {{.Label}}?</b> {{.ReplaceText}}</p><div class="acts"><form method="post" action="/admin/break/{{.ID}}/remint"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="danger">Replace the card</button></form><a class="btnlink quiet" href="/admin/break/{{.ID}}">Keep the card</a></div></div>
-    {{else}}<p>{{.ReplaceText}}</p><a class="btnlink red" href="/admin/break/{{.ID}}?confirm=replace#danger">Replace the card</a>{{end}}</div>
+    {{else}}<p>{{.ReplaceText}}</p><a class="btnlink red" href="/admin/break/{{.ID}}?confirm=replace#danger">Replace the card</a>{{end}}</div>{{end}}
     <div>{{if eq .Confirm "withdraw"}}
       <div class="confirmbox"><p><b>Withdraw the card for {{.Label}}?</b> {{.WithdrawTxt}}</p><div class="acts"><form method="post" action="/admin/break/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="danger">Withdraw the card</button></form><a class="btnlink quiet" href="/admin/break/{{.ID}}">Keep the card</a></div></div>
     {{else}}<p>{{.WithdrawTxt}}</p><a class="btnlink red" href="/admin/break/{{.ID}}?confirm=withdraw#danger">Withdraw the card</a>{{end}}</div>

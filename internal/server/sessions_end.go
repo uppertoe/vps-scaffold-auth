@@ -275,8 +275,8 @@ func (s *Server) markGroupsChanged(at time.Time) {
 }
 
 // groupsStale reports whether a session's groups were worked out before the
-// last membership change. Break-glass sessions carry their card's group, not
-// a membership, and are never renewed.
+// last membership change. A break-glass session carries its card's app and
+// role, not a membership, and is never renewed.
 func (s *Server) groupsStale(id *session.Identity) bool {
 	if id.Kind == session.KindBreakGlass {
 		return false

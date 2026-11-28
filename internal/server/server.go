@@ -24,27 +24,26 @@ import (
 
 // Server holds the dependencies shared by all handlers.
 type Server struct {
-	cfg            *config.Config
-	store          store.Store
-	sender         email.Sender
-	sessions       *session.Manager
-	policy         *authz.Policy
-	secrets        *secretbox.Box
-	emailLimiter   *ratelimit.Limiter // codes sent, per (address, client IP)
-	emailCeiling   *ratelimit.Limiter // codes sent, per address from all IPs
-	emailDaily     *ratelimit.Limiter // the same, over a day
-	codeAlerts     dailyOnce          // administrator alerts about an address's codes
-	alertsPerDay   dailyCount         // administrator alerts, all addresses together
-	sendsPerIP     *ratelimit.Limiter // codes sent, per client IP across all addresses
-	ipLimiter      *ratelimit.Limiter // code requests, per client IP
-	wrongCodes     *ratelimit.Limiter // wrong email or TOTP codes, per client IP
-	breakLimiter   *ratelimit.Limiter // per-IP limiter for break-glass grants
-	viewLimiter    *ratelimit.Limiter // per-IP limiter for the scan's page, so one use spends one grant token
-	logoLimiter    *ratelimit.Limiter // per-IP limiter for a card design's logo (card_scan.go)
-	cardLogos      cardLogoCache
-	inviteLimiter  *ratelimit.Limiter // per-IP limiter for an invitation's page (invite_public.go)
-	refusedNotices hourlyOnce         // notifications of a refused (retargeted) card
-	totpReplay     *totpReplay
+	cfg           *config.Config
+	store         store.Store
+	sender        email.Sender
+	sessions      *session.Manager
+	policy        *authz.Policy
+	secrets       *secretbox.Box
+	emailLimiter  *ratelimit.Limiter // codes sent, per (address, client IP)
+	emailCeiling  *ratelimit.Limiter // codes sent, per address from all IPs
+	emailDaily    *ratelimit.Limiter // the same, over a day
+	codeAlerts    dailyOnce          // administrator alerts about an address's codes
+	alertsPerDay  dailyCount         // administrator alerts, all addresses together
+	sendsPerIP    *ratelimit.Limiter // codes sent, per client IP across all addresses
+	ipLimiter     *ratelimit.Limiter // code requests, per client IP
+	wrongCodes    *ratelimit.Limiter // wrong email or TOTP codes, per client IP
+	breakLimiter  *ratelimit.Limiter // per-IP limiter for break-glass grants
+	viewLimiter   *ratelimit.Limiter // per-IP limiter for the scan's page, so one use spends one grant token
+	logoLimiter   *ratelimit.Limiter // per-IP limiter for a card design's logo (card_scan.go)
+	cardLogos     cardLogoCache
+	inviteLimiter *ratelimit.Limiter // per-IP limiter for an invitation's page (invite_public.go)
+	totpReplay    *totpReplay
 	// passkeyChallenges makes each passkey challenge single-use (passkeys.go).
 	passkeyChallenges *challengeGuard
 	access            *accessAudit

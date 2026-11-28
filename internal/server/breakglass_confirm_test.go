@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/uppertoe/vps-scaffold-auth/internal/config"
+	"github.com/uppertoe/vps-scaffold-auth/internal/breakglass"
+	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
@@ -84,92 +85,148 @@ func TestBreakGlassPostRefusesCrossSiteAndBadTokens(t *testing.T) {
 	}
 }
 
-// A card made before its group became an application role grants nothing
-// once the group is one, whether scanned directly or activated from the
-// denial page. The scan is recorded and the administrators are told.
-func TestBreakGlassCardRefusedOnceTargetIsAppRole(t *testing.T) {
-	srv, sender := testServerWith(t, func(c *config.Config) {
-		c.BreakGlassNotifyEmails = []string{"admin@example.com"}
-	})
-	token := mintGroupCode(t, srv, "Lab 1", "airdb_admin")
-	// The list becomes staff only after the card was made: it is given AIR-DB's
-	// Administrator role.
-	_ = srv.store.CreateGroupOfKind(context.Background(), "airdb_admin", "", store.GroupKindList)
-	mustAssign(t, srv, store.RoleAssignment{App: "air-db", Role: "admin", Kind: store.AssignList, Ref: "airdb_admin"})
+// A card made for a group before app roles names no app and opens nothing.
+// Its scan page, its grant, an administrator's test scan and the one-tap
+// activation are all refused with the neutral page, each scan is recorded,
+// and the card is never marked tested.
+func TestGroupCardOpensNothing(t *testing.T) {
+	srv, sender := testServer(t)
+	ctx := context.Background()
+	// A list that would admit its members to an app, had the card's session
+	// carried it.
+	groupGuard(t, srv, "bg_ward")
+	token := mintGroupCode(t, srv, "Lab 1")
+	code, _, err := srv.store.LookupBreakGlassByTokenHash(ctx, otp.Hash(token))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	c := newClient(t, srv.Handler())
-	// The scan's page already shows the card as not available.
 	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "Continue with emergency access") {
 		t.Fatalf("scan page = %d, want the neutral page", rec.Code)
 	}
-	// A page opened before the change, or the token posted from a photo,
-	// is refused at the grant, recorded, and reported.
 	rec := c.postForm("/break", url.Values{"token": {token}})
 	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), msgCardUnknownTitle) {
 		t.Fatalf("grant = %d, want the neutral page", rec.Code)
 	}
 	if c.cookies[session.SessionCookie] != nil {
-		t.Fatal("a card for an application role granted a session")
+		t.Fatal("a card that names no app granted a session")
 	}
-	events, _ := withoutViews(srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0))
-	if len(events) != 1 || events[0].Outcome != store.OutcomeRefusedTarget {
-		t.Fatalf("events = %+v, want one 'refused_target'", events)
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		told := false
-		sender.mu.Lock()
-		for _, m := range sender.notices {
-			if strings.Contains(m.Subject, "Break-glass used: Lab 1") && strings.Contains(m.Text, "refused_target") {
-				told = true
-			}
-		}
-		sender.mu.Unlock()
-		if told {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the administrators were not told of the refused scan")
-		}
-		time.Sleep(10 * time.Millisecond)
+	events, _ := srv.store.ListBreakGlassEvents(ctx, 0, 10, 0)
+	if len(events) != 2 || events[0].Outcome != store.OutcomeRefusedTarget || events[1].Outcome != store.OutcomeRefusedTarget {
+		t.Fatalf("events = %+v, want two 'refused_target'", events)
 	}
 
-	// A second refused post is recorded but not reported again within the hour.
-	c.postForm("/break", url.Values{"token": {token}})
-	time.Sleep(100 * time.Millisecond)
-	if events, _ := withoutViews(srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0)); len(events) != 2 {
-		t.Fatalf("events after a second post = %d, want 2", len(events))
+	// An administrator's test scan is refused too, and does not mark the
+	// card tested.
+	admin := newClient(t, srv.Handler())
+	loginAs(t, admin, sender, "admin@example.com", nil)
+	if rec := admin.get("/break/"+token, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("test scan = %d, want the neutral page", rec.Code)
 	}
-	sender.mu.Lock()
-	reported := 0
-	for _, m := range sender.notices {
-		if strings.Contains(m.Text, "refused_target") {
-			reported++
-		}
-	}
-	sender.mu.Unlock()
-	if reported != 1 {
-		t.Fatalf("refused posts reported %d times, want once", reported)
+	if got, _, _ := srv.store.GetBreakGlassCode(ctx, code.ID); !got.TestedAt.IsZero() {
+		t.Error("a test scan marked a card that names no app tested")
 	}
 
-	// Activation from the denial page goes through the same refusal.
+	// A signed-in person's scan is refused before any offer is made.
 	signedIn := newClient(t, srv.Handler())
 	loginAs(t, signedIn, sender, "user@example.com", nil)
-	// The list opens for the scan and closes again before the activation.
-	if err := srv.store.RemoveRoleAssignment(context.Background(), "air-db", "admin", store.AssignList, "airdb_admin"); err != nil {
+	if rec := signedIn.postForm("/break", url.Values{"token": {token}}); rec.Code != http.StatusNotFound {
+		t.Fatalf("signed-in scan = %d, want the neutral page", rec.Code)
+	}
+	// An offer for the card, as an earlier release could have made, is
+	// refused at activation.
+	offer := httptest.NewRecorder()
+	if err := srv.sessions.SetOffer(offer, session.Offer{CodeID: code.ID, Label: code.Label, Gen: cardGeneration(code)}, time.Minute, srv.now()); err != nil {
 		t.Fatal(err)
 	}
-	srv.forgetRoles()
-	if rec := signedIn.scan(token); rec.Code != http.StatusFound {
-		t.Fatalf("scan while signed in = %d, want the redirect with an offer", rec.Code)
+	for _, ck := range offer.Result().Cookies() {
+		signedIn.cookies[ck.Name] = ck
 	}
 	csrf := extractCSRF(t, signedIn.get("/denied?rd=https://app.example.com/", nil).Body.String())
-	mustAssign(t, srv, store.RoleAssignment{App: "air-db", Role: "admin", Kind: store.AssignList, Ref: "airdb_admin"})
-	rec = signedIn.postForm("/break/activate", url.Values{"csrf": {csrf}})
-	if rec.Code != http.StatusNotFound {
+	if rec := signedIn.postForm("/break/activate", url.Values{"csrf": {csrf}}); rec.Code != http.StatusNotFound {
 		t.Fatalf("activate = %d, want the neutral page", rec.Code)
 	}
 	if id := sessionOf(t, srv, signedIn); id.Kind == session.KindBreakGlass {
-		t.Fatal("activation granted a card for an application role")
+		t.Fatal("activation granted a card that names no app")
 	}
+}
+
+// A card session that carries a group was started by an earlier release
+// from a group card. It holds nothing: not its group's roles, and not its
+// card's app, even after the card was moved onto that app. A session issued
+// as a scan issues one today, with no groups, holds the app's User role.
+func TestOldGroupCardSessionHoldsNothing(t *testing.T) {
+	srv, _ := testServer(t)
+	guard := groupGuard(t, srv, "bg_ward")
+	token := mintCode(t, srv, "Ward", "bg_ward")
+	code, _, err := srv.store.LookupBreakGlassByTokenHash(context.Background(), otp.Hash(token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := session.Identity{Email: "breakglass:Ward", Kind: session.KindBreakGlass, Card: code.ID, CardCode: code.TokenHash}
+	old := card
+	old.Groups = "bg_ward"
+	if rec := mintSession(t, srv, old, time.Hour).get("/verify", guard); rec.Code == http.StatusOK {
+		t.Error("a card session that carries a group was admitted")
+	}
+	if rec := mintSession(t, srv, card, time.Hour).get("/verify", guard); rec.Code != http.StatusOK {
+		t.Errorf("a card session with no groups = %d, want 200", rec.Code)
+	}
+}
+
+// mintCardAs inserts a card with the app and role given, written to the
+// store directly as an older or hand-edited row could be, and returns its
+// token.
+func mintCardAs(t *testing.T, srv *Server, label, app, role string) string {
+	t.Helper()
+	token, err := breakglass.GenerateToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := srv.secrets.Seal(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.CreateBreakGlassCode(context.Background(), store.BreakGlassCode{
+		Label: label, App: app, Role: role, TokenEnc: enc, TokenHash: otp.Hash(token),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv.forgetRoles()
+	return token
+}
+
+// assertCardRefused checks that a card's scan page and its grant are both
+// refused with the neutral page, recorded as refused_target, and start no
+// session.
+func assertCardRefused(t *testing.T, srv *Server, token string) {
+	t.Helper()
+	c := newClient(t, srv.Handler())
+	if rec := c.get("/break/"+token, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("scan page = %d, want the neutral page", rec.Code)
+	}
+	if rec := c.postForm("/break", url.Values{"token": {token}}); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), msgCardUnknownTitle) {
+		t.Errorf("grant = %d, want the neutral page", rec.Code)
+	}
+	if c.cookies[session.SessionCookie] != nil {
+		t.Error("the card started a session")
+	}
+	events, _ := srv.store.ListBreakGlassEvents(context.Background(), 0, 10, 0)
+	if len(events) != 2 || events[0].Outcome != store.OutcomeRefusedTarget || events[1].Outcome != store.OutcomeRefusedTarget {
+		t.Errorf("events = %+v, want two 'refused_target'", events)
+	}
+}
+
+// A card for a declared app but a role other than User is refused: a card
+// holds only the User role, whatever its row says.
+func TestCardForAnotherRoleIsRefused(t *testing.T) {
+	srv, _, _ := cardsAdmin(t)
+	assertCardRefused(t, srv, mintCardAs(t, srv, "Pharmacy", "neverdrugs", "editor"))
+}
+
+// A card with the User role but no app is refused.
+func TestCardForUserWithNoAppIsRefused(t *testing.T) {
+	srv, _, _ := cardsAdmin(t)
+	assertCardRefused(t, srv, mintCardAs(t, srv, "Pharmacy", "", store.RoleUser))
 }

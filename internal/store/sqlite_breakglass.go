@@ -12,12 +12,12 @@ import (
 
 // --- Break-the-glass codes ---
 
-const bgColumns = `id, label, note, target_group, COALESCE(app, ''), COALESCE(role, ''), token_enc, token_hash, redirect, status, created_at, updated_at, COALESCE(design_id, 0), pdf_at, tested_at`
+const bgColumns = `id, label, note, COALESCE(app, ''), COALESCE(role, ''), token_enc, token_hash, redirect, status, created_at, updated_at, COALESCE(design_id, 0), pdf_at, tested_at`
 
 func scanBreakGlass(sc interface{ Scan(...any) error }) (BreakGlassCode, error) {
 	var c BreakGlassCode
 	var created, updated, pdfAt, testedAt int64
-	err := sc.Scan(&c.ID, &c.Label, &c.Note, &c.TargetGroup, &c.App, &c.Role, &c.TokenEnc, &c.TokenHash,
+	err := sc.Scan(&c.ID, &c.Label, &c.Note, &c.App, &c.Role, &c.TokenEnc, &c.TokenHash,
 		&c.Redirect, &c.Status, &created, &updated, &c.DesignID, &pdfAt, &testedAt)
 	if err != nil {
 		return BreakGlassCode{}, err
@@ -42,8 +42,8 @@ func (s *SQLite) CreateBreakGlassCode(ctx context.Context, c BreakGlassCode) (in
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO break_glass_codes
 		 (label, note, target_group, app, role, token_enc, token_hash, redirect, status, created_at, updated_at, design_id)
-		 VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, NULLIF(?, 0))`,
-		c.Label, c.Note, c.TargetGroup, c.App, c.Role, c.TokenEnc, c.TokenHash, c.Redirect, c.Status, now, now, c.DesignID)
+		 VALUES (?, ?, '', NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, NULLIF(?, 0))`,
+		c.Label, c.Note, c.App, c.Role, c.TokenEnc, c.TokenHash, c.Redirect, c.Status, now, now, c.DesignID)
 	if err != nil {
 		return 0, err
 	}

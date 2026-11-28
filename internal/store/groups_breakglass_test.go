@@ -61,11 +61,12 @@ func TestBreakGlassLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	id, err := s.CreateBreakGlassCode(ctx, BreakGlassCode{
-		Label:       "Angiography Lab 1",
-		Note:        "By the workstation",
-		TargetGroup: "code_stroke_break_glass",
-		TokenEnc:    "v1:ciphertext",
-		TokenHash:   "hash-old",
+		Label:     "Angiography Lab 1",
+		Note:      "By the workstation",
+		App:       "handbook",
+		Role:      RoleUser,
+		TokenEnc:  "v1:ciphertext",
+		TokenHash: "hash-old",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -76,8 +77,8 @@ func TestBreakGlassLifecycle(t *testing.T) {
 	if err != nil || !ok || c.ID != id || c.Status != BreakGlassActive {
 		t.Fatalf("lookup = %+v, ok=%v, err=%v", c, ok, err)
 	}
-	if c.TargetGroup != "code_stroke_break_glass" {
-		t.Errorf("target group = %q", c.TargetGroup)
+	if c.App != "handbook" || c.Role != RoleUser {
+		t.Errorf("app role = %q/%q", c.App, c.Role)
 	}
 
 	// Re-mint: old hash stays dead, new hash works.
@@ -112,7 +113,7 @@ func TestBreakGlassLifecycle(t *testing.T) {
 
 	// Duplicate label is rejected by the UNIQUE constraint.
 	if _, err := s.CreateBreakGlassCode(ctx, BreakGlassCode{
-		Label: "Angiography Lab 1", TargetGroup: "g", TokenEnc: "x", TokenHash: "h2",
+		Label: "Angiography Lab 1", App: "handbook", Role: RoleUser, TokenEnc: "x", TokenHash: "h2",
 	}); err == nil {
 		t.Error("expected duplicate-label error")
 	}

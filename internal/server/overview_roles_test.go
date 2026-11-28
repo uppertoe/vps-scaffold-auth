@@ -71,26 +71,24 @@ func mustGroup(t *testing.T, srv *Server, name string) {
 }
 
 // RCH, with every site on roles: the groups that hold roles, are fed, are
-// included, are read by an app, are a break-glass card's target or are named
-// by a setting run the site. Only a group nothing uses is offered for
-// deletion, and the Groups pages agree.
+// included, are read by an app or are named by a setting run the site. Only
+// a group nothing uses is offered for deletion, and the Groups pages agree.
+// A card made for a group before app roles no longer keeps the group in use,
+// since the card opens nothing.
 func TestOverviewUnusedGroupsCountEveryUse(t *testing.T) {
 	srv, c := rchServerWith(t, func(c *config.Config) {
 		c.GroupFeeds = []config.GroupFeed{{Group: "rch-fellows", URL: "https://feed.example.org/fellows", Token: testFeedToken}}
 		c.MemberReadersFilePairs = map[string][]string{"insights": {"rch-registrars"}}
 	})
 	ctx := context.Background()
-	for _, g := range []string{"rch-staff", "rch-fellows", "rch-trainees", "insights-admins", "rch-registrars", "bg_ward", "leftover"} {
+	for _, g := range []string{"rch-staff", "rch-fellows", "rch-trainees", "insights-admins", "rch-registrars", "leftover"} {
 		mustGroup(t, srv, g)
 	}
 	// rch-staff holds a role; rch-trainees is included in rch-staff;
 	// rch-fellows is a feed; insights-admins is in BREAKGLASS_REFUSED_GROUPS;
-	// rch-registrars is read by an app; bg_ward is a card's target.
+	// rch-registrars is read by an app.
 	mustAssign(t, srv, store.RoleAssignment{App: "insights", Role: "user", Kind: store.AssignList, Ref: "rch-staff"})
 	if err := srv.store.AddGroupInclude(ctx, "rch-staff", "rch-trainees"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := srv.store.CreateBreakGlassCode(ctx, store.BreakGlassCode{Label: "Ward", TargetGroup: "bg_ward", Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -98,7 +96,7 @@ func TestOverviewUnusedGroupsCountEveryUse(t *testing.T) {
 	if !strings.Contains(line, "/admin/groups/leftover") {
 		t.Errorf("the Overview does not offer the unused group leftover: %q", line)
 	}
-	for _, g := range []string{"rch-staff", "rch-fellows", "rch-trainees", "insights-admins", "rch-registrars", "bg_ward"} {
+	for _, g := range []string{"rch-staff", "rch-fellows", "rch-trainees", "insights-admins", "rch-registrars"} {
 		if strings.Contains(line, "/admin/groups/"+g+"\"") {
 			t.Errorf("the Overview offers %s for deletion as unused: %q", g, line)
 		}

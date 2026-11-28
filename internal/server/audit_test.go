@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
+	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 )
 
@@ -69,7 +70,7 @@ func TestDemotedAdminLosesAdminGroupAtRenewal(t *testing.T) {
 
 // F2: an admin must not be able to mint a break-glass code whose target group
 // is a reserved role. Such a code would grant the admin UI to anyone who scans
-// the QR, with no second factor.
+// the QR, with no second factor. No card can name a group at all now.
 func TestBreakGlassCannotTargetReservedGroup(t *testing.T) {
 	srv, sender := testServer(t)
 	c := newClient(t, srv.Handler())
@@ -104,8 +105,8 @@ func TestReservedGroupNameRejected(t *testing.T) {
 
 // F2: IsReservedGroup only matches whole names, so a separator-bearing name like
 // "x,admin" sails past it — but when baked into Remote-Groups (comma-joined) it
-// would inject a standalone "admin" token. ValidGroupName must reject it at both
-// the group-create and break-glass-create entry points.
+// would inject a standalone "admin" token. ValidGroupName must reject it at
+// group creation, and a card cannot name a group at all.
 func TestGroupNameWithSeparatorRejected(t *testing.T) {
 	srv, sender := testServerNoStaff(t, nil)
 	c := newClient(t, srv.Handler())
@@ -124,18 +125,23 @@ func TestGroupNameWithSeparatorRejected(t *testing.T) {
 	}
 }
 
-// F2 (defense in depth): even a pre-existing code whose target group is "admin"
-// (e.g. created before the guard, or written directly to the DB) must not let a
-// break-glass session reach the admin UI.
+// F2 (defense in depth): a card session, even one that carries the group
+// "admin" (as a card written directly to the DB once could), must not reach
+// the admin UI.
 func TestBreakGlassSessionRejectedFromAdminUI(t *testing.T) {
 	srv, _ := testServer(t)
-	token := mintGroupCode(t, srv, "Sneaky", authz.RoleAdmin)
+	token := mintCode(t, srv, "Sneaky", "ward")
 	c := newClient(t, srv.Handler())
 	if rec := c.scan(token); rec.Code != http.StatusFound {
 		t.Fatalf("scan = %d, want 302", rec.Code)
 	}
 	if rec := c.get("/admin/break", nil); rec.Code == http.StatusOK {
 		t.Fatal("break-glass session granted admin UI access (second-factor bypass)")
+	}
+	code, _, _ := srv.store.LookupBreakGlassByTokenHash(context.Background(), otp.Hash(token))
+	old := mintSession(t, srv, session.Identity{Email: "breakglass:Sneaky", Groups: authz.RoleAdmin, Kind: session.KindBreakGlass, Card: code.ID, CardCode: code.TokenHash}, time.Hour)
+	if rec := old.get("/admin/break", nil); rec.Code == http.StatusOK {
+		t.Fatal("a card session carrying the group admin reached the admin UI")
 	}
 }
 

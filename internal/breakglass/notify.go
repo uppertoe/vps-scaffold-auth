@@ -15,12 +15,11 @@ import (
 
 // UseEvent describes a single break-glass use for notification purposes.
 type UseEvent struct {
-	Label       string    `json:"label"`
-	TargetGroup string    `json:"group"`
-	Outcome     string    `json:"outcome"`
-	ClientIP    string    `json:"client_ip"`
-	UserAgent   string    `json:"user_agent"`
-	Time        time.Time `json:"time"`
+	Label     string    `json:"label"`
+	Outcome   string    `json:"outcome"`
+	ClientIP  string    `json:"client_ip"`
+	UserAgent string    `json:"user_agent"`
+	Time      time.Time `json:"time"`
 }
 
 // Notifier delivers break-glass use-notifications to administrators via email
@@ -145,8 +144,8 @@ func (n *Notifier) sendEmails(ctx context.Context, ev UseEvent) {
 	}
 	subject := fmt.Sprintf("Break-glass used: %s", ev.Label)
 	text := fmt.Sprintf(
-		"A break-glass code was used.\n\nLocation: %s\nGroup granted: %s\nOutcome: %s\nClient IP: %s\nUser agent: %s\nTime: %s\n",
-		ev.Label, ev.TargetGroup, ev.Outcome, ev.ClientIP, ev.UserAgent, ev.Time.UTC().Format(time.RFC3339))
+		"A break-glass code was used.\n\nLocation: %s\nOutcome: %s\nClient IP: %s\nUser agent: %s\nTime: %s\n",
+		ev.Label, ev.Outcome, ev.ClientIP, ev.UserAgent, ev.Time.UTC().Format(time.RFC3339))
 	for _, to := range n.recipients {
 		msg := email.Message{To: to, Subject: subject, Text: text}
 		if err := n.sender.Send(ctx, msg); err != nil {

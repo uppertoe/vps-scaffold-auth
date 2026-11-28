@@ -5,8 +5,6 @@ import (
 	"log"
 	"sort"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/authz"
 	"github.com/uppertoe/vps-scaffold-auth/internal/roles"
@@ -18,8 +16,7 @@ import (
 // Administrator or Board owner, say) is staff only; any other list takes any
 // address. An outsider is anyone the gateway does not count as staff (see
 // known), such as a guest, a member who is not staff, or a card session. A
-// staff-only list cannot be a break-glass card's target, an outsider is never
-// made its member by hand or by bulk add, an include that would bring an
+// outsider is never made a staff-only list's member by hand or by bulk add, an include that would bring an
 // outsider into it is refused, and an outsider who is on it all the same
 // (through an include, or because the list became staff only after they were
 // added) is never counted as its member. The members endpoint returns only
@@ -33,9 +30,9 @@ import (
 // fails closed.
 //
 // BREAKGLASS_REFUSED_GROUPS is deprecated and read for one release: the
-// lists it names are staff only as well. A list filled from a feed is refused as
-// a card's target and for a hand-added outsider for the same reason: a card
-// or a stranger would sit alongside the people the feed vouches for.
+// lists it names are staff only as well. A list filled from a feed is refused
+// for a hand-added outsider for the same reason: a stranger would sit
+// alongside the people the feed vouches for.
 //
 // Reserved roles (admin, user, guest) are refused before any of this, with
 // their own message.
@@ -48,8 +45,9 @@ const (
 	refusedUnreadable = "staff only while the gateway cannot read the app roles"
 )
 
-// targetRefusals are the groups a break-glass card may not target and a
-// stranger may not be made a member of, each with its short reason. all is
+// targetRefusals are the groups a stranger may not be made a member of, each
+// with its short reason. (Break-glass cards once targeted groups, and the
+// names come from then.) all is
 // set while the gateway cannot tell which lists are staff only (the role data
 // has never been read, or the includes cannot be read): every group is then
 // refused with that reason, failing closed.
@@ -211,52 +209,4 @@ func (s *Server) withoutStaffOnlyListsForOutsider(ctx context.Context, email, ti
 // not its concern; callers check authz.IsReservedGroup first.
 func (s *Server) targetRefusal(ctx context.Context, group string) (string, bool) {
 	return s.refusedTargets(ctx).reason(group)
-}
-
-// targetOptionView is one group offered as a break-glass target on the codes
-// page. A refused option is shown but cannot be chosen.
-type targetOptionView struct {
-	Name   string
-	Reason string // empty when the group may be targeted
-}
-
-// targetOptions lists the groups an administrator may pick as a card's
-// target: every group that exists, less the reserved roles, each marked with
-// its refusal reason if it has one. Empty when the gateway knows no groups,
-// in which case the form takes a typed name.
-func (s *Server) targetOptions(ctx context.Context, groups []string) []targetOptionView {
-	names := map[string]bool{}
-	for _, g := range groups {
-		names[normalizeGroupName(g)] = true
-	}
-	refused := s.refusedTargets(ctx)
-	out := make([]targetOptionView, 0, len(names))
-	for g := range names {
-		if g == "" || authz.IsReservedGroup(g) {
-			continue
-		}
-		reason, _ := refused.reason(g)
-		out = append(out, targetOptionView{Name: g, Reason: reason})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
-}
-
-// hourlyOnce says yes to a key at most once an hour.
-type hourlyOnce struct {
-	mu   sync.Mutex
-	last map[int64]time.Time
-}
-
-func (h *hourlyOnce) due(key int64, now time.Time) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.last == nil {
-		h.last = map[int64]time.Time{}
-	}
-	if t, ok := h.last[key]; ok && now.Sub(t) < time.Hour {
-		return false
-	}
-	h.last[key] = now
-	return true
 }

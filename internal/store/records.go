@@ -45,8 +45,9 @@ const (
 	// for a button press before granting, so a link preview or mail scanner
 	// that fetches the address grants nothing.
 	OutcomeViewed = "viewed"
-	// OutcomeRefusedTarget records a scan of a card whose group has since
-	// become an application role or a feed group: nothing was granted.
+	// OutcomeRefusedTarget records a scan of a card made for a group before
+	// app roles, which opens nothing: nothing was granted. Earlier releases
+	// recorded it for a card whose group had become staff only.
 	OutcomeRefusedTarget = "refused_target"
 	// OutcomeTested records a scan by a signed-in gateway administrator,
 	// which grants nothing and marks the card tested.
@@ -99,7 +100,8 @@ const (
 	AdminActionBreakRevoke = "break_glass_revoke"
 	AdminActionBreakRemint = "break_glass_remint"
 	// A card that opened a group moved onto an app's user role (target the
-	// card's label, detail its former group, the app and the page).
+	// card's label, detail its former group, the app and the page). The
+	// move is no longer offered; the constant names the rows it recorded.
 	AdminActionBreakMove          = "break_glass_move"
 	AdminActionGroupCreate        = "group_create"
 	AdminActionGroupDelete        = "group_delete"
@@ -251,12 +253,12 @@ type Group struct {
 // of a lost card is by admin *revoke* (Status), not by timeout — do not add
 // per-code expiry. (A 2026-07 audit suggested it; rejected on safety grounds.)
 type BreakGlassCode struct {
-	ID          int64
-	Label       string
-	Note        string
-	TargetGroup string
-	// App and Role name the app role the card opens, under the app-roles
-	// model. Both are empty for a card that still targets a group.
+	ID    int64
+	Label string
+	Note  string
+	// App and Role name the app role the card opens. Both are empty for a
+	// card made for a group before app roles: such a card opens nothing,
+	// and its scan is refused.
 	App       string
 	Role      string
 	TokenEnc  string

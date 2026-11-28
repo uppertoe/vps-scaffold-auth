@@ -160,7 +160,7 @@ func TestRoleAssignments(t *testing.T) {
 func TestBreakGlassRole(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	id, err := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Lab 1", TargetGroup: "bg_lab", TokenEnc: "e", TokenHash: "h"})
+	id, err := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Lab 1", TokenEnc: "e", TokenHash: "h"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestBreakGlassRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.App != "" || c.Role != "" {
-		t.Errorf("a group card has app/role %q/%q", c.App, c.Role)
+		t.Errorf("a card with no app has app/role %q/%q", c.App, c.Role)
 	}
 	if err := s.SetBreakGlassRole(ctx, id, "neverdrugs", "admin"); !errors.Is(err, ErrCardRole) {
 		t.Errorf("admin role on a card = %v, want ErrCardRole", err)
@@ -178,7 +178,7 @@ func TestBreakGlassRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, _, _ = s.LookupBreakGlassByTokenHash(ctx, "h")
-	if c.App != "neverdrugs" || c.Role != RoleUser || c.TargetGroup != "bg_lab" {
+	if c.App != "neverdrugs" || c.Role != RoleUser {
 		t.Errorf("card = %+v", c)
 	}
 	id2, err := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Lab 2", App: "handbook", Role: RoleUser, TokenEnc: "e2", TokenHash: "h2"})
@@ -266,39 +266,6 @@ func TestNetworkAndGuestsHoldOnlyTheUserRole(t *testing.T) {
 		if err := s.AddRoleAssignment(ctx, a); err != nil {
 			t.Errorf("assign %s to user: %v", a.Kind, err)
 		}
-	}
-}
-
-// Moving a group card onto an app keeps its token, label and note, clears
-// its group and sets its page; a card already moved, made for an app or
-// withdrawn is refused.
-func TestMoveBreakGlassCard(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	id, err := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Theatre 3", Note: "By the door", TargetGroup: "bg_nd", TokenEnc: "e", TokenHash: "h", Redirect: "https://old.example.com/"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.MoveBreakGlassCard(ctx, id, "", "https://nd.example.com/"); !errors.Is(err, ErrCardRole) {
-		t.Errorf("no app = %v", err)
-	}
-	if err := s.MoveBreakGlassCard(ctx, id, "neverdrugs", "https://nd.example.com/search"); err != nil {
-		t.Fatal(err)
-	}
-	c, ok, _ := s.LookupBreakGlassByTokenHash(ctx, "h")
-	if !ok || c.ID != id || c.App != "neverdrugs" || c.Role != RoleUser || c.TargetGroup != "" || c.Redirect != "https://nd.example.com/search" ||
-		c.TokenEnc != "e" || c.Label != "Theatre 3" || c.Note != "By the door" || c.Status != BreakGlassActive {
-		t.Errorf("moved card = %+v", c)
-	}
-	if err := s.MoveBreakGlassCard(ctx, id, "caffeine", "https://c.example.com/"); !errors.Is(err, ErrCardNotGroup) {
-		t.Errorf("second move = %v, want ErrCardNotGroup", err)
-	}
-	id2, _ := s.CreateBreakGlassCode(ctx, BreakGlassCode{Label: "Theatre 4", TargetGroup: "bg_nd", TokenEnc: "e2", TokenHash: "h2"})
-	if err := s.RevokeBreakGlassCode(ctx, id2); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.MoveBreakGlassCard(ctx, id2, "neverdrugs", "https://nd.example.com/"); !errors.Is(err, ErrCardNotGroup) {
-		t.Errorf("withdrawn move = %v, want ErrCardNotGroup", err)
 	}
 }
 

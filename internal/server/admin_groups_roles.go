@@ -465,7 +465,7 @@ const (
 	msgUseFeed       = "Feed to %s"
 	msgOtherUsesHead = "Also used by"
 	msgNoNameSet     = "No name set"
-	msgNotUsedTitle  = "This group holds no app role. No feed, app, setting, other group or break-glass card names it, so the group may be left over from an app that has been removed."
+	msgNotUsedTitle  = "This group holds no app role. No feed, app, setting or other group names it, so the group may be left over from an app that has been removed."
 )
 
 // groupsCopy is the Groups pages' wording for a group's uses.

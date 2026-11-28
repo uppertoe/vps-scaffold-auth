@@ -22,9 +22,6 @@ func TestAdminHomeOverview(t *testing.T) {
 	if err := srv.store.AddGroupMember(ctx, "old-group", "a@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := srv.store.CreateBreakGlassCode(ctx, store.BreakGlassCode{Label: "Ward", TargetGroup: "bg_ward", Status: "active"}); err != nil {
-		t.Fatal(err)
-	}
 	c := newClient(t, srv.Handler())
 	loginAs(t, c, sender, "admin@example.com", nil)
 	rec := c.get("/admin/", nil)
@@ -36,10 +33,6 @@ func TestAdminHomeOverview(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("overview missing %q", want)
 		}
-	}
-	// A card's target group that does not exist is not reported at all.
-	if strings.Contains(body, "bg_ward") {
-		t.Error("card-only group reported")
 	}
 }
 

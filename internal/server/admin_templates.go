@@ -35,12 +35,8 @@ type adminData struct {
 	// Group page: the one group shown, and the wording of its name field.
 	Group    *groupView
 	NameText groupNameCopy
-	Codes    []codeView
-	Code     codeView
-	// Codes page: the groups offered as a card's target, refused ones marked.
-	TargetOptions []targetOptionView
-	Events        []store.BreakGlassEvent
-	Settings      settingsView
+	Events   []store.BreakGlassEvent
+	Settings settingsView
 	// Break-glass cards: the list, the new-card form, one card's page, the
 	// designs and the design editor (admin_cards.go, admin_designs.go).
 	Cards    *cardsView
@@ -263,37 +259,6 @@ type memberView struct {
 	Guest bool
 	// AddedFrom is the address a feed made this one from, if it did.
 	AddedFrom string
-}
-
-type codeView struct {
-	ID          int64
-	Label       string
-	Note        string
-	TargetGroup string
-	Redirect    string
-	Status      string
-	Active      bool
-	Created     string
-	Updated     string
-	// Refused is the short reason the target group may no longer be a card's
-	// target (see refusedTargets); empty for a group that may. Such a card is
-	// refused when it is scanned, so the list marks it for the administrator
-	// to replace.
-	Refused string
-}
-
-func (s *Server) toCodeView(c store.BreakGlassCode) codeView {
-	return codeView{
-		ID:          c.ID,
-		Label:       c.Label,
-		Note:        c.Note,
-		TargetGroup: c.TargetGroup,
-		Redirect:    c.Redirect,
-		Status:      c.Status,
-		Active:      c.Status == store.BreakGlassActive,
-		Created:     s.stampMin(c.CreatedAt),
-		Updated:     s.stampMin(c.UpdatedAt),
-	}
 }
 
 // adminEventView is one administrative-action row on the admin audit page.

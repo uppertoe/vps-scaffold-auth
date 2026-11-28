@@ -17,29 +17,30 @@ import (
 // --- One card's page ---
 
 type cardPageView struct {
-	ID          int64
-	Label       string
-	AppLabel    string
-	Active      bool
-	Steps       []cardStep
-	Withdrawn   string
-	PreviewURL  string
-	Caption     string
-	Designs     []designChoice
-	DesignID    int64
-	DesignName  string
-	AppToken    tokenView
-	Group       string // a card that opens a group
-	PageLabel   string
-	PageURL     string
-	Note        string
-	UsesLine    string
-	Events      []cardEventView
-	Confirm     string        // "replace", "withdraw" or "move" while asking
-	Move        *cardMoveView // a card that opens a group, with app roles on
-	ConfirmText string
-	ReplaceText string
-	WithdrawTxt string
+	ID         int64
+	Label      string
+	AppLabel   string
+	Active     bool
+	Steps      []cardStep
+	Withdrawn  string
+	PreviewURL string
+	Caption    string
+	Designs    []designChoice
+	DesignID   int64
+	DesignName string
+	AppToken   tokenView
+	PageLabel  string
+	PageURL    string
+	Note       string
+	UsesLine   string
+	Events     []cardEventView
+	Confirm    string // "replace" or "withdraw" while asking
+	// OpensNothing marks a card that names no app (see opensNothing). Its
+	// page offers only Withdraw, since a replacement would open nothing too.
+	OpensNothing bool
+	ConfirmText  string
+	ReplaceText  string
+	WithdrawTxt  string
 }
 
 type cardStep struct {
@@ -65,7 +66,7 @@ var cardOutcomes = map[string][2]string{
 	store.OutcomeRevoked:       {"Refused: withdrawn", "off"},
 	store.OutcomeReplaced:      {"Refused: replaced", "off"},
 	store.OutcomeRedirected:    {"Opened with their own sign-in", "tag"},
-	store.OutcomeRefusedTarget: {"Refused: the group is now an app role", "off"},
+	store.OutcomeRefusedTarget: {"Refused: the card opens nothing", "off"},
 }
 
 // browserOf names the browser from a user agent, or "".
@@ -101,13 +102,12 @@ func (s *Server) handleAdminBreakDetail(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	s.renderCardPage(w, r, http.StatusOK, c, r.URL.Query().Get("confirm"), "", "", "")
+	s.renderCardPage(w, r, c, r.URL.Query().Get("confirm"))
 }
 
 // renderCardPage draws a card's page. confirm is the action being confirmed
-// ("replace", "withdraw" or "move"); app and page are the move's choices so
-// far, and warning says why a move was refused.
-func (s *Server) renderCardPage(w http.ResponseWriter, r *http.Request, status int, c store.BreakGlassCode, confirm, app, page, warning string) {
+// ("replace" or "withdraw").
+func (s *Server) renderCardPage(w http.ResponseWriter, r *http.Request, c store.BreakGlassCode, confirm string) {
 	ctx := r.Context()
 	events, err := s.store.ListBreakGlassEvents(ctx, c.ID, 100, 0)
 	if err != nil {
@@ -147,8 +147,6 @@ func (s *Server) renderCardPage(w http.ResponseWriter, r *http.Request, status i
 	}
 	if c.App != "" {
 		v.AppToken = tokenView{Icon: iconApp, Label: v.AppLabel, Title: v.AppLabel + ": User"}
-	} else {
-		v.Group = c.TargetGroup
 	}
 	v.PageURL = strings.TrimPrefix(strings.TrimPrefix(c.Redirect, "https://"), "http://")
 	v.PageLabel = v.PageURL
@@ -182,21 +180,18 @@ func (s *Server) renderCardPage(w http.ResponseWriter, r *http.Request, status i
 	} else {
 		v.UsesLine = capFirst(countWords(uses, "use", "uses")) + " in the last 30 days"
 	}
+	v.OpensNothing = opensNothing(c)
 	if v.Active {
 		switch confirm {
 		case "replace":
-			v.Confirm = "replace"
+			if !v.OpensNothing {
+				v.Confirm = "replace"
+			}
 		case "withdraw":
 			v.Confirm = "withdraw"
 		}
 	}
-	if v.Active && c.App == "" && s.rolesOn() {
-		v.Move = s.cardMoveView(ctx, c, app, page)
-		if confirm == "move" {
-			v.Confirm = "move"
-		}
-	}
-	s.renderAdmin(w, r, status, "admin_code_detail", adminData{Title: c.Label, CardPage: v, Warning: warning})
+	s.renderAdmin(w, r, http.StatusOK, "admin_code_detail", adminData{Title: c.Label, CardPage: v})
 }
 
 // handleAdminBreakDesign gives a card another design.
@@ -262,6 +257,12 @@ func (s *Server) handleAdminBreakRemint(w http.ResponseWriter, r *http.Request) 
 	// A withdrawn card stays withdrawn; its page offers no replacement.
 	if c.Status != store.BreakGlassActive {
 		s.redirectDone(w, r, "/admin/break/"+strconv.FormatInt(c.ID, 10), "card-remint-refused", "")
+		return
+	}
+	// A card that opens nothing is not offered a replacement either, which
+	// would open nothing too; a hand-made post gets the neutral page.
+	if opensNothing(c) {
+		s.cardNotAvailable(w)
 		return
 	}
 	tokenEnc, tokenHash, err := s.newToken()

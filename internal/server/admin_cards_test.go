@@ -13,6 +13,7 @@ import (
 
 	"github.com/uppertoe/vps-scaffold-auth/internal/config"
 	"github.com/uppertoe/vps-scaffold-auth/internal/email"
+	"github.com/uppertoe/vps-scaffold-auth/internal/otp"
 	"github.com/uppertoe/vps-scaffold-auth/internal/session"
 	"github.com/uppertoe/vps-scaffold-auth/internal/store"
 )
@@ -93,6 +94,9 @@ func TestNewCardOpensOnlyCardPagesAsUser(t *testing.T) {
 		"a path no card page names":  {"app": {"neverdrugs"}, "page.neverdrugs": {"/admin"}},
 		"an app with no card pages":  {"app": {"caffeine"}, "page.caffeine": {"/"}},
 		"an app not in the manifest": {"app": {"roster"}, "page.roster": {"/"}},
+		"a group and no app":         {"group": {"bg_ward"}},
+		"a new group and no app":     {"group_new": {"ward-b"}, "redirect": {"https://neverdrugs.example.com/"}},
+		"a group beside an app":      {"group": {"bg_ward"}, "app": {"neverdrugs"}, "page.neverdrugs": {"/admin"}},
 	} {
 		form := base()
 		for k, v := range extra {
@@ -120,7 +124,7 @@ func TestNewCardOpensOnlyCardPagesAsUser(t *testing.T) {
 		t.Fatalf("codes = %+v", codes)
 	}
 	got := codes[0]
-	if got.App != "neverdrugs" || got.Role != store.RoleUser || got.TargetGroup != "" || got.Redirect != "https://neverdrugs.example.com/search" || got.DesignID != d.ID || got.Note != "Inside the drug fridge door" {
+	if got.App != "neverdrugs" || got.Role != store.RoleUser || got.Redirect != "https://neverdrugs.example.com/search" || got.DesignID != d.ID || got.Note != "Inside the drug fridge door" {
 		t.Errorf("card = %+v", got)
 	}
 	events, _ := srv.store.ListAdminEvents(ctx, 10, 0)
@@ -429,5 +433,108 @@ func TestArticleFor(t *testing.T) {
 		if got := articleFor(name); got != want {
 			t.Errorf("articleFor(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+// A card made for a group before app roles is listed apart with a note to
+// withdraw it, and its page says the card opens nothing. Such a card is left
+// out of the cards to test. Once it is withdrawn, it stays listed and the
+// note goes.
+func TestGroupCardListedForWithdrawal(t *testing.T) {
+	srv, _, c := cardsAdmin(t)
+	ctx := context.Background()
+	newCard(t, srv, c, "PICU bed 4", "/search")
+	token := mintGroupCode(t, srv, "Luke Perry - MCH")
+	code, _, _ := srv.store.LookupBreakGlassByTokenHash(ctx, otp.Hash(token))
+	page := "/admin/break/" + strconv.FormatInt(code.ID, 10)
+
+	body := c.get("/admin/break", nil).Body.String()
+	for _, want := range []string{msgLegacyHeading, html.EscapeString(msgLegacyNote), html.EscapeString("Luke Perry - MCH")} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the cards list lacks %q", want)
+		}
+	}
+	if n := strings.Count(body, msgCardUntested); n != 1 {
+		t.Error("the cards list asks for a test of a card that opens nothing")
+	}
+	detail := c.get(page, nil).Body.String()
+	if !strings.Contains(detail, "This card opens nothing.") || !strings.Contains(detail, page+"?confirm=withdraw#danger") {
+		t.Errorf("the card's page does not say the card opens nothing or offer withdrawal:\n%s", detail)
+	}
+	if rec := c.postForm(page+"/revoke", url.Values{"csrf": {csrfOf(t, c, page)}}); rec.Code != http.StatusFound {
+		t.Fatalf("withdraw = %d", rec.Code)
+	}
+	body = c.get("/admin/break", nil).Body.String()
+	if !strings.Contains(body, msgLegacyHeading) || strings.Contains(body, html.EscapeString(msgLegacyNote)) {
+		t.Error("a withdrawn group card is not listed, or the note to withdraw it stays")
+	}
+}
+
+// A withdrawn card is not replaced, even by a hand-made post: a replacement
+// would bring it back with a new code.
+func TestRemintRefusesAWithdrawnCard(t *testing.T) {
+	srv, sender, c := cardsAdmin(t)
+	ctx := context.Background()
+	id, token := newCard(t, srv, c, "Theatre 3", "/search")
+	sid := strconv.FormatInt(id, 10)
+	if rec := c.postForm("/admin/break/"+sid+"/revoke", url.Values{"csrf": {csrfOf(t, c, "/admin/break/"+sid)}}); rec.Code != http.StatusFound {
+		t.Fatalf("withdraw = %d", rec.Code)
+	}
+	before, _, _ := srv.store.GetBreakGlassCode(ctx, id)
+	sender.reset()
+	rec := c.postForm("/admin/break/"+sid+"/remint", url.Values{"csrf": {csrfOf(t, c, "/admin/break/new")}})
+	if rec.Code != http.StatusFound {
+		t.Fatalf("re-mint = %d", rec.Code)
+	}
+	after, _, _ := srv.store.GetBreakGlassCode(ctx, id)
+	if after.Status != store.BreakGlassRevoked || after.TokenHash != before.TokenHash {
+		t.Fatalf("a withdrawn card was re-minted: %+v", after)
+	}
+	body := html.UnescapeString(c.get("/admin/break/"+sid, nil).Body.String())
+	if !strings.Contains(body, adminWarnings["card-remint-refused"]) {
+		t.Errorf("no refusal shown")
+	}
+	events, _ := srv.store.ListAdminEvents(ctx, 10, 0)
+	if len(events) > 0 && events[0].Action == store.AdminActionBreakRemint {
+		t.Errorf("a refused re-mint was audited: %+v", events[0])
+	}
+	if len(mailWithSubject(sender, "The break-glass card for Theatre 3 has been replaced.")) != 0 {
+		t.Error("a refused re-mint was emailed")
+	}
+	if rec := newClient(t, srv.Handler()).scan(token); rec.Code == http.StatusFound {
+		t.Error("the withdrawn card grants again")
+	}
+}
+
+// A card that opens nothing is offered only Withdraw, and a hand-made post
+// to replace it gets the neutral page and changes nothing.
+func TestCardThatOpensNothingIsNotReplaced(t *testing.T) {
+	srv, sender, c := cardsAdmin(t)
+	ctx := context.Background()
+	token := mintGroupCode(t, srv, "Luke Perry - MCH")
+	code, _, _ := srv.store.LookupBreakGlassByTokenHash(ctx, otp.Hash(token))
+	page := "/admin/break/" + strconv.FormatInt(code.ID, 10)
+	for _, q := range []string{"", "?confirm=replace"} {
+		body := c.get(page+q, nil).Body.String()
+		if strings.Contains(body, "Replace the card") || strings.Contains(body, page+"/remint") {
+			t.Errorf("%s offers a replacement", page+q)
+		}
+		if !strings.Contains(body, page+"?confirm=withdraw#danger") {
+			t.Errorf("%s does not offer Withdraw", page+q)
+		}
+	}
+	sender.reset()
+	rec := c.postForm(page+"/remint", url.Values{"csrf": {csrfOf(t, c, page)}})
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), msgCardUnknownTitle) {
+		t.Fatalf("re-mint = %d, want the neutral page", rec.Code)
+	}
+	if after, _, _ := srv.store.GetBreakGlassCode(ctx, code.ID); after.TokenHash != code.TokenHash || after.Status != store.BreakGlassActive {
+		t.Errorf("the card was changed: %+v", after)
+	}
+	if events, _ := srv.store.ListAdminEvents(ctx, 10, 0); len(events) > 0 && events[0].Action == store.AdminActionBreakRemint {
+		t.Errorf("a refused re-mint was audited: %+v", events[0])
+	}
+	if len(mailWithSubject(sender, "The break-glass card for Luke Perry - MCH has been replaced.")) != 0 {
+		t.Error("a refused re-mint was emailed")
 	}
 }
