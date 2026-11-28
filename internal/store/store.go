@@ -1,6 +1,8 @@
-// Package store persists the only mutable state the service needs: the
-// single-use OTP codes (for replay protection) and, optionally, admin TOTP
-// secrets. Sessions are stateless signed cookies and never touch the store.
+// Package store persists the service's state in SQLite: sign-in codes, the
+// signed-in sessions, passkeys, admin authenticator secrets, groups and their
+// members, app role assignments, invitations, break-glass cards, card designs
+// and the audit trail. The browser's session cookie carries only a random
+// token; the session itself is a row here, found by the token's hash.
 package store
 
 import (
